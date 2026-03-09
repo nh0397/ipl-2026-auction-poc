@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import { Trophy, LayoutDashboard, ShieldCheck, LogOut, User } from "lucide-react";
+import { Trophy, LayoutDashboard, ShieldCheck, LogOut, MessageSquare, BookOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -50,6 +50,7 @@ export function Navbar() {
   }, []);
 
   const handleLogout = async () => {
+    localStorage.removeItem("auth_approved");
     await supabase.auth.signOut();
     window.location.href = "/";
   };
@@ -88,8 +89,19 @@ export function Navbar() {
                 pathname === "/rules" ? "bg-blue-50 text-blue-600" : "text-slate-500 hover:bg-slate-50"
               )}
             >
-              <Trophy className="h-4 w-4" />
+              <BookOpen className="h-4 w-4" />
               Rules
+            </Link>
+
+            <Link 
+              href="/chat" 
+              className={cn(
+                "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all",
+                pathname === "/chat" ? "bg-blue-50 text-blue-600" : "text-slate-500 hover:bg-slate-50"
+              )}
+            >
+              <MessageSquare className="h-4 w-4" />
+              Chat
             </Link>
             
             {role === "Admin" && (
