@@ -6,75 +6,45 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Trophy, LogIn, Chrome, ShieldCheck } from "lucide-react";
 import Link from "next/link";
-
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 export default function Home() {
   const [loading, setLoading] = useState(false);
-  const [user, setUser] = useState<any>(null);
   const [dbConnected, setDbConnected] = useState<boolean | null>(null);
-  const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const router = useRouter();
-
-  const ALLOWED_EMAILS = [
-    'project7072@gmail.com',
-    'jalan.me4u@gmail.com',
-    'harshshah661992@gmail.com',
-    'parthshah8462@gmail.com',
-    'vatsalchilodiya@gmail.com',
-    'naisicric97@gmail.com'
-  ];
+  const searchParams = useSearchParams();
 
   useEffect(() => {
-    const checkUser = async () => {
+    // Show error if redirected back with error param
+    const err = searchParams.get("error");
+    if (err === "not_allowed") setErrorMsg("Your account is not authorized to access this platform.");
+    if (err === "auth_failed") setErrorMsg("Authentication failed. Please try again.");
+
+    // If already logged in with approval flag, go straight to dashboard
+    const checkSession = async () => {
       const { data: { session } } = await supabase.auth.getSession();
-      const currentUser = session?.user ?? null;
-      
-      if (currentUser) {
-        if (ALLOWED_EMAILS.includes(currentUser.email?.toLowerCase() || '')) {
-          setUser(currentUser);
-          setIsAuthorized(true);
-          // Auto-redirect to dashboard if logged in
-          router.push("/dashboard");
-        } else {
-          // Sign out unauthorized users immediately
-          await supabase.auth.signOut();
-          setUser(null);
-          setIsAuthorized(false);
-          setLoading(false);
-        }
-      } else {
-        setUser(null);
-        setIsAuthorized(null);
+      if (session && localStorage.getItem("auth_approved") === "true") {
+        router.replace("/dashboard");
       }
     };
-    checkUser();
+    checkSession();
 
     // Connection check
     const checkConnection = async () => {
-        try {
-            const { error } = await supabase.from('players').select('id').limit(1);
-            // If error is just "table doesn't exist", the connection itself is working
-            if (!error || error.code === 'PGRST116' || error.message.includes('relation "players" does not exist')) {
-                setDbConnected(true);
-            } else {
-                setDbConnected(false);
-            }
-        } catch (e) {
-            setDbConnected(false);
-        }
+      try {
+        const { error } = await supabase.from('players').select('id').limit(1);
+        setDbConnected(!error || error.code === 'PGRST116');
+      } catch {
+        setDbConnected(false);
+      }
     };
     checkConnection();
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-    });
-
-    return () => subscription.unsubscribe();
   }, []);
 
   const handleGoogleLogin = async () => {
     setLoading(true);
+    setErrorMsg(null);
     try {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
@@ -85,32 +55,16 @@ export default function Home() {
       if (error) throw error;
     } catch (error) {
       console.error("Error logging in:", error);
-    } finally {
+      setErrorMsg("Failed to start login. Please try again.");
       setLoading(false);
     }
   };
 
   const handleLogout = async () => {
+    localStorage.removeItem("auth_approved");
     await supabase.auth.signOut();
   };
 
-  if (user) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50 p-4 font-sans text-slate-900 leading-normal">
-        <Card className="w-full max-w-md shadow-2xl border-none">
-          <CardContent className="flex flex-col items-center justify-center p-12 text-center space-y-4">
-            <div className="h-16 w-16 bg-blue-100 rounded-full flex items-center justify-center animate-bounce">
-              <Trophy className="h-8 w-8 text-blue-600" />
-            </div>
-            <CardTitle className="text-2xl font-bold">Redirecting...</CardTitle>
-            <CardDescription className="text-slate-500 font-medium">
-                Welcome back! Taking you to the auction arena.
-            </CardDescription>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
 
   return (
     <div className="flex min-h-screen bg-white font-sans overflow-hidden">
@@ -153,9 +107,9 @@ export default function Home() {
           </div>
 
           <div className="space-y-4">
-            {isAuthorized === false && (
-              <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl text-sm font-bold animate-pulse">
-                Access Denied: Your email is not on the authorized list for this POC.
+            {errorMsg && (
+              <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl text-sm font-bold">
+                {errorMsg}
               </div>
             )}
             <Button 
