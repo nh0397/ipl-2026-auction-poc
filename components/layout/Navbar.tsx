@@ -92,17 +92,6 @@ export function Navbar() {
               <BookOpen className="h-4 w-4" />
               Rules
             </Link>
-
-            <Link 
-              href="/chat" 
-              className={cn(
-                "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all",
-                pathname === "/chat" ? "bg-blue-50 text-blue-600" : "text-slate-500 hover:bg-slate-50"
-              )}
-            >
-              <MessageSquare className="h-4 w-4" />
-              Chat
-            </Link>
             
             {role === "Admin" && (
               <Link 
