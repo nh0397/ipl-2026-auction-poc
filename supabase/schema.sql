@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS profiles (
   team_name TEXT DEFAULT 'New Franchise',
   budget NUMERIC DEFAULT 120, -- 120 Cr starting budget
   role TEXT DEFAULT 'Manager' CHECK (role IN ('Admin', 'Manager')),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -53,8 +54,17 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
 BEGIN
-  INSERT INTO public.profiles (id, full_name, avatar_url)
-  VALUES (new.id, new.raw_user_meta_data->>'full_name', new.raw_user_meta_data->>'avatar_url');
+  INSERT INTO public.profiles (id, full_name, avatar_url, role)
+  VALUES (
+    new.id, 
+    new.raw_user_meta_data->>'full_name', 
+    new.raw_user_meta_data->>'avatar_url',
+    CASE 
+      WHEN new.email IN ('jalan.me4u@gmail.com', 'project7072@gmail.com') THEN 'Admin'
+      WHEN new.email IN ('harshshah661992@gmail.com', 'parthshah8462@gmail.com', 'vatsalchilodiya@gmail.com', 'naisicric97@gmail.com') THEN 'Manager'
+      ELSE 'Manager' -- Access restriction handled in App UI
+    END
+  );
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;

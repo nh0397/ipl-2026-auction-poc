@@ -84,3 +84,18 @@
       "calt" 1;
   }
 }
+
+/* 🚀 Global Cursor Pointer Fix */
+button,
+[role="button"],
+a,
+input[type="submit"],
+input[type="button"],
+.cursor-pointer {
+  cursor: pointer !important;
+}
+
+button:disabled,
+[disabled] {
+  cursor: not-allowed !important;
+}

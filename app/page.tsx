@@ -4,17 +4,49 @@ import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Trophy, LogIn, Chrome } from "lucide-react";
+import { Trophy, LogIn, Chrome, ShieldCheck } from "lucide-react";
+import Link from "next/link";
+
+import { useRouter } from "next/navigation";
 
 export default function Home() {
   const [loading, setLoading] = useState(false);
   const [user, setUser] = useState<any>(null);
   const [dbConnected, setDbConnected] = useState<boolean | null>(null);
+  const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null);
+  const router = useRouter();
+
+  const ALLOWED_EMAILS = [
+    'project7072@gmail.com',
+    'jalan.me4u@gmail.com',
+    'harshshah661992@gmail.com',
+    'parthshah8462@gmail.com',
+    'vatsalchilodiya@gmail.com',
+    'naisicric97@gmail.com'
+  ];
 
   useEffect(() => {
     const checkUser = async () => {
       const { data: { session } } = await supabase.auth.getSession();
-      setUser(session?.user ?? null);
+      const currentUser = session?.user ?? null;
+      
+      if (currentUser) {
+        if (ALLOWED_EMAILS.includes(currentUser.email?.toLowerCase() || '')) {
+          setUser(currentUser);
+          setIsAuthorized(true);
+          // Auto-redirect to dashboard if logged in
+          router.push("/dashboard");
+        } else {
+          // Sign out unauthorized users immediately
+          await supabase.auth.signOut();
+          setUser(null);
+          setIsAuthorized(false);
+          setLoading(false);
+        }
+      } else {
+        setUser(null);
+        setIsAuthorized(null);
+      }
     };
     checkUser();
 
@@ -64,19 +96,16 @@ export default function Home() {
 
   if (user) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50 p-4 font-sans">
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 p-4 font-sans text-slate-900 leading-normal">
         <Card className="w-full max-w-md shadow-2xl border-none">
-          <CardHeader className="text-center">
-            <div className="h-12 w-12 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
-              <Trophy className="h-6 w-6 text-blue-600" />
+          <CardContent className="flex flex-col items-center justify-center p-12 text-center space-y-4">
+            <div className="h-16 w-16 bg-blue-100 rounded-full flex items-center justify-center animate-bounce">
+              <Trophy className="h-8 w-8 text-blue-600" />
             </div>
-            <CardTitle className="text-2xl font-bold">Welcome, {user.user_metadata.full_name || user.email}</CardTitle>
-            <CardDescription className="text-slate-500">You are ready for the auction.</CardDescription>
-          </CardHeader>
-          <CardContent className="flex justify-center pt-4">
-            <Button onClick={handleLogout} variant="outline" className="w-full border-2 hover:border-red-600 hover:text-red-600 font-bold h-11 rounded-xl transition-all">
-              Sign Out from Auction
-            </Button>
+            <CardTitle className="text-2xl font-bold">Redirecting...</CardTitle>
+            <CardDescription className="text-slate-500 font-medium">
+                Welcome back! Taking you to the auction arena.
+            </CardDescription>
           </CardContent>
         </Card>
       </div>
@@ -124,6 +153,11 @@ export default function Home() {
           </div>
 
           <div className="space-y-4">
+            {isAuthorized === false && (
+              <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl text-sm font-bold animate-pulse">
+                Access Denied: Your email is not on the authorized list for this POC.
+              </div>
+            )}
             <Button 
               variant="outline" 
               className="w-full h-14 text-base font-bold flex items-center justify-center gap-3 border-2 border-slate-100 hover:bg-slate-50 hover:border-blue-600 transition-all rounded-2xl shadow-sm"
