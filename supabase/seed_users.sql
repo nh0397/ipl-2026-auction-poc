@@ -1,29 +1,18 @@
 -- Pre-seed Authorized Users for IPL 2026 Auction POC
--- This version uses a robust NOT EXISTS check to avoid constraint errors.
+-- These profiles will be linked to real Google OAuth users when they first log in.
+-- The trigger in schema.sql handles updating the UUID to match the auth user.
 
-INSERT INTO auth.users (id, email, email_confirmed_at, raw_user_meta_data, role, aud)
-SELECT 
-  gen_random_uuid(), 
-  v.email, 
-  now(), 
-  v.meta::jsonb, 
-  'authenticated', 
-  'authenticated'
-FROM (VALUES 
-  ('project7072@gmail.com', '{"full_name": "System Admin"}'),
-  ('jalan.me4u@gmail.com', '{"full_name": "Prashant Jalan"}'),
-  ('harshshah661992@gmail.com', '{"full_name": "Harsh Shah"}'),
-  ('parthshah8462@gmail.com', '{"full_name": "Parth Shah"}'),
-  ('vatsalchilodiya@gmail.com', '{"full_name": "Vatsal Chilodiya"}'),
-  ('naisicric97@gmail.com', '{"full_name": "Naisarg Halvadiya"}')
-) AS v(email, meta)
-WHERE NOT EXISTS (
-  SELECT 1 FROM auth.users WHERE auth.users.email = v.email
-);
+-- NOTE: Do NOT insert into auth.users manually. Let Google OAuth handle that.
+-- We only seed profiles with a temporary UUID that gets replaced on first login.
 
--- 2. Ensure your account is Admin
-UPDATE profiles SET role = 'Admin' 
-WHERE id = (SELECT id FROM auth.users WHERE email = 'project7072@gmail.com');
+INSERT INTO profiles (id, email, full_name, role, budget) VALUES
+  (gen_random_uuid(), 'project7072@gmail.com', 'System Admin', 'Admin', 120),
+  (gen_random_uuid(), 'jalan.me4u@gmail.com', 'Prashant Jalan', 'Admin', 120),
+  (gen_random_uuid(), 'harshshah661992@gmail.com', 'Harsh Shah', 'Participant', 120),
+  (gen_random_uuid(), 'parthshah8462@gmail.com', 'Parth Shah', 'Participant', 120),
+  (gen_random_uuid(), 'vatsalchilodiya@gmail.com', 'Vatsal Chilodiya', 'Participant', 120),
+  (gen_random_uuid(), 'naisicric97@gmail.com', 'Naisarg Halvadiya', 'Participant', 120)
+ON CONFLICT (email) DO NOTHING;
 
 -- Disable RLS for now so you can see all profiles
 ALTER TABLE profiles DISABLE ROW LEVEL SECURITY;

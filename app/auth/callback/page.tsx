@@ -5,15 +5,6 @@ import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
 import { AlertCircle, Loader2 } from "lucide-react";
 
-const ALLOWED_EMAILS = [
-  'project7072@gmail.com',
-  'jalan.me4u@gmail.com',
-  'harshshah661992@gmail.com',
-  'parthshah8462@gmail.com',
-  'vatsalchilodiya@gmail.com',
-  'naisicric97@gmail.com'
-];
-
 export default function AuthCallback() {
   const router = useRouter();
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -21,7 +12,6 @@ export default function AuthCallback() {
   useEffect(() => {
     let resolved = false;
 
-    // Timeout after 30 seconds — don't leave the user hanging
     const timeout = setTimeout(() => {
       if (!resolved) {
         resolved = true;
@@ -29,23 +19,15 @@ export default function AuthCallback() {
       }
     }, 30000);
 
-    const finalize = async (email: string | undefined) => {
+    const finalize = async () => {
       if (resolved) return;
       resolved = true;
       clearTimeout(timeout);
-
-      const normalizedEmail = email?.toLowerCase() || '';
-      if (!ALLOWED_EMAILS.includes(normalizedEmail)) {
-        await supabase.auth.signOut();
-        setErrorMsg(`Access denied. ${normalizedEmail} is not authorised.`);
-        return;
-      }
-
       localStorage.setItem("auth_approved", "true");
       router.replace("/dashboard");
     };
 
-    // 1. Check for Supabase-level error params in URL (e.g. db trigger failure)
+    // 1. Check for OAuth error params
     const params = new URLSearchParams(window.location.search);
     const oauthError = params.get("error");
     if (oauthError) {
@@ -56,21 +38,19 @@ export default function AuthCallback() {
       return;
     }
 
-    // 2. Listen for the SIGNED_IN event — this fires for ALL OAuth flows
-    //    (both PKCE and implicit) once Supabase resolves the session
+    // 2. Listen for SIGNED_IN event
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === "SIGNED_IN" && session) {
         subscription.unsubscribe();
-        finalize(session.user.email);
+        finalize();
       }
     });
 
-    // 3. Also try immediately in case session is already available
-    //    (returning user, or PKCE exchange already completed)
+    // 3. Check if session already exists
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session && !resolved) {
         subscription.unsubscribe();
-        finalize(session.user.email);
+        finalize();
       }
     });
 

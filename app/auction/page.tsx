@@ -38,6 +38,7 @@ export default function AuctionPage() {
   const [manualPickId, setManualPickId] = useState<string>("");
 
   const isAdmin = profile?.role === "Admin";
+  const isParticipant = profile?.role === "Admin" || profile?.role === "Participant";
 
   // ─── Data Fetching ───
   const fetchAll = useCallback(async () => {
@@ -84,11 +85,12 @@ export default function AuctionPage() {
       setPendingPlayers(poolPending);
     }
 
-    // Total participants (all profiles = bidders)
+    // All profiles (for franchise status panel) — only participants/admins
     const { data: profiles } = await supabase.from("profiles").select("*");
     if (profiles) {
-      setAllProfiles(profiles);
-      setTotalParticipants(profiles.length);
+      const participants = profiles.filter(p => p.role === "Admin" || p.role === "Participant");
+      setAllProfiles(participants);
+      setTotalParticipants(participants.length);
     }
 
     // Auth-dependent data (profile)
@@ -642,7 +644,7 @@ export default function AuctionPage() {
                 )}
 
                 {/* Bid + Pass Buttons */}
-                {profile && (
+                {profile && isParticipant && (
                   <div className="mt-6 space-y-3">
                     {/* Pass counter */}
                     {(auctionState.passed_user_ids?.length || 0) > 0 && (
@@ -682,6 +684,12 @@ export default function AuctionPage() {
                         {(auctionState.passed_user_ids || []).includes(profile?.id) ? "Passed" : "Out"}
                       </Button>
                     </div>
+                  </div>
+                )}
+                {/* Viewer notice */}
+                {!profile && (
+                  <div className="mt-6 text-center p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">👁 Spectator Mode — Viewing Only</span>
                   </div>
                 )}
               </div>

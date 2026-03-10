@@ -3,11 +3,12 @@
 -- 1. Profiles Table (Linked to Supabase Auth)
 CREATE TABLE IF NOT EXISTS profiles (
   id UUID PRIMARY KEY REFERENCES auth.users ON DELETE CASCADE,
+  email TEXT UNIQUE NOT NULL,
   full_name TEXT,
   avatar_url TEXT,
   team_name TEXT DEFAULT 'New Franchise',
   budget NUMERIC DEFAULT 120, -- 120 Cr starting budget
-  role TEXT DEFAULT 'Manager' CHECK (role IN ('Admin', 'Manager')),
+  role TEXT DEFAULT 'Viewer' CHECK (role IN ('Admin', 'Participant', 'Viewer')),
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -25,6 +26,7 @@ CREATE TABLE IF NOT EXISTS players (
   role TEXT, -- e.g. Wicketkeeper Batter, Bowler, etc.
   status TEXT NOT NULL DEFAULT 'Available', -- Available/Sold/Unsold
   sold_to TEXT, -- The name of the team that bought them
+  sold_to_id UUID REFERENCES profiles(id), -- UUID of buyer
   sold_price TEXT,
   image_url TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
@@ -50,30 +52,52 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 );
 
 -- 5. Automation: Sync Auth Users to Profiles
--- This trigger automatically creates a profile entry when someone logs in via Google
+-- ONLY creates profiles for whitelisted participant/admin emails.
+-- Everyone else can view via anon key but gets no profile row.
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
+DECLARE
+  existing_id UUID;
+  assigned_role TEXT;
 BEGIN
-  -- Only create a profile for authorized emails (allowlist)
-  IF new.email IN (
-    'project7072@gmail.com',
-    'jalan.me4u@gmail.com',
+  -- Only process whitelisted emails. Everyone else is a viewer with no profile.
+  IF new.email IN ('jalan.me4u@gmail.com', 'project7072@gmail.com') THEN
+    assigned_role := 'Admin';
+  ELSIF new.email IN (
     'harshshah661992@gmail.com',
     'parthshah8462@gmail.com',
     'vatsalchilodiya@gmail.com',
     'naisicric97@gmail.com'
   ) THEN
-    INSERT INTO public.profiles (id, full_name, avatar_url, role)
+    assigned_role := 'Participant';
+  ELSE
+    -- Not whitelisted: skip, no profile created
+    RETURN NEW;
+  END IF;
+
+  -- Check if profile with this email already exists
+  SELECT id INTO existing_id FROM public.profiles WHERE email = new.email;
+  
+  IF existing_id IS NOT NULL THEN
+    -- Profile exists: link it to the real auth user
+    UPDATE public.profiles SET 
+      id = new.id,
+      full_name = COALESCE(new.raw_user_meta_data->>'full_name', full_name),
+      avatar_url = COALESCE(new.raw_user_meta_data->>'avatar_url', avatar_url),
+      role = assigned_role,
+      updated_at = NOW()
+    WHERE email = new.email;
+  ELSE
+    -- Create profile for this participant/admin
+    INSERT INTO public.profiles (id, email, full_name, avatar_url, role, budget)
     VALUES (
-      new.id, 
-      new.raw_user_meta_data->>'full_name', 
+      new.id,
+      new.email,
+      new.raw_user_meta_data->>'full_name',
       new.raw_user_meta_data->>'avatar_url',
-      CASE 
-        WHEN new.email IN ('jalan.me4u@gmail.com', 'project7072@gmail.com') THEN 'Admin'
-        ELSE 'Participant'
-      END
-    )
-    ON CONFLICT (id) DO NOTHING;
+      assigned_role,
+      120
+    );
   END IF;
   RETURN NEW;
 END;
