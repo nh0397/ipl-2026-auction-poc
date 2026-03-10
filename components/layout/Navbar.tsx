@@ -111,6 +111,17 @@ export function Navbar() {
             </Link>
 
             <Link 
+              href="/auction" 
+              className={cn(
+                "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all",
+                pathname === "/auction" ? "text-blue-600 bg-blue-50/50" : "text-slate-400 hover:text-slate-900 hover:bg-slate-50"
+              )}
+            >
+              <Gavel size={16} />
+              Auction Room
+            </Link>
+
+            <Link 
               href="/rules" 
               className={cn(
                 "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all",

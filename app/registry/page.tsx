@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "@/lib/supabase";
-import { Users, Search, CheckCircle2, Loader2, CheckSquare, XSquare } from "lucide-react";
+import { Users, Search, CheckCircle2, Loader2, CheckSquare, XSquare, Lock, Unlock, ArrowLeftRight } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -21,6 +21,7 @@ export default function RegistryPage() {
   const [activePool, setActivePool] = useState<string>("All");
   const [activeTeam, setActiveTeam] = useState<string>("All Teams");
   const lastClickedIndex = useRef<number | null>(null);
+  const [auctionConfig, setAuctionConfig] = useState<any>(null);
 
   // Admin sees Unallocated tab, everyone sees the pool tabs
   const isAdmin = profile?.role === "Admin";
@@ -28,6 +29,7 @@ export default function RegistryPage() {
     ? ["All", "Marquee", "Pool 1", "Pool 2", "Pool 3", "Unallocated"]
     : ["All", "Marquee", "Pool 1", "Pool 2", "Pool 3"];
   const showAdminControls = isAdmin && activePool !== "All";
+  const unallocatedCount = allPlayers.filter(p => !p.pool || p.pool === "").length;
   const teams = ["All Teams", ...Array.from(new Set(allPlayers.map(p => p.team))).sort()];
 
   useEffect(() => {
@@ -51,6 +53,10 @@ export default function RegistryPage() {
         .select("*")
         .order("player_name", { ascending: true });
       setAllPlayers(all || []);
+
+      // Fetch auction config if it exists
+      const { data: config } = await supabase.from("auction_config").select("*").limit(1).single();
+      if (config) setAuctionConfig(config);
     }
     setLoading(false);
   };
@@ -124,47 +130,128 @@ export default function RegistryPage() {
     setIsUpdating(false);
   }
 
+  // Unallocate: clear pool field, send back to Unallocated
+  async function unallocateSelected() {
+    if (selectedIds.length === 0) return;
+    setIsUpdating(true);
+
+    const { error } = await supabase
+      .from("players")
+      .update({ pool: null })
+      .in("id", selectedIds);
+
+    if (!error) {
+      await fetchData();
+      setSelectedIds([]);
+      lastClickedIndex.current = null;
+      alert(`${selectedIds.length} players moved back to Unallocated`);
+    }
+    setIsUpdating(false);
+  }
+
+  // Freeze / Unfreeze pools
+  async function freezePools() {
+    setIsUpdating(true);
+    await supabase.from("auction_config").update({ pools_frozen: true, status: "frozen", updated_at: new Date().toISOString() }).eq("id", auctionConfig.id);
+    await fetchData();
+    setIsUpdating(false);
+  }
+
+  async function unfreezePools() {
+    setIsUpdating(true);
+    await supabase.from("auction_config").update({ pools_frozen: false, status: "setup", updated_at: new Date().toISOString() }).eq("id", auctionConfig.id);
+    await fetchData();
+    setIsUpdating(false);
+  }
+
+  const poolsFrozen = auctionConfig?.pools_frozen === true;
+
   return (
     <div className="min-h-screen bg-[#FDFDFF] p-4 md:p-10 font-sans">
       <div className="max-w-7xl mx-auto space-y-8">
         
         {/* Header */}
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <Search className="h-5 w-5 text-blue-600" />
-              <span className="text-[10px] font-black uppercase tracking-[0.3em] text-blue-600">Global Registry</span>
-            </div>
-            <h1 className="text-4xl font-black italic tracking-tighter uppercase text-slate-900 leading-none">The Player Portfolio</h1>
-            <p className="text-slate-500 font-medium mt-2">Browse the full roster of the IPL 2026 Auction Pool</p>
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <Search className="h-5 w-5 text-blue-600" />
+            <span className="text-[10px] font-black uppercase tracking-[0.3em] text-blue-600">Global Registry</span>
+            {poolsFrozen && (
+              <span className="ml-2 px-3 py-1 rounded-full bg-amber-50 border border-amber-200 text-[9px] font-black uppercase tracking-widest text-amber-600 flex items-center gap-1.5">
+                <Lock size={10} /> Pools Frozen
+              </span>
+            )}
           </div>
-
-          {/* Admin Allocation Panel */}
-          {isAdmin && (
-            <div className="flex flex-col md:items-end gap-2 p-6 bg-white rounded-3xl border border-slate-100 shadow-sm">
-                <span className="text-[10px] font-black uppercase text-slate-300 tracking-widest leading-none mb-1">Lot Allocation Protocol</span>
-                <div className="flex gap-2">
-                    <select 
-                      value={targetLot}
-                      onChange={(e) => setTargetLot(e.target.value)}
-                      className="w-40 h-11 px-4 rounded-xl border border-slate-100 bg-white font-bold text-sm focus:ring-2 focus:ring-blue-600 outline-none appearance-none cursor-pointer hover:border-slate-300 transition-all shadow-sm"
-                    >
-                      <option value="Marquee">Marquee</option>
-                      <option value="Pool 1">Pool 1</option>
-                      <option value="Pool 2">Pool 2</option>
-                      <option value="Pool 3">Pool 3</option>
-                    </select>
-                    <Button 
-                       onClick={assignToLot}
-                       disabled={selectedIds.length === 0 || isUpdating}
-                       className="h-11 px-6 bg-slate-900 text-white rounded-xl font-black uppercase tracking-widest text-[10px] hover:bg-blue-600 transition-all disabled:opacity-30 shadow-lg active:scale-95 flex gap-2"
-                    >
-                       {isUpdating ? <Loader2 className="h-4 w-4 animate-spin" /> : "Deploy to Pool"}
-                    </Button>
-                </div>
-            </div>
-          )}
+          <h1 className="text-4xl font-black italic tracking-tighter uppercase text-slate-900 leading-none">The Player Portfolio</h1>
+          <p className="text-slate-500 font-medium mt-2">Browse the full roster of the IPL 2026 Auction Pool</p>
         </div>
+
+        {/* Admin Toolbar */}
+        {isAdmin && (
+          <div className="bg-slate-900 rounded-2xl p-4 px-6 flex flex-wrap items-center gap-3">
+            <span className="text-[9px] font-black uppercase tracking-widest text-white/30 mr-auto">
+              Admin Controls — {activePool}
+            </span>
+
+            {/* Allocate controls (Unallocated tab) */}
+            {activePool === "Unallocated" && (
+              <>
+                <select 
+                  value={targetLot}
+                  onChange={(e) => setTargetLot(e.target.value)}
+                  className="h-9 px-4 rounded-lg bg-white/10 text-white font-bold text-sm border border-white/20 outline-none cursor-pointer hover:bg-white/20 transition-all"
+                >
+                  <option value="Marquee" className="text-slate-900">Marquee</option>
+                  <option value="Pool 1" className="text-slate-900">Pool 1</option>
+                  <option value="Pool 2" className="text-slate-900">Pool 2</option>
+                  <option value="Pool 3" className="text-slate-900">Pool 3</option>
+                </select>
+                <Button 
+                  onClick={assignToLot}
+                  disabled={selectedIds.length === 0 || isUpdating}
+                  className="h-9 px-5 bg-blue-500 hover:bg-blue-600 text-white rounded-lg font-black uppercase tracking-widest text-[9px] transition-all disabled:opacity-30 active:scale-95 flex gap-2"
+                >
+                  {isUpdating ? <Loader2 className="h-3 w-3 animate-spin" /> : "Deploy to Pool"}
+                </Button>
+              </>
+            )}
+
+            {/* Unallocate controls (Pool tabs) */}
+            {["Marquee", "Pool 1", "Pool 2", "Pool 3"].includes(activePool) && (
+              <Button 
+                onClick={unallocateSelected}
+                disabled={selectedIds.length === 0 || isUpdating}
+                className="h-9 px-5 bg-red-500/80 hover:bg-red-600 text-white rounded-lg font-black uppercase tracking-widest text-[9px] transition-all disabled:opacity-30 active:scale-95 flex gap-2"
+              >
+                {isUpdating ? <Loader2 className="h-3 w-3 animate-spin" /> : <><ArrowLeftRight size={12} /> Unallocate</>}
+              </Button>
+            )}
+
+            {/* Divider */}
+            {activePool !== "All" && auctionConfig && (
+              <div className="h-6 w-[1px] bg-white/10" />
+            )}
+
+            {/* Freeze / Unfreeze */}
+            {auctionConfig && !poolsFrozen && unallocatedCount === 0 && (
+              <Button 
+                onClick={freezePools}
+                disabled={isUpdating}
+                className="h-9 px-5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg font-black uppercase tracking-widest text-[9px] transition-all disabled:opacity-30 active:scale-95 flex gap-2"
+              >
+                <Lock size={12} /> Freeze Pools
+              </Button>
+            )}
+            {auctionConfig && poolsFrozen && (
+              <Button 
+                onClick={unfreezePools}
+                disabled={isUpdating}
+                className="h-9 px-5 bg-white/10 hover:bg-white/20 text-white/70 rounded-lg font-black uppercase tracking-widest text-[9px] transition-all disabled:opacity-30 active:scale-95 flex gap-2 border border-white/10"
+              >
+                <Unlock size={12} /> Unfreeze
+              </Button>
+            )}
+          </div>
+        )}
 
         {/* Filters & Stats */}
         <div className="flex flex-col md:flex-row gap-6 items-end justify-between">
@@ -190,7 +277,7 @@ export default function RegistryPage() {
               {/* Pool Tabs */}
               <div className="flex gap-2 bg-white p-1.5 rounded-2xl w-fit border border-slate-100 shadow-sm overflow-x-auto">
                  {pools.map((pool) => (
-                    <button
+                     <button
                        key={pool}
                        onClick={() => setActivePool(pool)}
                        className={cn(
@@ -199,10 +286,12 @@ export default function RegistryPage() {
                           ? pool === "Unallocated"
                             ? "bg-amber-500 text-white shadow-lg shadow-amber-200"
                             : "bg-slate-900 text-white shadow-lg shadow-slate-200"
-                          : "text-slate-400 hover:text-slate-600 hover:bg-slate-50"
+                          : pool === "Unallocated" && unallocatedCount > 0
+                            ? "text-amber-600 hover:text-amber-700 hover:bg-amber-50 animate-pulse ring-2 ring-amber-300"
+                            : "text-slate-400 hover:text-slate-600 hover:bg-slate-50"
                        )}
                     >
-                       {pool}
+                       {pool}{pool === "Unallocated" && unallocatedCount > 0 ? ` (${unallocatedCount})` : ""}
                     </button>
                  ))}
               </div>

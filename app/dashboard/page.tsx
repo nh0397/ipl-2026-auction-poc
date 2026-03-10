@@ -5,10 +5,12 @@ import { supabase } from "@/lib/supabase";
 import { Users, Info, ArrowUpRight, Briefcase, Gavel, Activity, Layers, UserCheck, History, Trophy } from "lucide-react";
 import AuctionTimer from "@/components/dashboard/AuctionTimer";
 import { cn, getPlayerImage } from "@/lib/utils";
+import { TeamNamePrompt } from "@/components/auction/TeamNamePrompt";
 
 export default function Dashboard() {
   const [profile, setProfile] = useState<any>(null);
   const [recentSignings, setRecentSignings] = useState<any[]>([]);
+  const [mySquad, setMySquad] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -33,6 +35,16 @@ export default function Dashboard() {
           .limit(10);
         
         setRecentSignings(soldPlayers || []);
+
+        // Fetch my squad (players sold to me)
+        if (profileData?.team_name) {
+          const { data: squad } = await supabase
+            .from("players")
+            .select("*")
+            .eq("sold_to", profileData.team_name)
+            .order("player_name", { ascending: true });
+          setMySquad(squad || []);
+        }
       }
       setLoading(false);
     };
@@ -77,6 +89,11 @@ export default function Dashboard() {
 
       <div className="w-full px-6 md:px-12 py-8 space-y-8">
         
+        {/* Team Name Prompt */}
+        {profile && (
+          <TeamNamePrompt profile={profile} onUpdated={() => window.location.reload()} />
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-12 gap-8 items-stretch">
           
           {/* PURSE PANEL */}
@@ -192,18 +209,36 @@ export default function Dashboard() {
                 <ArrowUpRight size={16} className="text-slate-200 group-hover:text-blue-400" />
              </div>
 
-             <div className="bg-slate-900 p-8 rounded-[2.5rem] text-white shadow-xl shadow-slate-200 flex items-center gap-6 group relative overflow-hidden transition-all hover:scale-[1.01]">
+             <div className="bg-slate-900 p-8 rounded-[2.5rem] text-white shadow-xl shadow-slate-200 flex flex-col gap-6 relative overflow-hidden transition-all">
                 <div className="absolute top-0 right-0 w-32 h-32 bg-blue-600/10 rounded-full -mr-16 -mt-16 blur-3xl opacity-50" />
-                <div className="h-16 w-16 bg-white/10 rounded-[1.5rem] flex items-center justify-center text-blue-400 shadow-sm group-hover:bg-white/20 transition-all">
-                   <Users size={28} />
+                <div className="flex items-center gap-4">
+                  <div className="h-12 w-12 bg-white/10 rounded-xl flex items-center justify-center text-blue-400">
+                     <Users size={24} />
+                  </div>
+                  <div className="relative z-10">
+                     <span className="text-[10px] font-black uppercase tracking-widest text-white/30 block">My Squad</span>
+                     <h3 className="text-xl font-black text-white italic tracking-tight uppercase">{mySquad.length} Players Signed</h3>
+                  </div>
                 </div>
-                <div className="flex-1 relative z-10">
-                   <span className="text-[10px] font-black uppercase tracking-widest text-white/30 block mb-1">Squad Acquisition Portfolio</span>
-                   <h3 className="text-2xl font-black text-white italic tracking-tight uppercase">0 Players Signed</h3>
-                   <div className="mt-3 flex gap-1">
-                      {[1,2,3,4,5,6,7].map(i => <div key={i} className="h-1.5 w-6 bg-white/10 rounded-full group-hover:bg-blue-600/30 transition-colors" />)}
-                   </div>
-                </div>
+                {mySquad.length > 0 ? (
+                  <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                    {mySquad.map(p => (
+                      <div key={p.id} className="flex items-center gap-3 p-3 bg-white/5 rounded-xl">
+                        <div className="h-10 w-10 rounded-lg bg-white/10 overflow-hidden flex items-center justify-center text-white/30 shrink-0">
+                          {p.image_url ? <img src={getPlayerImage(p.image_url)!} alt="" className="h-full w-full object-cover" /> : <Users size={16} />}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <span className="text-sm font-black text-white italic uppercase truncate block">{p.player_name}</span>
+                          <span className="text-[9px] font-bold text-white/40 uppercase tracking-widest">{p.role} • {p.sold_price}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex gap-1">
+                    {[1,2,3,4,5,6,7].map(i => <div key={i} className="h-1.5 w-6 bg-white/10 rounded-full" />)}
+                  </div>
+                )}
              </div>
         </div>
 
