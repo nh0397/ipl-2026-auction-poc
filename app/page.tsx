@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { supabase } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -8,7 +8,7 @@ import { Trophy, LogIn, Chrome, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 
-export default function Home() {
+function LoginPageContent() {
   const [loading, setLoading] = useState(false);
   const [dbConnected, setDbConnected] = useState<boolean | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -40,7 +40,7 @@ export default function Home() {
       }
     };
     checkConnection();
-  }, []);
+  }, [searchParams, router]);
 
   const handleGoogleLogin = async () => {
     setLoading(true);
@@ -59,12 +59,6 @@ export default function Home() {
       setLoading(false);
     }
   };
-
-  const handleLogout = async () => {
-    localStorage.removeItem("auth_approved");
-    await supabase.auth.signOut();
-  };
-
 
   return (
     <div className="flex min-h-screen bg-white font-sans overflow-hidden">
@@ -94,10 +88,10 @@ export default function Home() {
       {/* 30% Right Section - Login Form (Full width on mobile) */}
       <div className="w-full lg:w-[30%] flex flex-col justify-center p-8 md:p-12 lg:p-16 bg-white shadow-[-20px_0_50px_rgba(0,0,0,0.05)] z-20">
         <div className="max-w-md mx-auto w-full space-y-10">
-          <div className="bg-blue-600 p-8 text-white text-center">
-          <Trophy className="h-16 w-16 mx-auto mb-4" />
-          <h1 className="text-3xl font-black tracking-tighter uppercase leading-tight">IPL 2026 <br /> Auction POC</h1>
-        </div>
+          <div className="bg-blue-600 p-8 text-white text-center rounded-[2rem]">
+            <Trophy className="h-16 w-16 mx-auto mb-4" />
+            <h1 className="text-3xl font-black tracking-tighter uppercase leading-tight">IPL 2026 <br /> Auction POC</h1>
+          </div>
 
           <div className="space-y-3">
             <h2 className="text-4xl font-black text-slate-900 tracking-tight uppercase">Sign In</h2>
@@ -154,5 +148,20 @@ export default function Home() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function Home() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-white flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4 text-center">
+          <Trophy className="h-12 w-12 text-blue-600 animate-bounce" />
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Loading Auction Portal...</p>
+        </div>
+      </div>
+    }>
+      <LoginPageContent />
+    </Suspense>
   );
 }
