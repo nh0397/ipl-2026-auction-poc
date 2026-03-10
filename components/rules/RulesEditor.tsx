@@ -14,7 +14,7 @@ import {
   Highlighter, Strikethrough, Quote, 
   Code, AlignLeft, AlignCenter, 
   AlignRight, AlignJustify, List, 
-  ListOrdered, Laptop, Link2, 
+  ListOrdered, Link2, 
   Image as ImageIcon, Youtube as YoutubeIcon,
   Save, Loader2, Trash2
 } from "lucide-react";
@@ -80,7 +80,6 @@ export function RulesEditor({ initialContent, onSave, isSaving }: RulesEditorPro
   useEffect(() => {
     if (editor && initialContent !== editor.getHTML()) {
       editor.commands.setContent(initialContent);
-      setPreviewHtml(initialContent);
     }
   }, [initialContent, editor]);
 

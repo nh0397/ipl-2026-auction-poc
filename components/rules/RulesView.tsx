@@ -1,6 +1,6 @@
 "use client";
 
-import { Trophy, CheckCircle2, ShieldAlert } from "lucide-react";
+import { Trophy, ShieldAlert } from "lucide-react";
 
 interface RulesViewProps {
   content: string;
