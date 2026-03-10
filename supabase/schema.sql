@@ -60,19 +60,17 @@ DECLARE
   existing_id UUID;
   assigned_role TEXT;
 BEGIN
-  -- Only process whitelisted emails. Everyone else is a viewer with no profile.
-  IF new.email IN ('jalan.me4u@gmail.com', 'project7072@gmail.com') THEN
-    assigned_role := 'Admin';
-  ELSIF new.email IN (
+  -- Determine role based on email
+  IF new.email IN (
+    'project7072@gmail.com',
+    'jalan.me4u@gmail.com',
     'harshshah661992@gmail.com',
-    'parthshah8462@gmail.com',
-    'vatsalchilodiya@gmail.com',
+    'tradingwithparthshah@gmail.com',
     'naisicric97@gmail.com'
   ) THEN
-    assigned_role := 'Participant';
+    assigned_role := 'Admin';
   ELSE
-    -- Not whitelisted: skip, no profile created
-    RETURN NEW;
+    assigned_role := 'Viewer';
   END IF;
 
   -- Check if profile with this email already exists
@@ -91,12 +89,11 @@ BEGIN
     -- Create profile for this participant/admin
     INSERT INTO public.profiles (id, email, full_name, avatar_url, role, budget)
     VALUES (
-      new.id,
-      new.email,
+      new.id, new.email, 
       new.raw_user_meta_data->>'full_name',
-      new.raw_user_meta_data->>'avatar_url',
-      assigned_role,
-      120
+      new.raw_user_meta_data->>'avatar_url', 
+      assigned_role, 
+      CASE WHEN assigned_role = 'Viewer' THEN 0 ELSE 120 END
     );
   END IF;
   RETURN NEW;

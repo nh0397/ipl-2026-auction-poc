@@ -8,10 +8,9 @@
 INSERT INTO profiles (id, email, full_name, role, budget) VALUES
   (gen_random_uuid(), 'project7072@gmail.com', 'System Admin', 'Admin', 120),
   (gen_random_uuid(), 'jalan.me4u@gmail.com', 'Prashant Jalan', 'Admin', 120),
-  (gen_random_uuid(), 'harshshah661992@gmail.com', 'Harsh Shah', 'Participant', 120),
-  (gen_random_uuid(), 'parthshah8462@gmail.com', 'Parth Shah', 'Participant', 120),
-  (gen_random_uuid(), 'vatsalchilodiya@gmail.com', 'Vatsal Chilodiya', 'Participant', 120),
-  (gen_random_uuid(), 'naisicric97@gmail.com', 'Naisarg Halvadiya', 'Participant', 120)
+  (gen_random_uuid(), 'harshshah661992@gmail.com', 'Harsh Shah', 'Admin', 120),
+  (gen_random_uuid(), 'tradingwithparthshah@gmail.com', 'Parth Shah', 'Admin', 120),
+  (gen_random_uuid(), 'naisicric97@gmail.com', 'Naisarg Halvadiya', 'Admin', 120)
 ON CONFLICT (email) DO NOTHING;
 
 -- Disable RLS for now so you can see all profiles
