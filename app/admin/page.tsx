@@ -86,7 +86,7 @@ export default function AdminDashboard() {
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-4">
             <Link 
-                href="/" 
+                href="/dashboard" 
                 className="h-10 w-10 border-2 border-slate-200 rounded-full flex items-center justify-center hover:bg-slate-50 transition-colors shadow-sm bg-white"
             >
                 <ArrowLeft className="h-4 w-4" />

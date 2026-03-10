@@ -20,10 +20,10 @@ CREATE TABLE IF NOT EXISTS players (
   country TEXT NOT NULL,
   price TEXT NOT NULL, -- Base Price
   type TEXT, -- e.g. Overseas/Indian
-  capped_uncapped TEXT CHECK (capped_uncapped IN ('Capped', 'Uncapped')),
-  acquisition TEXT CHECK (acquisition IN ('Retained', 'Auction', 'RTM')),
-  role TEXT CHECK (role IN ('All-rounder', 'Batter', 'Batter/WK', 'Bowler')),
-  status TEXT NOT NULL DEFAULT 'Available' CHECK (status IN ('Available', 'Sold', 'Unsold')),
+  capped_uncapped TEXT, -- Capped/Uncapped
+  acquisition TEXT, -- Retained/Auction/RTM/Traded
+  role TEXT, -- e.g. Wicketkeeper Batter, Bowler, etc.
+  status TEXT NOT NULL DEFAULT 'Available', -- Available/Sold/Unsold
   sold_to TEXT, -- The name of the team that bought them
   sold_price TEXT,
   image_url TEXT,
