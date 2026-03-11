@@ -7,8 +7,10 @@ import AuctionTimer from "@/components/dashboard/AuctionTimer";
 import { cn, getPlayerImage, iplColors } from "@/lib/utils";
 import { TeamNamePrompt } from "@/components/auction/TeamNamePrompt";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 export default function Dashboard() {
+  const router = useRouter();
   const [profile, setProfile] = useState<any>(null);
   const [recentSignings, setRecentSignings] = useState<any[]>([]);
   const [mySquad, setMySquad] = useState<any[]>([]);
@@ -69,13 +71,16 @@ export default function Dashboard() {
         }
       })
       .subscribe();
-
     return () => {
       supabase.removeChannel(channel);
     };
   }, []);
 
   if (!profile) return null;
+  if (profile.role === 'Viewer') {
+    router.replace('/auction');
+    return null;
+  }
 
   const squadSize = mySquad.length;
   const minPlayers = auctionConfig?.min_players ?? 18;

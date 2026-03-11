@@ -75,7 +75,7 @@ export function Navbar() {
   if (!user) return null;
 
   const navLinks = [
-    { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+    ...(role !== 'Viewer' ? [{ href: "/dashboard", label: "Dashboard", icon: LayoutDashboard }] : []),
     { href: "/registry", label: "Player Pool", icon: Search },
     { href: "/squads", label: "Team Rosters", icon: Users },
     { href: "/auction", label: "Live Auction", icon: Gavel },
@@ -100,7 +100,7 @@ export function Navbar() {
             }
           </button>
 
-          <Link href="/dashboard" className="flex items-center gap-2 sm:gap-3 group">
+          <Link href={role === 'Viewer' ? "/auction" : "/dashboard"} className="flex items-center gap-2 sm:gap-3 group">
             <div className="h-8 w-8 md:h-9 md:w-9 bg-slate-900 rounded-xl flex items-center justify-center transition-all group-hover:rotate-6 group-hover:scale-105 shadow-sm">
               <Gavel className="h-4 w-4 md:h-5 md:w-5 text-white" />
             </div>

@@ -19,11 +19,19 @@ export default function AuthCallback() {
       }
     }, 30000);
 
-    const finalize = async () => {
+    const finalize = async (session: any) => {
       if (resolved) return;
       resolved = true;
       clearTimeout(timeout);
       localStorage.setItem("auth_approved", "true");
+      
+      if (session?.user?.id) {
+         const { data: profile } = await supabase.from('profiles').select('role').eq('id', session.user.id).single();
+         if (profile?.role === 'Viewer') {
+            router.replace('/auction');
+            return;
+         }
+      }
       router.replace("/dashboard");
     };
 
@@ -42,7 +50,7 @@ export default function AuthCallback() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === "SIGNED_IN" && session) {
         subscription.unsubscribe();
-        finalize();
+        finalize(session);
       }
     });
 
@@ -50,7 +58,7 @@ export default function AuthCallback() {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session && !resolved) {
         subscription.unsubscribe();
-        finalize();
+        finalize(session);
       }
     });
 
