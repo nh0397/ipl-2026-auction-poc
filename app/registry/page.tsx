@@ -18,16 +18,15 @@ export default function RegistryPage() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [targetLot, setTargetLot] = useState("Marquee");
   const [isUpdating, setIsUpdating] = useState(false);
-  const [activePool, setActivePool] = useState<string>("All");
+  const [activePool, setActivePool] = useState<string>("Unallocated");
   const [activeTeam, setActiveTeam] = useState<string>("All Teams");
   const lastClickedIndex = useRef<number | null>(null);
   const [auctionConfig, setAuctionConfig] = useState<any>(null);
 
   // Admin sees Unallocated tab, everyone sees the pool tabs
   const isAdmin = profile?.role === "Admin";
-  const pools = isAdmin
-    ? ["All", "Marquee", "Pool 1", "Pool 2", "Pool 3", "Unallocated"]
-    : ["All", "Marquee", "Pool 1", "Pool 2", "Pool 3"];
+  // Everyone gets to see Unallocated so they can see all pending unassigned players
+  const pools = ["All", "Marquee", "Pool 1", "Pool 2", "Pool 3", "Unallocated"];
   const showAdminControls = isAdmin && activePool !== "All";
   const unallocatedCount = allPlayers.filter(p => !p.pool || p.pool === "").length;
   const teams = ["All Teams", ...Array.from(new Set(allPlayers.map(p => p.team))).sort()];
