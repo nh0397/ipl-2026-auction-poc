@@ -62,7 +62,6 @@ DECLARE
 BEGIN
   -- Determine role based on email
   IF new.email IN (
-    'project7072@gmail.com',
     'jalan.me4u@gmail.com',
     'harshshah661992@gmail.com',
     'tradingwithparthshah@gmail.com',
