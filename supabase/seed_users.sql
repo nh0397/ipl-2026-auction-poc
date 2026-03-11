@@ -6,7 +6,6 @@
 -- We only seed profiles with a temporary UUID that gets replaced on first login.
 
 INSERT INTO profiles (id, email, full_name, role, budget) VALUES
-  (gen_random_uuid(), 'project7072@gmail.com', 'System Admin', 'Admin', 120),
   (gen_random_uuid(), 'jalan.me4u@gmail.com', 'Prashant Jalan', 'Admin', 120),
   (gen_random_uuid(), 'harshshah661992@gmail.com', 'Harsh Shah', 'Admin', 120),
   (gen_random_uuid(), 'tradingwithparthshah@gmail.com', 'Parth Shah', 'Admin', 120),
