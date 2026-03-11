@@ -415,7 +415,7 @@ export default function AuctionPage() {
         </div>
 
         {/* Team Name Prompt */}
-        {profile && (
+        {profile && profile.role !== "Viewer" && (
           <TeamNamePrompt profile={profile} onUpdated={fetchAll} />
         )}
 
