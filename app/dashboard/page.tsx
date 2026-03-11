@@ -4,13 +4,15 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { Users, Info, ArrowUpRight, Briefcase, Gavel, Activity, Layers, UserCheck, History, Trophy } from "lucide-react";
 import AuctionTimer from "@/components/dashboard/AuctionTimer";
-import { cn, getPlayerImage } from "@/lib/utils";
+import { cn, getPlayerImage, iplColors } from "@/lib/utils";
 import { TeamNamePrompt } from "@/components/auction/TeamNamePrompt";
+import Link from "next/link";
 
 export default function Dashboard() {
   const [profile, setProfile] = useState<any>(null);
   const [recentSignings, setRecentSignings] = useState<any[]>([]);
   const [mySquad, setMySquad] = useState<any[]>([]);
+  const [auctionConfig, setAuctionConfig] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -25,6 +27,13 @@ export default function Dashboard() {
           .eq("id", session.user.id)
           .single();
         setProfile(profileData);
+
+        const { data: configData } = await supabase
+          .from("auction_config")
+          .select("*")
+          .limit(1)
+          .single();
+        setAuctionConfig(configData);
 
         // Fetch Recently Bought Players (Sold players, ordered by newest)
         const { data: soldPlayers } = await supabase
@@ -66,8 +75,23 @@ export default function Dashboard() {
     };
   }, []);
 
+  if (!profile) return null;
+
+  const squadSize = mySquad.length;
+  const minPlayers = auctionConfig?.min_players ?? 18;
+  const maxPlayers = auctionConfig?.max_players ?? 25;
+
+  const isMinMet = squadSize >= minPlayers;
+  const isMaxMet = squadSize <= maxPlayers;
+
+  const batters = mySquad.filter(p => p.role?.toLowerCase().includes('batter') || p.role?.toLowerCase().includes('wk')).length;
+  const bowlers = mySquad.filter(p => p.role?.toLowerCase().includes('bowler')).length;
+  const allRounders = mySquad.filter(p => p.role?.toLowerCase().includes('all-rounder')).length;
+  const indian = mySquad.filter(p => p.type?.toLowerCase() === 'indian').length;
+  const overseas = mySquad.filter(p => p.type?.toLowerCase() === 'overseas').length;
+
   return (
-    <div className="bg-[#FDFDFF] selection:bg-blue-100 font-sans text-slate-900 overflow-x-hidden min-h-[calc(100vh-64px)] pb-12">
+    <div className="min-h-screen bg-slate-50 font-sans text-slate-900 leading-normal overflow-hidden pt-8 min-h-[calc(100vh-64px)] pb-12">
       {/* 1. FRANCHISE TABLE COMMAND ROW */}
       <div className="w-full border-b border-slate-100 bg-white/50 backdrop-blur-sm px-6 md:px-12 py-4 flex flex-col md:flex-row justify-between items-center gap-4 z-30">
         <div className="flex items-center gap-4">
@@ -105,18 +129,46 @@ export default function Dashboard() {
               
               <div className="relative z-10 flex flex-col gap-12">
                 <div className="space-y-1">
-                  <span className="text-[11px] font-black uppercase tracking-[0.3em] text-blue-600">Total Purse Available</span>
+                  <span className="text-[11px] font-black uppercase tracking-[0.3em] text-blue-600">Remaining Purse</span>
                   <h2 className="text-xl font-black tracking-tight text-slate-900 italic">Financial Cap Status</h2>
                 </div>
                 
                 <div className="flex items-baseline gap-2">
-                  <span className="text-8xl font-black tracking-tighter text-slate-900">{profile?.budget || 0}</span>
+                  <span className="text-7xl lg:text-8xl font-black tracking-tighter text-slate-900">{profile?.budget || 0}</span>
                   <span className="text-3xl font-black text-blue-600 italic">CR</span>
                 </div>
 
-                <div className="p-5 bg-slate-50 rounded-3xl border border-slate-100/50">
-                  <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 block mb-1">Squad Roster Capacity</span>
-                  <span className="text-lg font-black text-slate-900 italic uppercase">0/25 <span className="text-[10px] text-slate-300 ml-1">PLAYERS ACQUIRED</span></span>
+                <div className="space-y-3">
+                  <div className={cn(
+                    "p-4 rounded-2xl border flex justify-between items-center transition-colors",
+                    isMinMet ? "bg-emerald-50 border-emerald-100" : "bg-red-50 border-red-200"
+                  )}>
+                    <span className={cn("text-[10px] font-black uppercase tracking-widest block", isMinMet ? "text-emerald-600" : "text-red-500")}>
+                      Squad Capacity
+                    </span>
+                    <span className={cn("text-lg font-black italic uppercase", isMinMet ? "text-emerald-900" : "text-red-700")}>
+                      {squadSize} / {maxPlayers} <span className="text-[10px] ml-1 opacity-70">PLAYERS (MIN {minPlayers})</span>
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 mt-4">
+                    <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100 flex flex-col items-center justify-center">
+                      <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Batters/WK</span>
+                      <span className="text-xl font-black text-slate-800">{batters}</span>
+                    </div>
+                    <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100 flex flex-col items-center justify-center">
+                      <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Bowlers</span>
+                      <span className="text-xl font-black text-slate-800">{bowlers}</span>
+                    </div>
+                    <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100 flex flex-col items-center justify-center">
+                      <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest">All-Rounders</span>
+                      <span className="text-xl font-black text-slate-800">{allRounders}</span>
+                    </div>
+                    <div className="bg-blue-50/50 p-3 rounded-2xl border border-blue-100 flex flex-col items-center justify-center">
+                      <span className="text-[10px] font-black uppercase text-blue-500 tracking-widest">IND <span className="text-slate-300">|</span> OS</span>
+                      <span className="text-xl font-black text-blue-900">{indian} <span className="text-lg opacity-50 font-medium">| {overseas}</span></span>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -143,13 +195,18 @@ export default function Dashboard() {
              <div className="flex-1 min-h-[300px] flex flex-col overflow-y-auto max-h-[450px]">
                 {recentSignings.length > 0 ? (
                    <div className="grid grid-cols-1 gap-px bg-slate-50">
-                      {recentSignings.map((player) => (
-                         <div key={player.id} className="bg-white p-6 flex items-center gap-6 hover:bg-slate-50/50 transition-colors animate-in fade-in slide-in-from-left-2 duration-500">
-                            <div className="h-14 w-14 rounded-2xl bg-slate-50 overflow-hidden ring-2 ring-white shadow-sm flex items-center justify-center text-slate-300 shrink-0">
+                      {recentSignings.map((player) => {
+                          const teamStyle = iplColors[player.team] || { bg: "bg-slate-50", border: "border-slate-100", text: "text-slate-600" };
+                          return (
+                          <div key={player.id} className={cn("p-6 flex items-center gap-6 transition-colors animate-in fade-in slide-in-from-left-2 duration-500 relative overflow-hidden group border-b", teamStyle.bg, teamStyle.border)}>
+                             <div className="absolute top-0 right-0 p-3 opacity-5 font-black text-6xl transform translate-x-1/4 -translate-y-1/4 pointer-events-none">
+                                {player.team}
+                             </div>
+                             <div className="h-14 w-14 rounded-2xl bg-slate-50 overflow-hidden ring-2 ring-white shadow-sm flex items-center justify-center text-slate-300 shrink-0 relative z-10">
                                {player.image_url ? <img src={getPlayerImage(player.image_url)!} alt="" className="h-full w-full object-cover" /> : <Users size={24} />}
                             </div>
                             
-                            <div className="flex-1 min-w-0">
+                            <div className="flex-1 min-w-0 relative z-10">
                                <div className="flex items-center gap-2 mb-1">
                                   <span className="text-[11px] font-black text-blue-600 italic uppercase leading-none">{player.sold_to || player.team}</span>
                                   <div className="h-1 w-1 bg-slate-200 rounded-full" />
@@ -159,16 +216,16 @@ export default function Dashboard() {
                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest truncate">{player.role} • {player.country}</p>
                             </div>
 
-                            <div className="text-right shrink-0">
+                            <div className="text-right shrink-0 relative z-10">
                                <div className="flex flex-col items-end gap-1">
                                   <div className="h-8 w-8 bg-emerald-50 rounded-xl flex items-center justify-center text-emerald-600">
                                      <Trophy size={16} />
                                   </div>
                                   <span className="text-[9px] font-black text-emerald-500 uppercase tracking-widest">Hammer Down</span>
-                               </div>
-                            </div>
-                         </div>
-                      ))}
+                                </div>
+                             </div>
+                          </div>
+                       )})}
                    </div>
                 ) : (
                    <div className="flex-1 flex flex-col items-center justify-center p-12 text-center space-y-4">
@@ -185,6 +242,11 @@ export default function Dashboard() {
                 )}
              </div>
 
+              <div className="p-4 bg-slate-50 border-t border-slate-100 flex justify-center mt-auto">
+                 <Link href="/history" className="text-xs font-black uppercase tracking-widest text-blue-600 hover:text-blue-800 transition-colors flex items-center gap-1">
+                   View Complete Auction History <ArrowUpRight size={14} />
+                 </Link>
+              </div>
              <div className="p-4 bg-slate-900 text-white/50 border-t border-slate-800 flex justify-between items-center px-8 shrink-0">
                 <span className="text-[9px] font-black uppercase tracking-widest flex items-center gap-2">
                    <Activity size={10} className="text-blue-400" />
@@ -221,18 +283,39 @@ export default function Dashboard() {
                   </div>
                 </div>
                 {mySquad.length > 0 ? (
-                  <div className="space-y-2 max-h-[300px] overflow-y-auto">
-                    {mySquad.map(p => (
-                      <div key={p.id} className="flex items-center gap-3 p-3 bg-white/5 rounded-xl">
-                        <div className="h-10 w-10 rounded-lg bg-white/10 overflow-hidden flex items-center justify-center text-white/30 shrink-0">
-                          {p.image_url ? <img src={getPlayerImage(p.image_url)!} alt="" className="h-full w-full object-cover" /> : <Users size={16} />}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <span className="text-sm font-black text-white italic uppercase truncate block">{p.player_name}</span>
-                          <span className="text-[9px] font-bold text-white/40 uppercase tracking-widest">{p.role} • {p.sold_price}</span>
-                        </div>
-                      </div>
-                    ))}
+                  <div className="max-h-[300px] overflow-y-auto bg-white rounded-xl overflow-hidden mt-4">
+                    <table className="w-full text-left border-collapse min-w-max">
+                      <thead className="bg-slate-100 text-[10px] font-black uppercase text-slate-500 tracking-widest sticky top-0 z-20">
+                        <tr>
+                          <th className="px-3 py-2">Player</th>
+                          <th className="px-3 py-2 text-center">Team & Role</th>
+                          <th className="px-3 py-2 text-right">Bid</th>
+                        </tr>
+                      </thead>
+                      <tbody className="text-sm">
+                        {mySquad.map(p => {
+                          const teamStyle = iplColors[p.team] || { bg: "bg-white", border: "border-slate-100", text: "text-slate-600" };
+                          return (
+                          <tr key={p.id} className={cn("border-b last:border-0", teamStyle.bg)}>
+                            <td className="px-3 py-2 flex items-center gap-2">
+                              <div className="h-6 w-6 rounded flex items-center justify-center bg-white/50 shrink-0">
+                                {p.image_url ? <img src={getPlayerImage(p.image_url)!} alt="" className="h-full w-full object-cover rounded" /> : <Users size={12} />}
+                              </div>
+                              <span className="font-bold text-slate-900 truncate max-w-[120px]" title={p.player_name}>{p.player_name}</span>
+                            </td>
+                            <td className="px-3 py-2 text-center">
+                              <div className="flex flex-col items-center">
+                                <span className={cn("text-[9px] font-black uppercase tracking-widest bg-white/50 px-1 py-0.5 rounded", teamStyle.text)}>{p.team}</span>
+                                <span className="text-[10px] font-semibold text-slate-600 truncate">{p.role}</span>
+                              </div>
+                            </td>
+                            <td className="px-3 py-2 text-right font-black text-slate-900">
+                               {p.sold_price?.replace(' Cr', '')} <span className="text-[10px] text-slate-500 font-bold">CR</span>
+                            </td>
+                          </tr>
+                        )})}
+                      </tbody>
+                    </table>
                   </div>
                 ) : (
                   <div className="flex gap-1">

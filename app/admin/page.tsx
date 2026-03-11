@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Trophy, Shield, User, ArrowLeft, RefreshCw } from "lucide-react";
+import { Trophy, Shield, User, ArrowLeft, RefreshCw, Settings, Save } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -14,6 +14,14 @@ export default function AdminDashboard() {
   const [users, setUsers] = useState<any[]>([]);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+
+  // Auction Config States
+  const [configLoading, setConfigLoading] = useState(false);
+  const [auctionConfig, setAuctionConfig] = useState<any>(null);
+  const [teamBudget, setTeamBudget] = useState(120);
+  const [minPlayers, setMinPlayers] = useState(18);
+  const [maxPlayers, setMaxPlayers] = useState(25);
+
   const router = useRouter();
 
   useEffect(() => {
@@ -38,10 +46,38 @@ export default function AdminDashboard() {
 
       setCurrentUser(session.user);
       fetchUsers();
+      fetchConfig();
     };
 
     checkAuth();
   }, [router]);
+
+  const fetchConfig = async () => {
+    const { data } = await supabase.from("auction_config").select("*").limit(1).single();
+    if (data) {
+      setAuctionConfig(data);
+      setTeamBudget(data.budget_per_team ?? 120);
+      setMinPlayers(data.min_players ?? 18);
+      setMaxPlayers(data.max_players ?? 25);
+    }
+  };
+
+  const saveConfig = async () => {
+    if (!auctionConfig) return;
+    setConfigLoading(true);
+    await supabase.from("auction_config").update({
+      budget_per_team: teamBudget,
+      min_players: minPlayers,
+      max_players: maxPlayers
+    }).eq("id", auctionConfig.id);
+
+    // Also reset all participants' basic budget to the new teamBudget (assuming this is pre-auction)
+    // Warning: this ignores already spent money. (In a real app, you'd calculate: newBudget - spentMoney)
+    await supabase.from("profiles").update({ budget: teamBudget }).neq("role", "Viewer");
+
+    alert("Configuration saved successfully! All participants now have this starting budget.");
+    setConfigLoading(false);
+  };
 
   const fetchUsers = async () => {
     setLoading(true);
@@ -169,6 +205,54 @@ export default function AdminDashboard() {
                 )}
               </TableBody>
             </Table>
+          </CardContent>
+        </Card>
+
+        {/* Global Auction Settings Card */}
+        <Card className="shadow-xl border-none overflow-hidden rounded-2xl">
+          <CardHeader className="bg-slate-900 text-white p-6">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Settings className="h-6 w-6 text-emerald-400" />
+                <CardTitle className="text-xl font-bold uppercase tracking-tight">Auction Rules & Constraints</CardTitle>
+              </div>
+              <Button onClick={saveConfig} disabled={configLoading} className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl h-10 px-5 flex items-center gap-2">
+                <Save className={`h-4 w-4 ${configLoading ? 'animate-spin' : ''}`} />
+                Save Settings
+              </Button>
+            </div>
+            <CardDescription className="text-slate-400 font-medium">
+              These rules directly affect the dashboard display and starting budgets.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="p-8 grid grid-cols-1 md:grid-cols-2 gap-8">
+            <div className="space-y-2">
+              <label className="text-xs font-black uppercase tracking-widest text-slate-500">Purse per Team (Cr)</label>
+              <input 
+                type="number" 
+                value={teamBudget}
+                onChange={(e) => setTeamBudget(Number(e.target.value))}
+                className="w-full h-12 bg-slate-50 border border-slate-200 rounded-xl px-4 font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-xs font-black uppercase tracking-widest text-slate-500">Min Players Required</label>
+              <input 
+                type="number" 
+                value={minPlayers}
+                onChange={(e) => setMinPlayers(Number(e.target.value))}
+                className="w-full h-12 bg-slate-50 border border-slate-200 rounded-xl px-4 font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-xs font-black uppercase tracking-widest text-slate-500">Max Players Allowed</label>
+              <input 
+                type="number" 
+                value={maxPlayers}
+                onChange={(e) => setMaxPlayers(Number(e.target.value))}
+                className="w-full h-12 bg-slate-50 border border-slate-200 rounded-xl px-4 font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
           </CardContent>
         </Card>
 

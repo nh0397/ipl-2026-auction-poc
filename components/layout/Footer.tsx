@@ -22,7 +22,7 @@ export function Footer() {
 
         {/* SUPPORT / CONTACT */}
         <div className="flex items-center gap-2 text-sm font-bold text-slate-500">
-          <span>Support:</span>
+          <span>For support, contact</span>
           <a 
             href="mailto:jalan.me4u@gmail.com" 
             className="text-blue-600 hover:underline decoration-blue-600/30 underline-offset-4"

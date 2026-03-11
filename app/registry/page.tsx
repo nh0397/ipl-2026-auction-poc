@@ -6,7 +6,7 @@ import { Users, Search, CheckCircle2, Loader2, CheckSquare, XSquare, Lock, Unloc
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { cn, getPlayerImage } from "@/lib/utils";
+import { cn, getPlayerImage, iplColors } from "@/lib/utils";
 
 export default function RegistryPage() {
   const [profile, setProfile] = useState<any>(null);
@@ -359,16 +359,21 @@ export default function RegistryPage() {
                     <p className="mt-4 text-[10px] font-black text-slate-300 uppercase tracking-widest">Accessing Council Database...</p>
                  </div>
               ) : filteredRegistry.length > 0 ? (
-                 filteredRegistry.map((player, index) => (
+                 filteredRegistry.map((player, index) => {
+                    const teamStyle = iplColors[player.team] || { bg: "bg-white", border: "border-slate-100", text: "text-slate-600" };
+                    return (
                     <div 
                       key={player.id} 
                       onClick={(e) => toggleSelection(player.id, index, e.shiftKey)}
                       className={cn(
-                        "bg-white p-7 flex items-start gap-5 transition-all relative group h-32 select-none",
+                        "p-7 flex items-start gap-5 transition-all relative group h-32 select-none border-t overflow-hidden",
                         showAdminControls && "cursor-pointer",
-                        showAdminControls && selectedIds.includes(player.id) && "bg-blue-50/50 ring-1 ring-inset ring-blue-100"
+                        showAdminControls && selectedIds.includes(player.id) ? "bg-blue-50/50 ring-1 ring-inset ring-blue-100" : teamStyle.bg
                       )}
                     >
+                       <div className="absolute top-0 right-0 p-3 opacity-5 font-black text-6xl transform translate-x-1/4 -translate-y-1/4 pointer-events-none">
+                          {player.team}
+                       </div>
                        {/* Admin checkbox */}
                        {showAdminControls && (
                           <div className={cn(
@@ -398,7 +403,8 @@ export default function RegistryPage() {
                           <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest truncate">{player.role} • {player.country}</p>
                        </div>
                     </div>
-                 ))
+                  );
+                 })
               ) : (
                  <div className="col-span-full py-40 text-center flex flex-col items-center justify-center space-y-4">
                     <div className="h-16 w-16 bg-slate-100 rounded-full flex items-center justify-center text-slate-300">

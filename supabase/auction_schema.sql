@@ -8,13 +8,16 @@ CREATE TABLE IF NOT EXISTS auction_config (
   status TEXT NOT NULL DEFAULT 'setup' CHECK (status IN ('setup', 'frozen', 'live', 'paused', 'completed')),
   current_pool TEXT DEFAULT 'Marquee',
   pools_frozen BOOLEAN DEFAULT FALSE,
+  budget_per_team NUMERIC DEFAULT 120,
+  min_players INTEGER DEFAULT 18,
+  max_players INTEGER DEFAULT 25,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Insert the singleton row
-INSERT INTO auction_config (status, current_pool, pools_frozen)
-VALUES ('setup', 'Marquee', false)
+INSERT INTO auction_config (status, current_pool, pools_frozen, budget_per_team, min_players, max_players)
+VALUES ('setup', 'Marquee', false, 120, 18, 25)
 ON CONFLICT DO NOTHING;
 
 -- 2. Auction State (Tracks the player currently on the block)
