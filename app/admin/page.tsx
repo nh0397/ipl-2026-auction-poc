@@ -3,10 +3,11 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Trophy, Shield, User, ArrowLeft, RefreshCw, Settings, Save } from "lucide-react";
+import { Trophy, Shield, User, ArrowLeft, RefreshCw, Settings, Save, Search, Gavel, Clock, Users } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -21,6 +22,17 @@ export default function AdminDashboard() {
   const [teamBudget, setTeamBudget] = useState(120);
   const [minPlayers, setMinPlayers] = useState(18);
   const [maxPlayers, setMaxPlayers] = useState(25);
+
+  // Override States
+  const [allPlayers, setAllPlayers] = useState<any[]>([]);
+  const [overrideMode, setOverrideMode] = useState<"reallocate" | "direct">("reallocate");
+  const [sourceTeamId, setSourceTeamId] = useState<string>("");
+  const [selectedOverridePlayer, setSelectedOverridePlayer] = useState<string>("");
+  const [overrideBuyer, setOverrideBuyer] = useState<string>("");
+  const [overridePrice, setOverridePrice] = useState<string>("");
+  const [overrideLoading, setOverrideLoading] = useState(false);
+  const [playerSearch, setPlayerSearch] = useState("");
+  const [activeTab, setActiveTab] = useState<"users" | "config" | "allocation">("users");
 
   const router = useRouter();
 
@@ -47,9 +59,34 @@ export default function AdminDashboard() {
       setCurrentUser(session.user);
       fetchUsers();
       fetchConfig();
+      fetchPlayers();
     };
 
     checkAuth();
+
+    // Set up Real-time subscriptions
+    const channel = supabase
+      .channel('admin-db-changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'players' },
+        () => fetchPlayers()
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'profiles' },
+        () => fetchUsers()
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'auction_config' },
+        () => fetchConfig()
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [router]);
 
   const fetchConfig = async () => {
@@ -77,6 +114,11 @@ export default function AdminDashboard() {
 
     alert("Configuration saved successfully! All participants now have this starting budget.");
     setConfigLoading(false);
+  };
+
+  const fetchPlayers = async () => {
+    const { data } = await supabase.from("players").select("*").order("player_name");
+    if (data) setAllPlayers(data);
   };
 
   const fetchUsers = async () => {
@@ -112,6 +154,122 @@ export default function AdminDashboard() {
     }
   };
 
+  const executeOverride = async () => {
+    if (!selectedOverridePlayer || !overrideBuyer || !overridePrice) return;
+    const newPrice = parseFloat(overridePrice);
+    if (isNaN(newPrice)) return alert("Invalid price");
+
+    setOverrideLoading(true);
+
+    const player = allPlayers.find(p => p.id === selectedOverridePlayer);
+    const newBuyer = users.find(u => u.id === overrideBuyer);
+    
+    if (!player || !newBuyer) {
+      setOverrideLoading(false);
+      return;
+    }
+
+    // --- Strict Budget Check ---
+    // Calculate newBuyer's spending if this sale goes through
+    // Refund current price if they are currently the owner, then add newPrice
+    let currentSpendOnThisPlayer = 0;
+    if (player.sold_to_id === newBuyer.id) {
+       currentSpendOnThisPlayer = player.final_price || 0;
+    }
+
+    // Get current total spent by this team
+    const teamTotalSpent = allPlayers
+      .filter(p => p.sold_to_id === newBuyer.id && p.id !== player.id)
+      .reduce((sum, p) => sum + (p.final_price || 0), 0);
+
+    const expectedNewTotal = teamTotalSpent + newPrice;
+    const maxBudget = auctionConfig?.budget_per_team || 120;
+
+    if (expectedNewTotal > maxBudget) {
+      alert(`Budget violation! This team has ${maxBudget - teamTotalSpent} Cr remaining. ${newPrice} Cr exceeds it.`);
+      setOverrideLoading(false);
+      return;
+    }
+
+    // 1. Refund previous buyer if already sold to someone else
+    if (player.auction_status === "sold" && player.sold_to_id && player.sold_to_id !== overrideBuyer) {
+      const prevBuyer = users.find(u => u.id === player.sold_to_id);
+      if (prevBuyer) {
+        // Handle sold_price potentially being string like "10.00 Cr"
+        const currentPrice = typeof player.sold_price === 'string' 
+          ? parseFloat(player.sold_price.replace(/[^\d.]/g, '')) 
+          : (player.sold_price || 0);
+
+        await supabase.from("profiles").update({
+          budget: prevBuyer.budget + currentPrice,
+        }).eq("id", prevBuyer.id);
+      }
+    }
+
+    // 2. Charge new buyer (only if not already the buyer)
+    if (player.sold_to_id !== overrideBuyer) {
+      await supabase.from("profiles").update({
+        budget: newBuyer.budget - newPrice,
+      }).eq("id", newBuyer.id);
+    } else {
+      // Just adjusting price for same buyer
+      const currentPrice = typeof player.sold_price === 'string' 
+        ? parseFloat(player.sold_price.replace(/[^\d.]/g, '')) 
+        : (player.sold_price || 0);
+        
+      const priceDiff = newPrice - currentPrice;
+      await supabase.from("profiles").update({
+        budget: newBuyer.budget - priceDiff,
+      }).eq("id", newBuyer.id);
+    }
+
+    // 3. Update player record
+    await supabase.from("players").update({
+      status: "Sold",
+      auction_status: "sold",
+      sold_to_id: newBuyer.id,
+      sold_to: newBuyer.team_name || newBuyer.full_name,
+      sold_price: `${newPrice.toFixed(2)} Cr`,
+    }).eq("id", player.id);
+
+    // 4. Update Auction State if this player is currently live
+    const { data: state } = await supabase.from("auction_state").select("*").limit(1).single();
+    if (state && state.current_player_id === player.id) {
+      await supabase.from("auction_state").update({
+        status: "sold",
+        current_bid: newPrice,
+        current_bidder_id: newBuyer.id,
+        current_bidder_name: newBuyer.team_name || newBuyer.full_name,
+        updated_at: new Date().toISOString(),
+      }).eq("id", state.id);
+    }
+
+    // 5. Audit Log
+    await supabase.from("audit_logs").insert({
+      admin_id: currentUser.id,
+      admin_name: "Admin Override",
+      action_type: overrideMode === "reallocate" ? "REALLOCATE_PLAYER" : "DIRECT_ASSIGN",
+      details: {
+        player_id: player.id,
+        player_name: player.player_name,
+        from_team: overrideMode === "reallocate" ? player.sold_to_name : "Pool",
+        to_team: newBuyer.team_name || newBuyer.full_name,
+        price: newPrice
+      }
+    });
+
+    alert("Action completed successfully!");
+    
+    // Refresh
+    setOverrideBuyer("");
+    setOverridePrice("");
+    setSelectedOverridePlayer("");
+    setSourceTeamId("");
+    fetchUsers();
+    fetchPlayers();
+    setOverrideLoading(false);
+  };
+
   if (!currentUser) return null;
 
   return (
@@ -138,8 +296,34 @@ export default function AdminDashboard() {
           </Button>
         </div>
 
-        {/* User Management Card */}
-        <Card className="shadow-xl border-none overflow-hidden rounded-2xl">
+        {/* Tab Navigation */}
+        <div className="flex bg-white p-1.5 rounded-[1.5rem] border border-slate-200 shadow-sm">
+          {[
+            { id: "users", label: "Users", icon: Users },
+            { id: "config", label: "Rules", icon: Settings },
+            { id: "allocation", label: "Allocation", icon: Gavel },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id as any)}
+              className={cn(
+                "flex-1 flex items-center justify-center gap-2 h-12 rounded-[1.25rem] text-[10px] font-black uppercase tracking-widest transition-all",
+                activeTab === tab.id 
+                  ? "bg-slate-900 text-white shadow-lg shadow-slate-200" 
+                  : "text-slate-400 hover:text-slate-600 hover:bg-slate-50"
+              )}
+            >
+              <tab.icon className="h-4 w-4" />
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+          {activeTab === "users" && (
+            <div className="space-y-8">
+              {/* User Management Card */}
+              <Card className="shadow-xl border-none overflow-hidden rounded-2xl">
           <CardHeader className="bg-slate-900 text-white p-6">
             <div className="flex items-center gap-3">
               <Shield className="h-6 w-6 text-blue-400" />
@@ -207,7 +391,11 @@ export default function AdminDashboard() {
             </Table>
           </CardContent>
         </Card>
+      </div>
+    )}
 
+    {activeTab === "config" && (
+      <div className="space-y-8">
         {/* Global Auction Settings Card */}
         <Card className="shadow-xl border-none overflow-hidden rounded-2xl">
           <CardHeader className="bg-slate-900 text-white p-6">
@@ -255,9 +443,212 @@ export default function AdminDashboard() {
             </div>
           </CardContent>
         </Card>
+      </div>
+    )}
 
-        {/* Info Box */}
-        <div className="bg-blue-50/50 p-6 rounded-2xl border border-blue-100/50 flex gap-4 items-start">
+    {activeTab === "allocation" && (
+      <div className="space-y-8">
+        {/* Player Overrides & Re-Allocation Card */}
+        <Card className="shadow-2xl border-none overflow-hidden rounded-[2rem] bg-white">
+          <CardHeader className="bg-slate-900 text-white p-8">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="space-y-1">
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 bg-amber-500 rounded-2xl flex items-center justify-center">
+                    <Gavel className="h-5 w-5 text-white" />
+                  </div>
+                  <CardTitle className="text-2xl font-black italic uppercase tracking-tight">Manual Allocation Console</CardTitle>
+                </div>
+                <CardDescription className="text-slate-400 font-medium">
+                  Overwrite sales, move players between teams, or assign unsold players directly.
+                </CardDescription>
+              </div>
+
+              {/* Mode Toggle */}
+              <div className="flex bg-slate-800 p-1 rounded-xl">
+                <button 
+                  onClick={() => {
+                    setOverrideMode("reallocate");
+                    setSelectedOverridePlayer("");
+                    setSourceTeamId("");
+                  }}
+                  className={cn(
+                    "px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all",
+                    overrideMode === "reallocate" ? "bg-amber-500 text-white" : "text-slate-400 hover:text-white"
+                  )}
+                >
+                  Re-allocate
+                </button>
+                <button 
+                  onClick={() => {
+                    setOverrideMode("direct");
+                    setSelectedOverridePlayer("");
+                    setSourceTeamId("");
+                  }}
+                  className={cn(
+                    "px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all",
+                    overrideMode === "direct" ? "bg-amber-500 text-white" : "text-slate-400 hover:text-white"
+                  )}
+                >
+                  Direct Assign
+                </button>
+              </div>
+            </div>
+          </CardHeader>
+
+          <CardContent className="p-8">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
+              
+              {/* Step 1: Select Source (Conditional) */}
+              <div className="space-y-3">
+                <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">
+                  {overrideMode === "reallocate" ? "1. From Team" : "1. Focus Pool"}
+                </label>
+                {overrideMode === "reallocate" ? (
+                  <select 
+                    value={sourceTeamId}
+                    onChange={(e) => {
+                      setSourceTeamId(e.target.value);
+                      setSelectedOverridePlayer("");
+                    }}
+                    className="w-full h-14 bg-slate-50 border border-slate-200 rounded-2xl px-5 font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 transition-all cursor-pointer"
+                  >
+                    <option value="">Select Team...</option>
+                    {users.filter(u => u.role !== "Viewer").map(u => (
+                      <option key={u.id} value={u.id}>{u.team_name || u.full_name}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <select 
+                    value={playerSearch} // Reuse search state as pool filter for now
+                    onChange={(e) => {
+                      setPlayerSearch(e.target.value);
+                      setSelectedOverridePlayer("");
+                    }}
+                    className="w-full h-14 bg-slate-50 border border-slate-200 rounded-2xl px-5 font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 transition-all cursor-pointer"
+                  >
+                    <option value="">All Pools</option>
+                    {["Marquee", "Pool 1", "Pool 2", "Pool 3", "Unsold"].map(p => (
+                      <option key={p} value={p}>{p}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              {/* Step 2: Select Player */}
+              <div className="space-y-3">
+                <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">2. Select Player</label>
+                <select 
+                  value={selectedOverridePlayer}
+                  onChange={(e) => setSelectedOverridePlayer(e.target.value)}
+                  disabled={overrideMode === "reallocate" && !sourceTeamId}
+                  className="w-full h-14 bg-slate-50 border border-slate-200 rounded-2xl px-5 font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 transition-all disabled:opacity-30 cursor-pointer"
+                >
+                  <option value="">Choose Player...</option>
+                  {allPlayers
+                    .filter(p => {
+                      if (overrideMode === "reallocate") return p.sold_to_id === sourceTeamId;
+                      // Direct assign filters by pool if chosen
+                      if (playerSearch) return p.pool === playerSearch && p.auction_status !== "sold";
+                      return p.auction_status !== "sold";
+                    })
+                    .map(p => (
+                      <option key={p.id} value={p.id}>{p.player_name}</option>
+                    ))
+                  }
+                </select>
+              </div>
+
+              {/* Step 3: Select Destination */}
+              <div className="space-y-3">
+                <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">3. Target Team</label>
+                <select 
+                  value={overrideBuyer}
+                  onChange={(e) => setOverrideBuyer(e.target.value)}
+                  className="w-full h-14 bg-slate-50 border border-slate-200 rounded-2xl px-5 font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 transition-all cursor-pointer"
+                >
+                  <option value="">Select Team...</option>
+                  {users.filter(u => u.role !== "Viewer").map(u => (
+                    <option key={u.id} value={u.id}>
+                      {u.team_name || u.full_name} ({u.budget} Cr left)
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Step 4: Final Price */}
+              <div className="space-y-3">
+                <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">4. Override Price</label>
+                <div className="relative">
+                  <input 
+                    type="number"
+                    step="0.05"
+                    value={overridePrice}
+                    onChange={(e) => setOverridePrice(e.target.value)}
+                    placeholder="Total Cr..."
+                    className="w-full h-14 bg-slate-50 border border-slate-200 rounded-2xl px-5 font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 transition-all"
+                  />
+                  <span className="absolute right-5 top-1/2 -translate-y-1/2 text-[10px] font-black text-slate-300">CR</span>
+                </div>
+              </div>
+
+            </div>
+
+            <div className="mt-10 pt-8 border-t border-slate-50 flex items-center justify-between">
+              <div className="flex gap-4">
+                 {overrideBuyer && overridePrice && (
+                    <div className={cn(
+                      "px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest",
+                      (() => {
+                        const buyer = users.find(u => u.id === overrideBuyer);
+                        const player = allPlayers.find(p => p.id === selectedOverridePlayer);
+                        if (!buyer) return "bg-slate-100 text-slate-400";
+                        
+                        const teamTotalSpent = allPlayers
+                          .filter(p => p.sold_to_id === buyer.id && p.id !== selectedOverridePlayer)
+                          .reduce((sum, p) => sum + (p.final_price || 0), 0);
+                        
+                        const newTotal = teamTotalSpent + (parseFloat(overridePrice) || 0);
+                        const budget = auctionConfig?.budget_per_team || 120;
+                        
+                        return newTotal > budget ? "bg-red-50 text-red-500" : "bg-emerald-50 text-emerald-500";
+                      })()
+                    )}>
+                      {(() => {
+                        const buyer = users.find(u => u.id === overrideBuyer);
+                        if (!buyer) return "Select target team";
+                        
+                        const teamTotalSpent = allPlayers
+                          .filter(p => p.sold_to_id === buyer.id && p.id !== selectedOverridePlayer)
+                          .reduce((sum, p) => sum + (p.final_price || 0), 0);
+                        
+                        const newTotal = teamTotalSpent + (parseFloat(overridePrice) || 0);
+                        const budget = auctionConfig?.budget_per_team || 120;
+                        
+                        return newTotal > budget 
+                          ? `Budget Over: ${newTotal.toFixed(2)} / ${budget} Cr` 
+                          : `Projected Purse: ${(budget - newTotal).toFixed(2)} Cr remaining`;
+                      })()}
+                    </div>
+                 )}
+              </div>
+              <Button 
+                onClick={executeOverride} 
+                disabled={overrideLoading || !selectedOverridePlayer || !overrideBuyer || !overridePrice} 
+                className="bg-slate-900 hover:bg-black text-white font-black uppercase tracking-widest rounded-2xl h-14 px-10 shadow-xl shadow-slate-200 active:scale-95 transition-all"
+              >
+                {overrideLoading ? <RefreshCw className="h-5 w-5 animate-spin mr-3" /> : <Save className="h-5 w-5 mr-3" />}
+                Process Allocation
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    )}
+    </div>
+
+    {/* Info Box - Always visible or context-aware */}
+    <div className="bg-blue-50/50 p-6 rounded-2xl border border-blue-100/50 flex gap-4 items-start">
           <div className="h-10 w-10 bg-blue-100 rounded-full flex items-center justify-center shrink-0">
             <Trophy className="h-5 w-5 text-blue-600" />
           </div>

@@ -26,59 +26,82 @@ export default function SquadsOverview() {
     SRH: { bg: "bg-orange-50", border: "border-orange-200", text: "text-orange-800" }
   };
 
-  useEffect(() => {
-    const fetchTeamsAndSquads = async () => {
-      setLoading(true);
-      
-      // 1. Fetch all franchise owners/admins
-      const { data: teamProfiles } = await supabase
-        .from("profiles")
-        .select("*")
-        .neq("role", "Viewer")
-        .order("team_name", { ascending: true });
+  const fetchTeamsAndSquads = async () => {
+    setLoading(true);
+    
+    // 1. Fetch all franchise owners/admins
+    const { data: teamProfiles } = await supabase
+      .from("profiles")
+      .select("*")
+      .neq("role", "Viewer")
+      .order("team_name", { ascending: true });
 
-      if (!teamProfiles) {
-        setLoading(false);
-        return;
-      }
-      setTeams(teamProfiles);
-
-      // 2. Fetch all sold players
-      const { data: soldPlayers } = await supabase
-        .from("players")
-        .select("*")
-        .eq("status", "Sold");
-      
-      // 3. Group players by team name
-      const grouped: Record<string, any[]> = {};
-      teamProfiles.forEach(t => {
-        grouped[t.team_name || t.full_name] = [];
-      });
-
-      if (soldPlayers) {
-        soldPlayers.forEach(p => {
-          if (p.sold_to && grouped[p.sold_to]) {
-            grouped[p.sold_to].push(p);
-          } else if (p.sold_to) {
-             // In case a team name changed but players still reference old name
-             grouped[p.sold_to] = grouped[p.sold_to] || [];
-             grouped[p.sold_to].push(p);
-          }
-        });
-      }
-
-      setPlayersByTeam(grouped);
-      if (teamProfiles.length > 0) {
-        setActiveTeamId(teamProfiles[0].id);
-      }
-      
-      const { data: conf } = await supabase.from("auction_config").select("*").single();
-      setConfig(conf);
-      
+    if (!teamProfiles) {
       setLoading(false);
-    };
+      return;
+    }
+    setTeams(teamProfiles);
 
+    // 2. Fetch all sold players
+    const { data: soldPlayers } = await supabase
+      .from("players")
+      .select("*")
+      .eq("auction_status", "sold"); // Fixed: status -> auction_status and Sold -> sold based on admin/page.tsx
+    
+    // 3. Group players by team name
+    const grouped: Record<string, any[]> = {};
+    teamProfiles.forEach(t => {
+      grouped[t.team_name || t.full_name] = [];
+    });
+
+    if (soldPlayers) {
+      soldPlayers.forEach(p => {
+        const teamKey = p.sold_to;
+        if (teamKey && grouped[teamKey]) {
+          grouped[teamKey].push(p);
+        } else if (teamKey) {
+           grouped[teamKey] = [p];
+        }
+      });
+    }
+
+    setPlayersByTeam(grouped);
+    if (teamProfiles.length > 0 && !activeTeamId) {
+      setActiveTeamId(teamProfiles[0].id);
+    }
+    
+    const { data: conf } = await supabase.from("auction_config").select("*").single();
+    setConfig(conf);
+    
+    setLoading(false);
+  };
+
+  useEffect(() => {
     fetchTeamsAndSquads();
+
+    // Set up Real-time subscriptions
+    const channel = supabase
+      .channel('schema-db-changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'players' },
+        () => fetchTeamsAndSquads()
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'profiles' },
+        () => fetchTeamsAndSquads()
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'auction_config' },
+        () => fetchTeamsAndSquads()
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   const calculateTeamStats = (teamName: string, initialBudgetStr: string) => {

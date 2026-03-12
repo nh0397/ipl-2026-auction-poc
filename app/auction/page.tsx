@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { 
   Gavel, Lock, Play, SkipForward, Trophy, XCircle, 
-  Loader2, Users, Zap, ArrowUp, Pause, ChevronRight, Hand, Shuffle, RefreshCw 
+  Loader2, Users, Zap, ArrowUp, Pause, ChevronRight, Hand, Shuffle, RefreshCw, Clock, Search, User, Shield, ArrowLeft, Settings, Save 
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn, getPlayerImage } from "@/lib/utils";
@@ -29,11 +29,15 @@ export default function AuctionPage() {
   const [bidHistory, setBidHistory] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
+  const [onlineUsers, setOnlineUsers] = useState<string[]>([]);
+  const [customBid, setCustomBid] = useState("");
   const [poolCounts, setPoolCounts] = useState<Record<string, { total: number; remaining: number }>>({});
   const [startPool, setStartPool] = useState("Marquee");
   const [totalParticipants, setTotalParticipants] = useState(0);
   const [allProfiles, setAllProfiles] = useState<any[]>([]);
   const [selectionMethod, setSelectionMethod] = useState<"random" | "manual">("random");
+  const [playerSearch, setPlayerSearch] = useState("");
+  const [selectionTab, setSelectionTab] = useState<string>("All");
   const [pendingPlayers, setPendingPlayers] = useState<any[]>([]);
   const [manualPickId, setManualPickId] = useState<string>("");
 
@@ -74,7 +78,7 @@ export default function AuctionPage() {
         const poolPlayers = allPlayers.filter(p => p.pool === pool);
         counts[pool] = {
           total: poolPlayers.length,
-          remaining: poolPlayers.filter(p => p.auction_status === "pending").length,
+          remaining: poolPlayers.filter(p => p.auction_status === "pending" || p.auction_status === "on_block").length,
         };
       }
       setPoolCounts(counts);
@@ -112,23 +116,46 @@ export default function AuctionPage() {
       .on("postgres_changes", { event: "*", schema: "public", table: "auction_state" }, () => fetchAll())
       .on("postgres_changes", { event: "*", schema: "public", table: "auction_config" }, () => fetchAll())
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "bids" }, () => fetchAll())
-      .on("postgres_changes", { event: "*", schema: "public", table: "players" }, () => fetchAll())
-      .subscribe();
+      .on("postgres_changes", { event: "*", schema: "public", table: "players" }, () => fetchAll());
+      
+    channel.on("presence", { event: "sync" }, () => {
+      const state = channel.presenceState();
+      const onlineIds = Object.keys(state).map(k => (state[k][0] as any)?.presence?.key).filter(Boolean);
+      setOnlineUsers(onlineIds);
+    });
+
+    channel.subscribe(async (status) => {
+      if (status === "SUBSCRIBED") {
+        await channel.track({ presence: { key: profile?.id || "anonymous" } });
+      }
+    });
 
     return () => { supabase.removeChannel(channel); };
-  }, [fetchAll]);
+  }, [profile?.id, fetchAll]);
 
   // Helper: get singleton row IDs fresh from DB (avoids stale React state)
   const getAuctionIds = async () => {
-    const { data: config } = await supabase.from("auction_config").select("id").limit(1).single();
-    const { data: state } = await supabase.from("auction_state").select("id").limit(1).single();
-    return { configId: config?.id, stateId: state?.id };
+    const { data: c } = await supabase.from("auction_config").select("id").limit(1).single();
+    const { data: s } = await supabase.from("auction_state").select("id").limit(1).single();
+    return { configId: c?.id, stateId: s?.id };
   };
 
+  const logAction = async (actionType: string, details: any = {}) => {
+    if (!profile) return;
+    await supabase.from("audit_logs").insert({
+      admin_id: profile.id,
+      admin_name: profile.team_name || profile.full_name || "Unknown",
+      action_type: actionType,
+      details,
+    });
+  };
+
+  // ─── Phase Actions ───
   const freezePools = async () => {
     setActionLoading(true);
     const { configId } = await getAuctionIds();
     await supabase.from("auction_config").update({ pools_frozen: true, status: "frozen", updated_at: new Date().toISOString() }).eq("id", configId);
+    await logAction("FREEZE_POOLS");
     await fetchAll();
     setActionLoading(false);
   };
@@ -137,7 +164,17 @@ export default function AuctionPage() {
     setActionLoading(true);
     const { configId } = await getAuctionIds();
     await supabase.from("auction_config").update({ status: "live", current_pool: startPool, updated_at: new Date().toISOString() }).eq("id", configId);
+    await logAction("START_AUCTION", { initial_pool: startPool });
     await pickNextPlayer(startPool);
+    setActionLoading(false);
+  };
+
+  const pauseAuction = async () => {
+    setActionLoading(true);
+    const { configId } = await getAuctionIds();
+    await supabase.from("auction_config").update({ status: "paused", updated_at: new Date().toISOString() }).eq("id", configId);
+    await logAction("PAUSE_AUCTION");
+    await fetchAll();
     setActionLoading(false);
   };
 
@@ -145,6 +182,7 @@ export default function AuctionPage() {
     setActionLoading(true);
     const { configId } = await getAuctionIds();
     await supabase.from("auction_config").update({ current_pool: pool, updated_at: new Date().toISOString() }).eq("id", configId);
+    await logAction("SWITCH_POOL", { new_pool: pool });
     await pickNextPlayer(pool);
     setActionLoading(false);
   };
@@ -165,6 +203,7 @@ export default function AuctionPage() {
       if (currentIndex < POOL_ORDER.length - 1) {
         const nextPool = POOL_ORDER[currentIndex + 1];
         await supabase.from("auction_config").update({ current_pool: nextPool, updated_at: new Date().toISOString() }).eq("id", configId);
+        await logAction("POOL_EXHAUSTED_MOVING_TO_NEXT", { exhausted_pool: pool, next_pool: nextPool });
         await pickNextPlayer(nextPool);
       } else {
         await supabase.from("auction_config").update({ status: "completed", updated_at: new Date().toISOString() }).eq("id", configId);
@@ -176,6 +215,7 @@ export default function AuctionPage() {
           current_bidder_name: null,
           passed_user_ids: [],
         }).eq("id", stateId);
+        await logAction("AUCTION_COMPLETED");
         setSelectionMethod("random");
         await fetchAll();
       }
@@ -188,9 +228,11 @@ export default function AuctionPage() {
       chosenPlayer = pending.find(p => p.id === specificPlayerId);
       if (!chosenPlayer) chosenPlayer = pending[Math.floor(Math.random() * pending.length)];
       setSelectionMethod("manual");
+      await logAction("PICK_SPECIFIC_PLAYER", { player_id: chosenPlayer.id, player_name: chosenPlayer.player_name, pool: pool });
     } else {
       chosenPlayer = pending[Math.floor(Math.random() * pending.length)];
       setSelectionMethod("random");
+      await logAction("PICK_RANDOM_PLAYER", { player_id: chosenPlayer.id, player_name: chosenPlayer.player_name, pool: pool });
     }
 
     const poolCfg = POOL_CONFIG[pool] || POOL_CONFIG["Pool 3"];
@@ -249,6 +291,14 @@ export default function AuctionPage() {
       updated_at: new Date().toISOString(),
     }).eq("id", stateId);
 
+    await logAction("MARK_SOLD", {
+      player_id: playerId,
+      player_name: currentPlayer.player_name,
+      buyer_id: buyerId,
+      buyer_name: buyerName,
+      sale_price: salePrice,
+    });
+
     await fetchAll();
     setActionLoading(false);
   };
@@ -268,6 +318,8 @@ export default function AuctionPage() {
       updated_at: new Date().toISOString(),
     }).eq("id", stateId);
 
+    await logAction("MARK_UNSOLD", { player_id: currentPlayer.id, player_name: currentPlayer.player_name });
+
     await fetchAll();
     setActionLoading(false);
   };
@@ -282,6 +334,7 @@ export default function AuctionPage() {
     
     // Pick a new one from current pool
     const { data: freshConfig } = await supabase.from("auction_config").select("current_pool").limit(1).single();
+    await logAction("SKIP_PLAYER", { player_id: currentPlayer.id, player_name: currentPlayer.player_name, current_pool: freshConfig?.current_pool });
     await pickNextPlayer(freshConfig?.current_pool || "Marquee");
     setActionLoading(false);
   };
@@ -290,16 +343,19 @@ export default function AuctionPage() {
     setActionLoading(true);
     // Fetch fresh config to get the current pool
     const { data: freshConfig } = await supabase.from("auction_config").select("current_pool").limit(1).single();
+    await logAction("NEXT_PLAYER", { current_pool: freshConfig?.current_pool });
     await pickNextPlayer(freshConfig?.current_pool || "Marquee");
     setActionLoading(false);
   };
 
   // Pick a specific player (manual selection)
-  const pickSpecificPlayer = async () => {
-    if (!manualPickId) return;
+  const pickSpecificPlayer = async (playerId?: string) => {
+    const idToPick = playerId || manualPickId;
+    if (!idToPick) return;
     setActionLoading(true);
     const { data: freshConfig } = await supabase.from("auction_config").select("current_pool").limit(1).single();
-    await pickNextPlayer(freshConfig?.current_pool || "Marquee", manualPickId);
+    await logAction("ADMIN_PICK_SPECIFIC_PLAYER", { player_id: idToPick, current_pool: freshConfig?.current_pool });
+    await pickNextPlayer(freshConfig?.current_pool || "Marquee", idToPick);
     setManualPickId("");
     setActionLoading(false);
   };
@@ -311,28 +367,67 @@ export default function AuctionPage() {
 
     const newBid = auctionState.current_bid + auctionState.min_increment;
 
-    // Check budget
+    await executeBid(newBid);
+  };
+
+  // Place a custom manual bid
+  const placeCustomBid = async () => {
+    if (!profile || !currentPlayer || !auctionState || !customBid) return;
+    
+    const bidAmount = parseFloat(customBid);
+    if (isNaN(bidAmount)) {
+      alert("Please enter a valid number");
+      return;
+    }
+
+    const isFirstBid = auctionState.current_bid === 0;
+    const minRequiredBid = isFirstBid 
+      ? auctionState.base_price 
+      : auctionState.current_bid + auctionState.min_increment;
+
+    if (bidAmount < minRequiredBid) {
+      alert(`Bid must be at least ${minRequiredBid} Cr`);
+      return;
+    }
+
+    await executeBid(bidAmount);
+    setCustomBid("");
+  };
+
+  // Shared bid execution logic
+  const executeBid = async (newBid: number) => {
+    setActionLoading(true);
+
     if (newBid > profile.budget) {
       alert("Insufficient purse! You cannot afford this bid.");
       setActionLoading(false);
       return;
     }
 
-    // Insert bid
-    await supabase.from("bids").insert({
-      player_id: currentPlayer.id,
-      bidder_id: profile.id,
-      bidder_name: profile.full_name || profile.team_name || "Unknown",
-      amount: newBid,
-    });
-    // Update auction state
-    const { stateId: bidStateId } = await getAuctionIds();
+    const { stateId } = await getAuctionIds();
+
     await supabase.from("auction_state").update({
       current_bid: newBid,
       current_bidder_id: profile.id,
       current_bidder_name: profile.team_name || profile.full_name || "Unknown",
+      passed_user_ids: [],
       updated_at: new Date().toISOString(),
-    }).eq("id", bidStateId);
+    }).eq("id", stateId);
+
+    await supabase.from("bids").insert({
+      player_id: currentPlayer.id,
+      bidder_id: profile.id,
+      bidder_name: profile.team_name || profile.full_name || "Unknown",
+      amount: newBid,
+    });
+
+    await logAction("PLACE_BID", { 
+      player_id: currentPlayer.id, 
+      player_name: currentPlayer.player_name, 
+      bidder_id: profile.id, 
+      bidder_name: profile.team_name || profile.full_name, 
+      amount: newBid 
+    });
 
     await fetchAll();
     setActionLoading(false);
@@ -485,6 +580,26 @@ export default function AuctionPage() {
         {isAdmin && (
           <div className="bg-slate-900 rounded-[2rem] p-6 flex flex-wrap items-center gap-4">
             <span className="text-[9px] font-black uppercase tracking-widest text-white/30 mr-auto">Auctioneer Console</span>
+            
+            {auctionConfig?.status === "live" && (
+              <Button 
+                onClick={pauseAuction} 
+                disabled={actionLoading} 
+                className="bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-4 flex gap-2"
+              >
+                <Pause size={14} /> Pause
+              </Button>
+            )}
+
+            {auctionConfig?.status === "paused" && (
+              <Button 
+                onClick={() => startAuction()} 
+                disabled={actionLoading} 
+                className="bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-4 flex gap-2"
+              >
+                <Play size={14} /> Resume
+              </Button>
+            )}
 
             {auctionConfig?.status === "setup" && (
               <Button onClick={freezePools} disabled={actionLoading} className="bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-6 flex gap-2">
@@ -551,7 +666,7 @@ export default function AuctionPage() {
                   <option value="" className="text-slate-900">Pick player...</option>
                   {pendingPlayers.map(p => <option key={p.id} value={p.id} className="text-slate-900">{p.player_name}</option>)}
                 </select>
-                <Button onClick={pickSpecificPlayer} disabled={actionLoading || !manualPickId} className="bg-violet-500 hover:bg-violet-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-5 flex gap-2 disabled:opacity-30">
+                <Button onClick={() => pickSpecificPlayer()} disabled={actionLoading || !manualPickId} className="bg-violet-500 hover:bg-violet-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-5 flex gap-2 disabled:opacity-30">
                   <SkipForward size={14} /> Select
                 </Button>
               </>
@@ -751,6 +866,108 @@ export default function AuctionPage() {
             )}
             {(
               <p className="text-slate-400 font-medium text-sm">Waiting for the auctioneer to bring the next player...</p>
+            )}
+          </div>
+        )}
+
+        {/* ── Waiting for Next Player State ── */}
+        {isLive && (!currentPlayer || !isActive) && (
+          <div className="bg-white rounded-[3rem] border border-slate-100 shadow-sm p-8 flex flex-col gap-6">
+            {!isAdmin ? (
+               <div className="py-16 flex flex-col items-center justify-center text-center">
+                 <div className="h-20 w-20 rounded-full bg-slate-50 text-slate-300 animate-pulse mb-6 flex justify-center items-center">
+                   <Clock size={40} />
+                 </div>
+                 <h2 className="text-3xl font-black italic uppercase text-slate-900 tracking-tight">Intermission</h2>
+                 <p className="text-slate-400 font-medium mt-2 max-w-sm">Waiting for the Auctioneer to bring the next player to the block...</p>
+               </div>
+            ) : (
+                 <div className="w-full">
+                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 px-4">
+                     <div className="flex flex-col">
+                       <h2 className="text-2xl md:text-3xl font-black italic uppercase text-slate-900 tracking-tight">Select Next Player</h2>
+                       <p className="text-sm font-bold text-slate-400">Click a player to place them on the block</p>
+                     </div>
+                     <div className="bg-blue-50 text-blue-600 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest self-start sm:self-auto border border-blue-100">
+                       {currentPool} Pool
+                     </div>
+                   </div>
+
+                   {/* Sub-tabs for Roles */}
+                   <div className="flex flex-wrap gap-2 px-4 mb-6">
+                     {["All", "Batter", "Bowler", "All-Rounder", "Wicketkeeper"].map(role => (
+                       <button
+                         key={role}
+                         onClick={() => setSelectionTab(role)}
+                         className={cn(
+                           "px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all border",
+                           selectionTab === role 
+                             ? "bg-slate-900 text-white border-slate-900 shadow-lg shadow-slate-200" 
+                             : "bg-white text-slate-400 border-slate-100 hover:border-slate-200"
+                         )}
+                       >
+                         {role}
+                       </button>
+                     ))}
+                   </div>
+                   
+                   {pendingPlayers.length === 0 ? (
+                     <div className="py-16 text-center">
+                       <div className="h-16 w-16 mx-auto rounded-full bg-slate-50 text-slate-300 flex justify-center items-center mb-4"><Users size={32} /></div>
+                       <h3 className="text-lg font-black text-slate-900 uppercase">Pool Empty</h3>
+                       <p className="text-slate-400 font-medium">No players remaining. Switch pools above.</p>
+                     </div>
+                   ) : (
+                     <div className="max-w-2xl w-full mx-auto">
+                       <div className="relative mb-4 px-4">
+                         <Search size={18} className="absolute left-8 top-1/2 -translate-y-1/2 text-slate-400" />
+                         <input 
+                           type="text" 
+                           placeholder="Search by player name..." 
+                           value={playerSearch}
+                           onChange={(e) => setPlayerSearch(e.target.value)}
+                           className="w-full h-12 pl-12 pr-4 rounded-xl bg-slate-50 border border-slate-200 text-sm font-bold outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 transition-all text-slate-900 placeholder:text-slate-400"
+                         />
+                       </div>
+                       <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-hidden flex flex-col max-h-[400px]">
+                         <div className="overflow-y-auto w-full p-2 space-y-1">
+                           {pendingPlayers
+                             .filter(p => selectionTab === "All" || p.role === selectionTab)
+                             .filter(p => p.player_name.toLowerCase().includes(playerSearch.toLowerCase()))
+                             .length === 0 ? (
+                             <div className="p-8 text-center text-sm font-bold text-slate-400">No players found matching your filters</div>
+                           ) : (
+                             pendingPlayers
+                               .filter(p => selectionTab === "All" || p.role === selectionTab)
+                               .filter(p => p.player_name.toLowerCase().includes(playerSearch.toLowerCase()))
+                               .map(p => (
+                               <button 
+                                 key={p.id} 
+                                 disabled={actionLoading}
+                                 className="w-full p-3 rounded-xl hover:bg-blue-50 transition-all group flex items-center gap-4 text-left disabled:opacity-50 disabled:cursor-not-allowed" 
+                                 onClick={() => {
+                                   pickSpecificPlayer(p.id);
+                                   setPlayerSearch("");
+                                 }}
+                               >
+                                 <div className="h-10 w-10 rounded-lg bg-slate-100 overflow-hidden flex items-center justify-center text-slate-400 shrink-0">
+                                   {p.image_url ? <img src={getPlayerImage(p.image_url)!} className="h-full w-full object-cover" alt=""/> : <User size={20} />}
+                                 </div>
+                                 <div className="flex-1 min-w-0">
+                                   <h3 className="font-black text-slate-900 truncate uppercase tracking-tight text-sm group-hover:text-blue-700 transition-colors">{p.player_name}</h3>
+                                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest truncate">{p.role} • {p.country}</p>
+                                 </div>
+                                 <div className="opacity-0 group-hover:opacity-100 h-8 w-8 rounded-full bg-blue-100 text-blue-600 transition-all flex items-center justify-center shrink-0">
+                                   <SkipForward size={14} />
+                                 </div>
+                               </button>
+                             ))
+                           )}
+                         </div>
+                       </div>
+                     </div>
+                   )}
+                 </div>
             )}
           </div>
         )}
