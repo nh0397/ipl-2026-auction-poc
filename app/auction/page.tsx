@@ -12,8 +12,8 @@ import { TeamNamePrompt } from "@/components/auction/TeamNamePrompt";
 
 // Pool configuration
 const POOL_CONFIG: Record<string, { basePrice: number; minIncrement: number }> = {
-  "Marquee":  { basePrice: 2,   minIncrement: 0.5  },
-  "Pool 1":   { basePrice: 1.5, minIncrement: 0.25 },
+  "Marquee":  { basePrice: 5,   minIncrement: 0.5  },
+  "Pool 1":   { basePrice: 2,   minIncrement: 0.25 },
   "Pool 2":   { basePrice: 1,   minIncrement: 0.25 },
   "Pool 3":   { basePrice: 0.5, minIncrement: 0.25 },
   "Unsold":   { basePrice: 0.5, minIncrement: 0.25 },
@@ -194,13 +194,15 @@ export default function AuctionPage() {
     }
 
     const poolCfg = POOL_CONFIG[pool] || POOL_CONFIG["Pool 3"];
+    // Use player's specific base price from DB if available, fallback to pool default
+    const basePrice = chosenPlayer.base_price_numeric ?? poolCfg.basePrice;
 
     // Update player AND auction state in rapid succession (state first so UI updates atomically)
     await supabase.from("auction_state").update({
       current_player_id: chosenPlayer.id,
       status: "active",
-      base_price: poolCfg.basePrice,
-      current_bid: poolCfg.basePrice,
+      base_price: basePrice,
+      current_bid: basePrice,
       current_bidder_id: null,
       current_bidder_name: null,
       min_increment: poolCfg.minIncrement,
