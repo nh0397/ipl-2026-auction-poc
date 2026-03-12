@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
-import { Users, Info, ArrowUpRight, Briefcase, Gavel, Activity, Layers, UserCheck, History, Trophy } from "lucide-react";
+import { Users, Info, ArrowUpRight, Briefcase, Gavel, Activity, Layers, UserCheck, History, Trophy, Zap } from "lucide-react";
 import AuctionTimer from "@/components/dashboard/AuctionTimer";
 import { cn, getPlayerImage, iplColors } from "@/lib/utils";
 import { TeamNamePrompt } from "@/components/auction/TeamNamePrompt";
@@ -262,19 +262,37 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* 3. AUCTION ROOM UTILITIES */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 pt-4">
-             <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm flex items-center gap-6 group cursor-help transition-all hover:shadow-md">
-                <div className="h-16 w-16 bg-blue-50 rounded-[1.5rem] flex items-center justify-center text-blue-600 shadow-sm group-hover:scale-105 transition-transform">
-                   <Gavel size={28} />
+        {/* 3. CHAMPIONSHIP COMMAND CENTER */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 pt-4">
+             <Link 
+               href="/strategy"
+               className="bg-indigo-600 p-8 rounded-[2.5rem] text-white shadow-xl shadow-indigo-100 flex items-center gap-6 group hover:scale-[1.02] transition-all"
+             >
+                <div className="h-16 w-16 bg-white/10 rounded-[1.5rem] flex items-center justify-center text-white shadow-sm group-hover:bg-amber-500 transition-colors">
+                   <Zap size={28} className="fill-current" />
                 </div>
                 <div className="flex-1">
-                   <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 block mb-1 underline decoration-slate-100">Auctioneer's Hammer</span>
-                   <h3 className="text-2xl font-black text-slate-900 italic tracking-tight italic uppercase">Hammer Status: Idle</h3>
-                   <p className="text-xs font-bold text-slate-400 mt-1 uppercase tracking-wide">Ready for Bidding War</p>
+                   <span className="text-[10px] font-black uppercase tracking-widest text-indigo-300 block mb-1">Elite Strategy</span>
+                   <h3 className="text-2xl font-black italic tracking-tight uppercase">Strategy Room</h3>
+                   <p className="text-xs font-bold text-indigo-200 mt-1 uppercase tracking-wide">Set C/VC & Boosters</p>
                 </div>
-                <ArrowUpRight size={16} className="text-slate-200 group-hover:text-blue-400" />
-             </div>
+                <ArrowUpRight size={20} className="text-white/30 group-hover:text-white" />
+             </Link>
+
+             <Link 
+               href="/standings"
+               className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm flex items-center gap-6 group hover:scale-[1.02] transition-all"
+             >
+                <div className="h-16 w-16 bg-amber-50 rounded-[1.5rem] flex items-center justify-center text-amber-600 shadow-sm group-hover:bg-amber-500 group-hover:text-white transition-colors">
+                   <Trophy size={28} />
+                </div>
+                <div className="flex-1">
+                   <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 block mb-1">Live Rankings</span>
+                   <h3 className="text-2xl font-black text-slate-900 italic tracking-tight uppercase">Leaderboard</h3>
+                   <p className="text-xs font-bold text-slate-400 mt-1 uppercase tracking-wide">View Global Standings</p>
+                </div>
+                <ArrowUpRight size={20} className="text-slate-200 group-hover:text-amber-500" />
+             </Link>
 
              <div className="bg-slate-900 p-8 rounded-[2.5rem] text-white shadow-xl shadow-slate-200 flex flex-col gap-6 relative overflow-hidden transition-all">
                 <div className="absolute top-0 right-0 w-32 h-32 bg-blue-600/10 rounded-full -mr-16 -mt-16 blur-3xl opacity-50" />
@@ -323,13 +341,12 @@ export default function Dashboard() {
                     </table>
                   </div>
                 ) : (
-                  <div className="flex gap-1">
+                  <div className="flex gap-1 justify-center py-4 opacity-20">
                     {[1,2,3,4,5,6,7].map(i => <div key={i} className="h-1.5 w-6 bg-white/10 rounded-full" />)}
                   </div>
                 )}
              </div>
         </div>
-
       </div>
     </div>
   );

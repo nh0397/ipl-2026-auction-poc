@@ -396,6 +396,33 @@ export default function AdminDashboard() {
 
     {activeTab === "config" && (
       <div className="space-y-8">
+        {/* Points & Scoreboard Section */}
+        <Card className="shadow-xl border-none overflow-hidden rounded-2xl bg-amber-50/50 border border-amber-100">
+          <CardHeader className="p-8">
+            <div className="flex items-center gap-3">
+              <div className="h-12 w-12 bg-amber-500 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-amber-200">
+                <Trophy size={24} />
+              </div>
+              <div>
+                <CardTitle className="text-xl font-bold uppercase tracking-tight text-amber-900">Match Day Scoreboard</CardTitle>
+                <CardDescription className="text-amber-700/60 font-medium">Update Dream11 points and manage game schedules</CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="px-8 pb-8 flex flex-col md:flex-row items-center gap-4">
+            <p className="text-sm text-amber-900/70 font-medium flex-1">
+              Manual entry for points across all 80+ games. Use the Grid Editor to quickly sync player performances with the live leaderboard.
+            </p>
+            <Button 
+              variant="default" 
+              className="bg-amber-600 hover:bg-amber-700 text-white font-black uppercase tracking-widest px-8 py-6 rounded-2xl shadow-xl transition-all"
+              onClick={() => router.push("/admin/points")}
+            >
+              Open Scoreboard Editor
+            </Button>
+          </CardContent>
+        </Card>
+
         {/* Global Auction Settings Card */}
         <Card className="shadow-xl border-none overflow-hidden rounded-2xl">
           <CardHeader className="bg-slate-900 text-white p-6">
