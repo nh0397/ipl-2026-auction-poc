@@ -21,11 +21,21 @@ function LoginPageContent() {
     if (err === "not_allowed") setErrorMsg("Your account is not authorized to access this platform.");
     if (err === "auth_failed") setErrorMsg("Authentication failed. Please try again.");
 
-    // If already logged in with approval flag, go straight to dashboard
+    // If already logged in, redirect based on role
     const checkSession = async () => {
       const { data: { session } } = await supabase.auth.getSession();
-      if (session && localStorage.getItem("auth_approved") === "true") {
-        router.replace("/dashboard");
+      if (session) {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', session.user.id)
+          .single();
+        
+        if (profile?.role === 'Viewer') {
+          router.replace("/auction");
+        } else {
+          router.replace("/dashboard");
+        }
       }
     };
     checkSession();

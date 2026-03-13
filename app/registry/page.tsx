@@ -26,9 +26,10 @@ export default function RegistryPage() {
   // Admin sees Unallocated tab, everyone sees the pool tabs
   const isAdmin = profile?.role === "Admin";
   // Everyone gets to see Unallocated so they can see all pending unassigned players
-  const pools = ["All", "Marquee", "Pool 1", "Pool 2", "Pool 3", "Unallocated"];
-  const showAdminControls = isAdmin && activePool !== "All";
-  const unallocatedCount = allPlayers.filter(p => !p.pool || p.pool === "").length;
+  const pools = ["All", "Marquee", "Pool 1", "Pool 2", "Pool 3", "Unallocated", "Sold"];
+  const showAdminControls = isAdmin && activePool !== "All" && activePool !== "Sold";
+  const unallocatedCount = allPlayers.filter(p => (!p.pool || p.pool === "") && p.status !== 'Sold').length;
+  const soldCount = allPlayers.filter(p => p.status === 'Sold').length;
   const teams = ["All Teams", ...Array.from(new Set(allPlayers.map(p => p.team))).sort()];
 
   useEffect(() => {
@@ -62,14 +63,16 @@ export default function RegistryPage() {
 
   const filteredRegistry = allPlayers.filter(p => {
     const matchesSearch = p.player_name.toLowerCase().includes(search.toLowerCase()) ||
-                          p.role?.toLowerCase().includes(search.toLowerCase());
+                          (p.role || '').toLowerCase().includes(search.toLowerCase());
     
     const matchesPool =
       activePool === "All"
         ? true
         : activePool === "Unallocated"
-          ? !p.pool || p.pool === ""
-          : p.pool === activePool;
+          ? (!p.pool || p.pool === "") && p.status !== 'Sold'
+          : activePool === "Sold"
+            ? p.status === "Sold"
+            : p.pool === activePool;
 
     const matchesTeam = activeTeam === "All Teams" || p.team === activeTeam;
     
@@ -284,13 +287,19 @@ export default function RegistryPage() {
                           activePool === pool 
                           ? pool === "Unallocated"
                             ? "bg-amber-500 text-white shadow-lg shadow-amber-200"
-                            : "bg-slate-900 text-white shadow-lg shadow-slate-200"
+                            : pool === "Sold"
+                              ? "bg-emerald-600 text-white shadow-lg shadow-emerald-200"
+                              : "bg-slate-900 text-white shadow-lg shadow-slate-200"
                           : pool === "Unallocated" && unallocatedCount > 0
                             ? "text-amber-600 hover:text-amber-700 hover:bg-amber-50 animate-pulse ring-2 ring-amber-300"
-                            : "text-slate-400 hover:text-slate-600 hover:bg-slate-50"
+                            : pool === "Sold" && soldCount > 0
+                              ? "text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50"
+                              : "text-slate-400 hover:text-slate-600 hover:bg-slate-50"
                        )}
                     >
-                       {pool}{pool === "Unallocated" && unallocatedCount > 0 ? ` (${unallocatedCount})` : ""}
+                       {pool}
+                       {pool === "Unallocated" && unallocatedCount > 0 ? ` (${unallocatedCount})` : ""}
+                       {pool === "Sold" && soldCount > 0 ? ` (${soldCount})` : ""}
                     </button>
                  ))}
               </div>

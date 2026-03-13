@@ -9,7 +9,7 @@ import {
   Trophy, Medal, Shield, Zap, Star, Activity, 
   ChevronRight, Lock, History, AlertCircle, TrendingUp,
   Calculator, Save, RefreshCw, ChevronLeft, Search, Clock,
-  Users, User
+  Users, User, Download
 } from "lucide-react";
 import { cn, getPlayerImage, iplColors } from "@/lib/utils";
 import { useRouter } from "next/navigation";
@@ -27,7 +27,8 @@ export default function ScoreboardPage() {
   const [saving, setSaving] = useState(false);
   const [cvcChangesUsed, setCvcChangesUsed] = useState(0);
   const [searchQuery, setSearchQuery] = useState("");
-  const [activeTab, setActiveTab] = useState<"sheet" | "standings">("sheet");
+  const [activeTab, setActiveTab] = useState<"sheet" | "others" | "standings">("sheet");
+  const [selectedTeammateId, setSelectedTeammateId] = useState<string | null>(null);
   const [standings, setStandings] = useState<any[]>([]);
 
   // Calculator State
@@ -65,12 +66,20 @@ export default function ScoreboardPage() {
     }
 
     // 2. All Franchises (Teammates)
-    const { data: teamsData } = await supabase
+    const { data: teamsDataRaw } = await supabase
       .from("profiles")
       .select("*")
       .neq("role", "Viewer")
       .order("team_name", { ascending: true });
-    setFranchises(teamsData || []);
+    
+    const teamsData = teamsDataRaw || [];
+    setFranchises(teamsData);
+
+    // Default teammate tab to the first teammate
+    if (session && teamsData.length > 0) {
+      const firstTeammate = teamsData.find(t => t.id !== session.user.id);
+      if (firstTeammate) setSelectedTeammateId(firstTeammate.id);
+    }
 
     // 3. All Sold Players
     const { data: playersData } = await supabase
@@ -209,6 +218,28 @@ export default function ScoreboardPage() {
     setSaving(false);
   };
 
+  const downloadSquadCSV = (targetTeamId: string) => {
+    const team = franchises.find(t => t.id === targetTeamId);
+    if (!team) return;
+
+    const teamPlayers = allPlayers.filter(p => p.sold_to_id === targetTeamId);
+    
+    let csvContent = "data:text/csv;charset=utf-8,";
+    csvContent += "Player Name,Team,Role,Price\n";
+    
+    teamPlayers.forEach(p => {
+      csvContent += `"${p.player_name}","${p.team}","${p.role}","${p.sold_price || p.price}"\n`;
+    });
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `${team.team_name}_Squad.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const applyCalcPoints = () => {
     if (!calcActivePlayerId) return;
     const finalPoints = calculateDream11Points(calcStats as MatchStats);
@@ -269,8 +300,8 @@ export default function ScoreboardPage() {
                  <Trophy size={24} />
               </div>
               <div>
-                 <h1 className="text-2xl font-black italic uppercase tracking-tighter leading-none">Unified Scoreboard</h1>
-                 <p className="text-slate-400 font-bold uppercase text-[9px] tracking-widest mt-1">Match Day Hub & Fantasy Center</p>
+                 <h1 className="text-2xl font-black italic uppercase tracking-tighter leading-none">Points Table</h1>
+                 <p className="text-slate-400 font-bold uppercase text-[9px] tracking-widest mt-1">Season Progress & Live Scoring</p>
               </div>
            </div>
 
@@ -318,7 +349,16 @@ export default function ScoreboardPage() {
                activeTab === "sheet" ? "bg-slate-900 text-white shadow-lg" : "text-slate-400 hover:text-slate-900"
              )}
            >
-             Master Spreadsheet
+             My Sheet
+           </button>
+           <button 
+             onClick={() => setActiveTab("others")}
+             className={cn(
+               "flex-1 md:flex-none px-10 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
+               activeTab === "others" ? "bg-slate-900 text-white shadow-lg" : "text-slate-400 hover:text-slate-900"
+             )}
+           >
+             Teammates
            </button>
            <button 
              onClick={() => setActiveTab("standings")}
@@ -327,14 +367,14 @@ export default function ScoreboardPage() {
                activeTab === "standings" ? "bg-slate-900 text-white shadow-lg" : "text-slate-400 hover:text-slate-900"
              )}
            >
-             Championship Standings
+             Standings
            </button>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
            
            <div className="lg:col-span-9 space-y-6">
-              {activeTab === "sheet" ? (
+              {(activeTab === "sheet" || activeTab === "others") ? (
                  <div className="space-y-6 animate-in fade-in slide-in-from-left-4 duration-500">
                     
                     {/* Search & Actions */}
@@ -349,17 +389,45 @@ export default function ScoreboardPage() {
                           />
                        </div>
                        
-                       {profile && (
+                       <div className="flex flex-wrap gap-2 items-center">
+                          {profile && (
+                             <Button 
+                               onClick={saveAllMyPoints} 
+                               disabled={saving}
+                               className="bg-emerald-600 hover:bg-emerald-700 text-white px-8 py-6 rounded-2xl font-black uppercase tracking-widest flex gap-2 shadow-xl"
+                             >
+                                {saving ? <RefreshCw className="animate-spin" size={16} /> : <Save size={16} />}
+                                Sync Points ({allPlayers.filter(p => p.sold_to_id === profile.id).length})
+                             </Button>
+                          )}
                           <Button 
-                            onClick={saveAllMyPoints} 
-                            disabled={saving}
-                            className="w-full md:w-auto bg-emerald-600 hover:bg-emerald-700 text-white px-8 py-6 rounded-2xl font-black uppercase tracking-widest flex gap-2 shadow-xl"
+                            variant="outline"
+                            onClick={() => downloadSquadCSV(activeTab === "sheet" ? profile?.id : selectedTeammateId!)}
+                            className="h-[52px] border-slate-200 rounded-2xl font-black uppercase tracking-widest flex gap-2 text-slate-600 px-6"
                           >
-                             {saving ? <RefreshCw className="animate-spin" size={16} /> : <Save size={16} />}
-                             Sync My Points ({allPlayers.filter(p => p.sold_to_id === profile.id).length})
+                             <Download size={16} />
+                             Download CSV
                           </Button>
-                       )}
+                       </div>
                     </div>
+
+                    {/* Teammate Sub-Tabs */}
+                    {activeTab === "others" && (
+                       <div className="flex gap-2 p-1 bg-slate-100 rounded-2xl border border-slate-200 overflow-x-auto no-scrollbar">
+                          {franchises.filter(t => t.id !== profile?.id).map(team => (
+                             <button
+                               key={team.id}
+                               onClick={() => setSelectedTeammateId(team.id)}
+                               className={cn(
+                                 "flex-none px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap",
+                                 selectedTeammateId === team.id ? "bg-white text-slate-900 shadow-sm" : "text-slate-400 hover:text-slate-600"
+                               )}
+                             >
+                                {team.team_name}
+                             </button>
+                          ))}
+                       </div>
+                    )}
 
                     {/* Unified Master Grid */}
                     <div className="bg-white rounded-[2.5rem] border border-slate-200 shadow-xl overflow-hidden">
@@ -372,8 +440,14 @@ export default function ScoreboardPage() {
                                    <th className="px-8 py-5 text-right text-[10px] font-black uppercase tracking-widest text-slate-400">Match Points</th>
                                 </tr>
                              </thead>
-                             <tbody className="text-sm">
-                                {franchises.map(team => {
+                              <tbody className="text-sm">
+                                 {franchises
+                                   .filter(team => {
+                                      if (activeTab === "sheet") return team.id === profile?.id;
+                                      if (activeTab === "others") return team.id === selectedTeammateId;
+                                      return false;
+                                   })
+                                   .map(team => {
                                    const teamPlayers = allPlayers.filter(p => 
                                       p.sold_to_id === team.id && 
                                       (p.player_name.toLowerCase().includes(searchQuery.toLowerCase()) || 

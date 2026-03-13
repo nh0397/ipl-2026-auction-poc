@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Trophy, Shield, User, ArrowLeft, RefreshCw, Settings, Save, Search, Gavel, Clock, Users } from "lucide-react";
+import { Trophy, Shield, User, ArrowLeft, RefreshCw, Settings, Save, Search, Gavel, Clock, Users, UserMinus, UserPlus, LogOut } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -132,10 +132,66 @@ export default function AdminDashboard() {
     setLoading(false);
   };
 
-  const toggleRole = async (userId: string, currentRole: string) => {
-    const newRole = currentRole === "Admin" ? "Participant" : "Admin";
-    
-    // Don't let user demote themselves (safety)
+  const handleRemoveTeam = async (profile: any) => {
+    if (!confirm(`Are you sure you want to remove the team for ${profile.full_name}? This will release all their players back to the pool.`)) return;
+
+    // 1. Release Players
+    const { error: playerError } = await supabase
+      .from("players")
+      .update({
+        status: "Available",
+        auction_status: "pending",
+        pool: null,
+        sold_to: null,
+        sold_to_id: null,
+        sold_price: null
+      })
+      .eq("sold_to_id", profile.id);
+
+    if (playerError) {
+      alert(`Error releasing players: ${playerError.message}`);
+      return;
+    }
+
+    // 2. Reset Profile
+    const { error: profileError } = await supabase
+      .from("profiles")
+      .update({
+        role: "Viewer",
+        team_name: "New Franchise",
+        budget: auctionConfig?.budget_per_team || 150
+      })
+      .eq("id", profile.id);
+
+    if (profileError) {
+      alert(`Error resetting profile: ${profileError.message}`);
+    } else {
+      fetchUsers();
+      fetchPlayers();
+    }
+  };
+
+  const handleMakeParticipant = async (profile: any) => {
+    const teamName = prompt("Enter the Team Name for this franchise:", profile.team_name || "New Franchise");
+    if (!teamName) return;
+
+    const { error } = await supabase
+      .from("profiles")
+      .update({
+        role: "Participant",
+        team_name: teamName,
+        budget: auctionConfig?.budget_per_team || 150
+      })
+      .eq("id", profile.id);
+
+    if (error) {
+      alert(`Error promoting to Participant: ${error.message}`);
+    } else {
+      fetchUsers();
+    }
+  };
+
+  const updateRole = async (userId: string, newRole: string) => {
     if (userId === currentUser?.id) {
         alert("You cannot demote yourself!");
         return;
@@ -147,8 +203,7 @@ export default function AdminDashboard() {
       .eq("id", userId);
 
     if (error) {
-      console.error("Error updating role:", error);
-      alert(`Failed to update role: ${error.message}`);
+      alert(`Error updating role: ${error.message}`);
     } else {
       fetchUsers();
     }
@@ -368,15 +423,61 @@ export default function AdminDashboard() {
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right pr-6">
-                      <Button 
-                        size="sm" 
-                        variant={profile.role === "Admin" ? "destructive" : "default"}
-                        className={`font-bold h-9 px-4 rounded-xl transition-all shadow-sm ${profile.role !== "Admin" ? 'bg-slate-900 hover:bg-slate-800' : ''}`}
-                        onClick={() => toggleRole(profile.id, profile.role)}
-                        disabled={profile.id === currentUser?.id}
-                      >
-                        {profile.role === "Admin" ? "Demote" : "Make Admin"}
-                      </Button>
+                      <div className="flex justify-end gap-2">
+                        {profile.role === "Admin" ? (
+                          <Button 
+                            size="sm" 
+                            variant="destructive"
+                            className="font-bold h-9 px-4 rounded-xl transition-all shadow-sm"
+                            onClick={() => updateRole(profile.id, "Participant")}
+                            disabled={profile.id === currentUser?.id}
+                          >
+                            <UserMinus className="h-4 w-4 mr-2" />
+                            To Participant
+                          </Button>
+                        ) : profile.role === "Participant" ? (
+                          <>
+                            <Button 
+                              size="sm" 
+                              variant="outline"
+                              className="font-bold h-9 px-4 rounded-xl border-slate-200 hover:bg-slate-50"
+                              onClick={() => updateRole(profile.id, "Admin")}
+                            >
+                              <Shield className="h-4 w-4 mr-2" />
+                              Make Admin
+                            </Button>
+                            <Button 
+                              size="sm" 
+                              variant="destructive"
+                              className="font-bold h-9 px-4 rounded-xl bg-orange-600 hover:bg-orange-700"
+                              onClick={() => handleRemoveTeam(profile)}
+                            >
+                              <LogOut className="h-4 w-4 mr-2" />
+                              Remove Team
+                            </Button>
+                          </>
+                        ) : (
+                          <>
+                            <Button 
+                              size="sm" 
+                              className="font-bold h-9 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white"
+                              onClick={() => handleMakeParticipant(profile)}
+                            >
+                              <UserPlus className="h-4 w-4 mr-2" />
+                              Make Participant
+                            </Button>
+                            <Button 
+                              size="sm" 
+                              variant="outline"
+                              className="font-bold h-9 px-4 rounded-xl border-slate-200 hover:bg-slate-50"
+                              onClick={() => updateRole(profile.id, "Admin")}
+                            >
+                              <Shield className="h-4 w-4 mr-2" />
+                              Make Admin
+                            </Button>
+                          </>
+                        )}
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}

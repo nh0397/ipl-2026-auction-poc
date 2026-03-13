@@ -4,10 +4,10 @@ import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { 
   Gavel, Lock, Play, SkipForward, Trophy, XCircle, 
-  Loader2, Users, Zap, ArrowUp, Pause, ChevronRight, Hand, Shuffle, RefreshCw, Clock, Search, User, Shield, ArrowLeft, Settings, Save 
+  Loader2, Users, Zap, ArrowUp, Pause, ChevronRight, Hand, Shuffle, RefreshCw, Clock, Search, User, Shield, ArrowLeft, Settings, Save, History, Briefcase, Activity
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { cn, getPlayerImage } from "@/lib/utils";
+import { cn, getPlayerImage, iplColors } from "@/lib/utils";
 import { TeamNamePrompt } from "@/components/auction/TeamNamePrompt";
 
 // Pool configuration
@@ -37,9 +37,14 @@ export default function AuctionPage() {
   const [allProfiles, setAllProfiles] = useState<any[]>([]);
   const [selectionMethod, setSelectionMethod] = useState<"random" | "manual">("random");
   const [playerSearch, setPlayerSearch] = useState("");
+  const [allPlayers, setAllPlayers] = useState<any[]>([]);
+  const [auctionTab, setAuctionTab] = useState<"live" | "history" | "teams">("live");
   const [selectionTab, setSelectionTab] = useState<string>("All");
+  const [selectedPool, setSelectedPool] = useState<string>("Marquee");
+  const [activeTeamId, setActiveTeamId] = useState<string | null>(null);
   const [pendingPlayers, setPendingPlayers] = useState<any[]>([]);
   const [manualPickId, setManualPickId] = useState<string>("");
+  const [mySquad, setMySquad] = useState<any[]>([]);
 
   const isAdmin = profile?.role === "Admin";
   const isParticipant = profile?.role === "Admin" || profile?.role === "Participant";
@@ -70,12 +75,13 @@ export default function AuctionPage() {
       setBidHistory([]);
     }
 
-    // Pool counts
-    const { data: allPlayers } = await supabase.from("players").select("pool, auction_status");
-    if (allPlayers) {
+    // Pool counts & All Players for History
+    const { data: playersData } = await supabase.from("players").select("*");
+    if (playersData) {
+      setAllPlayers(playersData || []);
       const counts: Record<string, { total: number; remaining: number }> = {};
       for (const pool of POOL_ORDER) {
-        const poolPlayers = allPlayers.filter(p => p.pool === pool);
+        const poolPlayers = playersData.filter(p => p.pool === pool);
         counts[pool] = {
           total: poolPlayers.length,
           remaining: poolPlayers.filter(p => p.auction_status === "pending" || p.auction_status === "on_block").length,
@@ -85,7 +91,7 @@ export default function AuctionPage() {
 
       // Pending players in current pool (for manual pick)
       const currentPoolName = config?.current_pool || "Marquee";
-      const poolPending = allPlayers.filter(p => p.pool === currentPoolName && p.auction_status === "pending");
+      const poolPending = playersData.filter(p => p.pool === currentPoolName && p.auction_status === "pending");
       setPendingPlayers(poolPending);
     }
 
@@ -102,6 +108,13 @@ export default function AuctionPage() {
     if (session) {
       const { data: prof } = await supabase.from("profiles").select("*").eq("id", session.user.id).single();
       setProfile(prof);
+
+      const { data: squad } = await supabase
+        .from("players")
+        .select("*")
+        .eq("sold_to_id", session.user.id)
+        .order("player_name", { ascending: true });
+      setMySquad(squad || []);
     }
 
     setLoading(false);
@@ -277,14 +290,6 @@ export default function AuctionPage() {
       sold_price: `${salePrice} Cr`,
     }).eq("id", playerId);
 
-    // Deduct budget from buyer
-    const { data: buyer } = await supabase.from("profiles").select("budget").eq("id", buyerId).single();
-    if (buyer) {
-      await supabase.from("profiles").update({
-        budget: buyer.budget - salePrice,
-      }).eq("id", buyerId);
-    }
-
     // Update auction state
     await supabase.from("auction_state").update({
       status: "sold",
@@ -398,36 +403,42 @@ export default function AuctionPage() {
   const executeBid = async (newBid: number) => {
     setActionLoading(true);
 
-    if (newBid > profile.budget) {
-      alert("Insufficient purse! You cannot afford this bid.");
+    const totalSpent = mySquad.reduce((sum, p) => {
+      const priceValue = typeof p.sold_price === 'string' 
+        ? parseFloat(p.sold_price.replace(/[^\d.]/g, '')) 
+        : (p.sold_price || 0);
+      return sum + (isNaN(priceValue) ? 0 : priceValue);
+    }, 0);
+
+    const budget = auctionConfig?.budget_per_team || 150;
+    const remainingPurse = budget - totalSpent;
+
+    if (newBid > remainingPurse) {
+      alert(`Insufficient purse! You have ${remainingPurse.toFixed(2)} Cr left.`);
       setActionLoading(false);
       return;
     }
 
-    const { stateId } = await getAuctionIds();
-
-    await supabase.from("auction_state").update({
-      current_bid: newBid,
-      current_bidder_id: profile.id,
-      current_bidder_name: profile.team_name || profile.full_name || "Unknown",
-      passed_user_ids: [],
-      updated_at: new Date().toISOString(),
-    }).eq("id", stateId);
-
-    await supabase.from("bids").insert({
-      player_id: currentPlayer.id,
-      bidder_id: profile.id,
-      bidder_name: profile.team_name || profile.full_name || "Unknown",
-      amount: newBid,
+    const { data: result, error: rpcError } = await supabase.rpc("place_bid", {
+      p_player_id: currentPlayer.id,
+      p_bidder_id: profile.id,
+      p_bidder_name: profile.team_name || profile.full_name || "Unknown",
+      p_amount: newBid
     });
 
-    await logAction("PLACE_BID", { 
-      player_id: currentPlayer.id, 
-      player_name: currentPlayer.player_name, 
-      bidder_id: profile.id, 
-      bidder_name: profile.team_name || profile.full_name, 
-      amount: newBid 
-    });
+    if (rpcError) {
+      alert(`System Error: ${rpcError.message}`);
+    } else if (result && !result.success) {
+      alert(result.message);
+    } else {
+      await logAction("PLACE_BID", { 
+        player_id: currentPlayer.id, 
+        player_name: currentPlayer.player_name, 
+        bidder_id: profile.id, 
+        bidder_name: profile.team_name || profile.full_name, 
+        amount: newBid 
+      });
+    }
 
     await fetchAll();
     setActionLoading(false);
@@ -482,6 +493,14 @@ export default function AuctionPage() {
   const isActive = auctionState?.status === "active";
   const currentPool = auctionConfig?.current_pool || "Marquee";
   const poolConfig = POOL_CONFIG[currentPool] || POOL_CONFIG["Pool 3"];
+  const maxPlayers = auctionConfig?.max_players ?? 25;
+
+  const totalSpent = mySquad.reduce((sum, p) => {
+    const val = typeof p.sold_price === 'string' ? parseFloat(p.sold_price.replace(/[^\d.]/g, '')) : (p.sold_price || 0);
+    return sum + (isNaN(val) ? 0 : val);
+  }, 0);
+  const initialPurse = auctionConfig?.budget_per_team || 150;
+  const remainingPurse = initialPurse - totalSpent;
 
   return (
     <div className="min-h-screen bg-[#FDFDFF] p-4 md:p-10 font-sans">
@@ -492,26 +511,78 @@ export default function AuctionPage() {
           <div>
             <div className="flex items-center gap-2 mb-1">
               <Gavel className="h-5 w-5 text-blue-600" />
-              <span className="text-[10px] font-black uppercase tracking-[0.3em] text-blue-600">Live Auction Room</span>
+              <span className="text-[10px] font-black uppercase tracking-[0.3em] text-blue-600">The Auction House</span>
             </div>
-            <h1 className="text-4xl font-black italic tracking-tighter uppercase text-slate-900 leading-none">The Bidding Arena</h1>
+            <h1 className="text-4xl font-black italic tracking-tighter uppercase text-slate-900 leading-none">Auction Room</h1>
           </div>
 
-          {/* Status Badge */}
-          <div className={cn(
-            "px-6 py-3 rounded-2xl font-black text-sm uppercase tracking-widest flex items-center gap-3",
-            auctionConfig?.status === "setup" && "bg-slate-100 text-slate-500",
-            auctionConfig?.status === "frozen" && "bg-amber-50 text-amber-600 border border-amber-200",
-            auctionConfig?.status === "live" && "bg-emerald-50 text-emerald-600 border border-emerald-200",
-            auctionConfig?.status === "paused" && "bg-orange-50 text-orange-600 border border-orange-200",
-            auctionConfig?.status === "completed" && "bg-blue-50 text-blue-600 border border-blue-200",
-          )}>
-            {auctionConfig?.status === "live" && <div className="h-2 w-2 bg-emerald-500 rounded-full animate-pulse" />}
-            {auctionConfig?.status?.toUpperCase() || "SETUP"}
+          <div className="flex bg-slate-100 p-1 rounded-2xl border border-slate-200 shadow-sm">
+            <button
+              onClick={() => setAuctionTab("live")}
+              className={cn(
+                "px-8 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
+                auctionTab === "live" ? "bg-white text-blue-600 shadow-sm" : "text-slate-400 hover:text-slate-600"
+              )}
+            >
+              Live
+            </button>
+            <button
+              onClick={() => setAuctionTab("teams")}
+              className={cn(
+                "px-8 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
+                auctionTab === "teams" ? "bg-white text-blue-600 shadow-sm" : "text-slate-400 hover:text-slate-600"
+              )}
+            >
+              Teams
+            </button>
+            <button
+              onClick={() => setAuctionTab("history")}
+              className={cn(
+                "px-8 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
+                auctionTab === "history" ? "bg-white text-blue-600 shadow-sm" : "text-slate-400 hover:text-slate-600"
+              )}
+            >
+              History
+            </button>
+          </div>
+
+          <div className="flex flex-col md:flex-row items-center gap-6">
+            {profile && profile.role !== "Viewer" && (
+              <div className="flex items-center gap-6 bg-white px-6 py-3 rounded-2xl border border-slate-100 shadow-sm">
+                <div className="flex flex-col">
+                  <span className="text-[8px] font-black uppercase tracking-widest text-slate-400">Remaining Purse</span>
+                  <div className="flex items-baseline gap-1">
+                    <span className="text-xl font-black text-slate-900">{remainingPurse.toFixed(2)}</span>
+                    <span className="text-[8px] font-black uppercase text-slate-400 mb-1">Cr</span>
+                  </div>
+                </div>
+                <div className="h-8 w-[1px] bg-slate-100" />
+                <div className="flex flex-col">
+                  <span className="text-[8px] font-black uppercase tracking-widest text-slate-400">Players</span>
+                  <div className="flex items-baseline gap-1">
+                    <span className="text-xl font-black text-slate-900">{mySquad.length}</span>
+                    <span className="text-[8px] font-black uppercase text-slate-400 mb-1">/{maxPlayers}</span>
+                  </div>
+                </div>
+              </div>
+            )}
+            <div className={cn(
+              "px-6 py-3 rounded-2xl font-black text-sm uppercase tracking-widest flex items-center gap-3",
+              auctionConfig?.status === "setup" && "bg-slate-100 text-slate-500",
+              auctionConfig?.status === "frozen" && "bg-amber-50 text-amber-600 border border-amber-200",
+              auctionConfig?.status === "live" && "bg-emerald-50 text-emerald-600 border border-emerald-200",
+              auctionConfig?.status === "paused" && "bg-orange-50 text-orange-600 border border-orange-200",
+              auctionConfig?.status === "completed" && "bg-blue-50 text-blue-600 border border-blue-200",
+            )}>
+              {auctionConfig?.status === "live" && <div className="h-2 w-2 bg-emerald-500 rounded-full animate-pulse" />}
+              {auctionConfig?.status?.toUpperCase() || "SETUP"}
+            </div>
           </div>
         </div>
 
-        {/* Team Name Prompt */}
+        {auctionTab === "live" ? (
+          <div className="space-y-8 animate-in fade-in duration-500">
+            {/* Team Name Prompt */}
         {profile && profile.role !== "Viewer" && (
           <TeamNamePrompt profile={profile} onUpdated={fetchAll} />
         )}
@@ -529,11 +600,9 @@ export default function AuctionPage() {
                     key={p.id}
                     className={cn(
                       "flex items-center gap-2.5 px-4 py-2.5 rounded-xl border transition-all text-sm font-bold",
-                      isHighest
-                        ? "bg-emerald-50 border-emerald-200 text-emerald-700"
-                        : hasPassed
-                          ? "bg-red-50 border-red-200 text-red-400 line-through opacity-60"
-                          : "bg-slate-50 border-slate-100 text-slate-700"
+                      isHighest ? "bg-emerald-50 border-emerald-200 text-emerald-700" :
+                      hasPassed ? "bg-red-50 border-red-200 text-red-400 line-through opacity-60" :
+                      "bg-slate-50 border-slate-100 text-slate-700"
                     )}
                   >
                     {p.avatar_url ? (
@@ -972,6 +1041,310 @@ export default function AuctionPage() {
           </div>
         )}
 
+          </div>
+        ) : auctionTab === "teams" ? (
+          <div className="space-y-8 animate-in fade-in duration-500">
+            {/* Legend - Ported from squads page */}
+            <div className="flex flex-wrap gap-2 items-center bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
+              <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 mr-2">IPL Team Legend:</span>
+              {Object.entries(iplColors).map(([team, colors]: [string, any]) => (
+                <div key={team} className={cn("px-2 py-1 flex items-center gap-1.5 rounded-lg border", colors.bg, colors.border)}>
+                  <div className={cn("text-[9px] font-black uppercase tracking-widest", colors.text)}>{team}</div>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex flex-col lg:flex-row gap-8 items-start">
+              {/* Sidebar - Teams List */}
+              <div className="w-full lg:w-80 shrink-0 flex flex-col gap-2">
+                {allProfiles.map(team => {
+                   const teamPlayers = allPlayers.filter(p => p.sold_to_id === team.id || p.sold_to === team.team_name);
+                   const isSelected = (activeTeamId === team.id) || (!activeTeamId && allProfiles[0]?.id === team.id);
+                   if (!activeTeamId && allProfiles[0]?.id === team.id && !isSelected) {
+                     // Initial state handled by ternary in UI below
+                   }
+                   
+                   const spent = teamPlayers.reduce((sum, p) => {
+                      const val = typeof p.sold_price === 'string' ? parseFloat(p.sold_price.replace(/[^\d.]/g, '')) : (p.sold_price || 0);
+                      return sum + (isNaN(val) ? 0 : val);
+                   }, 0);
+                   const budget = auctionConfig?.budget_per_team || 150;
+                   
+                   return (
+                    <button
+                      key={team.id}
+                      onClick={() => setActiveTeamId(team.id)}
+                      className={cn(
+                        "p-5 rounded-2xl border text-left transition-all relative overflow-hidden group",
+                        isSelected
+                          ? "bg-slate-900 border-slate-800 text-white shadow-xl scale-[1.02]" 
+                          : "bg-white border-slate-100 hover:border-slate-200 hover:bg-slate-50"
+                      )}
+                    >
+                      {isSelected && (
+                        <div className="absolute top-0 right-0 p-4 opacity-10">
+                          <Briefcase size={60} />
+                        </div>
+                      )}
+                      <div className="relative z-10">
+                        <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 flex justify-between items-center">
+                          {team.full_name}
+                          {isSelected && <Activity className="text-emerald-400 h-3 w-3" />}
+                        </div>
+                        <div className={cn(
+                          "text-lg font-black uppercase tracking-tighter leading-none mb-3",
+                          isSelected ? "text-white" : "text-slate-900"
+                        )}>
+                          {team.team_name || team.full_name}
+                        </div>
+                        
+                        <div className="flex gap-4">
+                          <div className="flex flex-col">
+                             <span className={cn("text-[9px] font-black uppercase tracking-widest", isSelected ? "text-slate-400" : "text-slate-300")}>Purse Remaining</span>
+                             <span className={cn("text-sm font-black italic", isSelected ? "text-emerald-400" : "text-slate-600")}>{(budget - spent).toFixed(2)} Cr</span>
+                          </div>
+                          <div className="flex flex-col">
+                             <span className={cn("text-[9px] font-black uppercase tracking-widest", isSelected ? "text-slate-400" : "text-slate-300")}>Players</span>
+                             <span className={cn("text-sm font-black italic", isSelected ? "text-blue-400" : "text-slate-600")}>{teamPlayers.length} / {auctionConfig?.max_players || 28}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </button>
+                   );
+                })}
+              </div>
+
+              {/* Detail Pane */}
+              <div className="flex-1 w-full bg-white rounded-[2rem] border border-slate-100 shadow-xl overflow-hidden min-h-[600px] flex flex-col">
+                {(() => {
+                  const activeTeam = allProfiles.find(t => t.id === activeTeamId) || allProfiles[0];
+                  if (!activeTeam) return null;
+                  
+                  const teamPlayers = allPlayers.filter(p => p.sold_to_id === activeTeam.id || p.sold_to === activeTeam.team_name);
+                  const spent = teamPlayers.reduce((sum, p) => {
+                    const val = typeof p.sold_price === 'string' ? parseFloat(p.sold_price.replace(/[^\d.]/g, '')) : (p.sold_price || 0);
+                    return sum + (isNaN(val) ? 0 : val);
+                  }, 0);
+                  const budget = auctionConfig?.budget_per_team || 150;
+                  const remaining = budget - spent;
+                  const avgSpent = teamPlayers.length > 0 ? spent / teamPlayers.length : 0;
+                  const minRemaining = Math.max(0, (auctionConfig?.min_players || 23) - teamPlayers.length);
+                  const maxRemaining = Math.max(0, (auctionConfig?.max_players || 28) - teamPlayers.length);
+
+                  const batters = teamPlayers.filter(p => (p.role || '').toLowerCase().includes('batter') || (p.role || '').toLowerCase().includes('wk')).length;
+                  const bowlers = teamPlayers.filter(p => (p.role || '').toLowerCase().includes('bowler')).length;
+                  const allRounders = teamPlayers.filter(p => (p.role || '').toLowerCase().includes('all-rounder')).length;
+
+                  return (
+                    <>
+                      {/* Header Detail */}
+                      <div className="p-8 border-b border-slate-50 bg-slate-50/30 flex flex-col xl:flex-row xl:items-center justify-between gap-6">
+                        <div>
+                          <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Live Roster For</span>
+                          <h2 className="text-4xl font-black italic uppercase tracking-tighter text-slate-900">{activeTeam.team_name}</h2>
+                          <div className="text-xs font-bold text-slate-500 tracking-widest mt-1 uppercase">{activeTeam.full_name}</div>
+                        </div>
+                        
+                        <div className="flex flex-wrap gap-3">
+                            <div className="p-3 bg-white rounded-2xl border border-slate-100 flex flex-col items-center justify-center min-w-[80px]">
+                              <span className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Bat/WK</span>
+                              <span className="text-xl font-black text-slate-800">{batters}</span>
+                            </div>
+                            <div className="p-3 bg-white rounded-2xl border border-slate-100 flex flex-col items-center justify-center min-w-[80px]">
+                              <span className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Bowl</span>
+                              <span className="text-xl font-black text-slate-800">{bowlers}</span>
+                            </div>
+                            <div className="p-3 bg-white rounded-2xl border border-slate-100 flex flex-col items-center justify-center min-w-[80px]">
+                              <span className="text-[9px] font-black uppercase text-slate-400 tracking-widest">All-R</span>
+                              <span className="text-xl font-black text-slate-800">{allRounders}</span>
+                            </div>
+                        </div>
+                      </div>
+
+                      {/* Squad Table - With Fixed Height & Scroll */}
+                      <div className="flex-1 p-6 md:p-8 flex flex-col min-h-0 overflow-hidden">
+                        <div className="flex-1 overflow-y-auto pr-2 no-scrollbar">
+                        {teamPlayers.length === 0 ? (
+                           <div className="h-48 flex items-center justify-center text-center text-slate-400 font-black uppercase tracking-widest bg-slate-50 rounded-2xl border border-slate-100 border-dashed">
+                              No players acquired yet
+                           </div>
+                        ) : (
+                          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                            <table className="w-full text-left border-collapse whitespace-nowrap">
+                              <thead className="bg-slate-100">
+                                <tr>
+                                  <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest">Player Name</th>
+                                  <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest text-center">Team</th>
+                                  <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest text-center">Type</th>
+                                  <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest text-center">Role</th>
+                                  <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest text-right">Bid</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {teamPlayers.map(player => {
+                                  return (
+                                    <tr key={player.id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50 transition-colors">
+                                       <td className="px-6 py-4">
+                                         <div className="flex items-center gap-4">
+                                           <div className="h-10 w-10 shrink-0 bg-white rounded-lg overflow-hidden border border-slate-200">
+                                              {player.image_url ? <img src={getPlayerImage(player.image_url)!} alt="" className="w-full h-full object-cover object-top" /> : <Users size={20} className="m-auto opacity-20 mt-2" />}
+                                           </div>
+                                           <span className="font-bold text-slate-900">{player.player_name}</span>
+                                         </div>
+                                       </td>
+                                       <td className="px-6 py-4 text-center">
+                                         <span className="text-sm font-black text-slate-700 italic">{player.team}</span>
+                                       </td>
+                                       <td className="px-6 py-4 text-center">
+                                         <div className="flex flex-col items-center">
+                                           <span className="text-sm font-semibold text-slate-700">{player.type}</span>
+                                           <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">{player.country}</span>
+                                         </div>
+                                       </td>
+                                       <td className="px-6 py-4 text-center">
+                                         <span className="text-xs font-black uppercase tracking-widest bg-slate-100 px-2 py-1 rounded text-slate-600">
+                                           {player.role}
+                                         </span>
+                                       </td>
+                                       <td className="px-6 py-4 text-right">
+                                         <span className="text-lg font-black text-slate-900">
+                                            {player.sold_price}
+                                         </span>
+                                       </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                        </div>
+
+                        {/* Financial Summary - Simplified Budget Logic */}
+                        <div className="mt-6 bg-slate-50 rounded-2xl border border-slate-200 p-5 shrink-0">
+                           <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Financial & Roster Summary</h3>
+                           <div className="grid grid-cols-4 lg:grid-cols-7 gap-3">
+                              <div className="p-2.5 bg-white rounded-xl border border-slate-100 flex flex-col items-center justify-center text-center shadow-sm">
+                                <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest block mb-0.5">Bought</span>
+                                <span className="text-lg font-black text-blue-600">{teamPlayers.length}</span>
+                              </div>
+                              <div className="p-2.5 bg-white rounded-xl border border-slate-100 flex flex-col items-center justify-center text-center shadow-sm">
+                                <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest block mb-0.5">Min Left</span>
+                                <span className="text-lg font-black text-amber-500">{minRemaining}</span>
+                              </div>
+                              <div className="p-2.5 bg-white rounded-xl border border-slate-100 flex flex-col items-center justify-center text-center shadow-sm">
+                                <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest block mb-0.5">Max Left</span>
+                                <span className="text-lg font-black text-slate-700">{maxRemaining}</span>
+                              </div>
+                              <div className="p-2.5 bg-white rounded-xl border border-slate-100 flex flex-col items-center justify-center text-center shadow-sm">
+                                <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest block mb-0.5">Initial Purse</span>
+                                <span className="text-lg font-black text-slate-900">{budget}</span>
+                              </div>
+                              <div className="p-2.5 bg-white rounded-xl border border-slate-100 flex flex-col items-center justify-center text-center shadow-sm">
+                                <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest block mb-0.5">Used</span>
+                                <span className="text-lg font-black text-rose-600">{spent.toFixed(2)}</span>
+                              </div>
+                              <div className="p-2.5 bg-white rounded-xl border border-slate-100 flex flex-col items-center justify-center text-center shadow-sm">
+                                <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest block mb-0.5 whitespace-nowrap">Avg/Player</span>
+                                <span className="text-lg font-black text-slate-600">{avgSpent.toFixed(2)}</span>
+                              </div>
+                              <div className="p-2.5 bg-white rounded-xl border border-slate-100 flex flex-col items-center justify-center text-center shadow-sm bg-emerald-50/50 border-emerald-100 lg:col-span-1 col-span-2">
+                                <span className="text-[8px] font-black text-emerald-600 uppercase tracking-widest block mb-0.5">Purse Remaining</span>
+                                <span className="text-xl font-black text-emerald-600">{remaining.toFixed(2)}</span>
+                              </div>
+                           </div>
+                        </div>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="bg-white rounded-[2rem] border border-slate-100 shadow-xl overflow-hidden animate-in fade-in duration-500 flex flex-col min-h-[600px]">
+            <div className="p-8 border-b border-slate-50 bg-slate-50/50 flex flex-col md:flex-row justify-between items-center gap-6">
+              <div>
+                <h2 className="text-3xl font-black italic uppercase tracking-tighter text-slate-900 leading-none">Sold History</h2>
+                <p className="text-slate-400 font-bold uppercase text-[10px] tracking-widest mt-2 flex items-center gap-2">
+                  <History size={12} />
+                  Archive of all successful acquisitions
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                 <div className="text-sm font-black uppercase tracking-widest text-blue-600 px-5 py-2.5 bg-blue-50/50 border border-blue-100 rounded-2xl">
+                   {allPlayers.filter(p => p.status === 'Sold').length} Players Acquired
+                 </div>
+              </div>
+            </div>
+            
+            <div className="flex-1 p-6 md:p-8 flex flex-col min-h-0">
+              {allPlayers.filter(p => p.status === 'Sold').length === 0 ? (
+                <div className="flex-1 flex flex-col items-center justify-center text-center bg-slate-50/50 rounded-[2rem] border border-slate-100 border-dashed py-20 px-10">
+                  <div className="h-20 w-20 bg-white rounded-3xl flex items-center justify-center text-slate-200 shadow-sm border border-slate-100 mb-6 group-hover:scale-110 transition-transform">
+                    <History size={32} />
+                  </div>
+                  <h3 className="text-slate-900 font-black uppercase italic tracking-tighter text-lg mb-2">No History Yet</h3>
+                  <p className="text-slate-400 font-bold uppercase text-[10px] tracking-widest max-w-[200px] leading-relaxed">The auction history will populate as players are sold on the block.</p>
+                </div>
+              ) : (
+                <div className="flex-1 overflow-y-auto no-scrollbar rounded-2xl border border-slate-200 shadow-sm bg-white">
+                  <table className="w-full text-left border-collapse whitespace-nowrap">
+                    <thead className="bg-slate-100 sticky top-0 z-10">
+                      <tr>
+                        <th className="px-6 py-5 text-[10px] font-black uppercase text-slate-500 tracking-widest pl-8">Player</th>
+                        <th className="px-6 py-5 text-[10px] font-black uppercase text-slate-500 tracking-widest text-center">IPL Team</th>
+                        <th className="px-6 py-5 text-[10px] font-black uppercase text-slate-500 tracking-widest text-center">Sold To</th>
+                        <th className="px-6 py-5 text-[10px] font-black uppercase text-slate-500 tracking-widest text-right pr-8">Final Bid</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {allPlayers
+                        .filter(p => p.status === 'Sold')
+                        .sort((a,b) => new Date(b.updated_at || 0).getTime() - new Date(a.updated_at || 0).getTime())
+                        .map(player => (
+                          <tr key={player.id} className="hover:bg-slate-50/80 transition-all group">
+                            <td className="px-6 py-4 pl-8">
+                              <div className="flex items-center gap-4">
+                                <div className="h-12 w-12 shrink-0 bg-white rounded-xl overflow-hidden border border-slate-200 p-0.5 shadow-sm">
+                                   <img 
+                                     src={getPlayerImage(player.image_url) || undefined} 
+                                     alt="" 
+                                     className="w-full h-full object-cover object-top rounded-[10px]" 
+                                   />
+                                </div>
+                                <div>
+                                   <div className="font-black text-slate-900 uppercase tracking-tighter leading-none mb-1 group-hover:text-blue-600 transition-colors">{player.player_name}</div>
+                                   <div className="text-[9px] font-black uppercase tracking-widest text-slate-400 bg-slate-100/50 px-1.5 py-0.5 rounded inline-block">{player.role}</div>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="px-6 py-4 text-center">
+                               <div className="flex flex-col items-center">
+                                 <span className="text-sm font-black text-slate-700 italic">{player.team}</span>
+                               </div>
+                            </td>
+                            <td className="px-6 py-4 text-center">
+                               <span className="px-3 py-1.5 bg-slate-900 text-white rounded-xl text-[10px] font-black uppercase tracking-widest italic shadow-sm">
+                                 {player.sold_to}
+                               </span>
+                            </td>
+                            <td className="px-6 py-4 text-right pr-8">
+                               <div className="flex items-baseline justify-end gap-1">
+                                 <span className="text-2xl font-black tracking-tighter text-slate-900">{player.sold_price?.replace(' Cr', '')}</span>
+                                 <span className="text-[10px] font-black italic text-slate-400">CR</span>
+                               </div>
+                            </td>
+                          </tr>
+                        ))
+                      }
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

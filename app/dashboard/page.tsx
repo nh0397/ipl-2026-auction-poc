@@ -19,81 +19,112 @@ export default function Dashboard() {
 
   useEffect(() => {
     const fetchData = async () => {
-      setLoading(true);
-      const { data: { session } } = await supabase.auth.getSession();
-      
-      if (session) {
-        const { data: profileData } = await supabase
-          .from("profiles")
-          .select("*")
-          .eq("id", session.user.id)
-          .single();
-        setProfile(profileData);
-
-        const { data: configData } = await supabase
-          .from("auction_config")
-          .select("*")
-          .limit(1)
-          .single();
-        setAuctionConfig(configData);
-
-        // Fetch Recently Bought Players (Sold players, ordered by newest)
-        const { data: soldPlayers } = await supabase
-          .from("players")
-          .select("*")
-          .eq("status", "Sold")
-          .order("created_at", { ascending: false })
-          .limit(10);
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
         
-        setRecentSignings(soldPlayers || []);
+        if (session) {
+          const { data: profileData } = await supabase
+            .from("profiles")
+            .select("*")
+            .eq("id", session.user.id)
+            .single();
+          setProfile(profileData);
 
-        // Fetch my squad (players sold to me)
-        if (profileData?.team_name) {
+          const { data: configData } = await supabase
+            .from("auction_config")
+            .select("*")
+            .limit(1)
+            .single();
+          setAuctionConfig(configData);
+
+          // Fetch Recently Bought Players (Sold players, ordered by newest)
+          const { data: soldPlayers } = await supabase
+            .from("players")
+            .select("*")
+            .eq("status", "Sold")
+            .order("created_at", { ascending: false })
+            .limit(10);
+          
+          setRecentSignings(soldPlayers || []);
+
+          // Fetch my squad (players sold to me)
           const { data: squad } = await supabase
             .from("players")
             .select("*")
-            .eq("sold_to", profileData.team_name)
+            .eq("sold_to_id", session.user.id)
             .order("player_name", { ascending: true });
           setMySquad(squad || []);
+
+          // Subscriptions
+          const channel = supabase
+            .channel('dashboard-updates')
+            .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'players' }, (payload) => {
+              if (payload.new.status === 'Sold') {
+                setRecentSignings(prev => [payload.new, ...prev.filter(p => p.id !== payload.new.id)].slice(0, 10));
+              }
+              if (payload.new.sold_to_id === session.user.id || payload.old.sold_to_id === session.user.id) {
+                supabase.from("players")
+                  .select("*")
+                  .eq("sold_to_id", session.user.id)
+                  .order("player_name", { ascending: true })
+                  .then(({ data }) => setMySquad(data || []));
+              }
+            })
+            .subscribe();
+
+          return () => {
+            supabase.removeChannel(channel);
+          };
+        } else {
+          // Only redirect if we've checked and there's definitely no session
+          router.replace("/");
         }
+      } catch (err) {
+        console.error("Dashboard Fetch Error:", err);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     };
 
     fetchData();
+  }, [router]);
 
-    // Subscribe to player updates for real-time signings
-    const channel = supabase
-      .channel('player-signings')
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'players' }, (payload) => {
-        if (payload.new.status === 'Sold') {
-          setRecentSignings(prev => [payload.new, ...prev.filter(p => p.id !== payload.new.id)].slice(0, 10));
-        }
-      })
-      .subscribe();
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, []);
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+           <div className="h-10 w-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+           <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Synchronizing Portfolio...</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!profile) return null;
-  if (profile.role === 'Viewer') {
-    router.replace('/auction');
-    return null;
-  }
 
   const squadSize = mySquad.length;
   const minPlayers = auctionConfig?.min_players ?? 18;
   const maxPlayers = auctionConfig?.max_players ?? 25;
 
+  const initialBudget = auctionConfig?.budget_per_team || 150;
+  const totalSpent = mySquad.reduce((sum, p) => {
+    const priceStr = p.sold_price || "0";
+    const priceValue = typeof priceStr === 'string' 
+      ? parseFloat(priceStr.replace(/[^\d.]/g, '')) 
+      : (typeof priceStr === 'number' ? priceStr : 0);
+    return sum + (isNaN(priceValue) ? 0 : priceValue);
+  }, 0);
+
+  const remainingPurse = initialBudget - totalSpent;
+
   const isMinMet = squadSize >= minPlayers;
   const isMaxMet = squadSize <= maxPlayers;
 
-  const batters = mySquad.filter(p => p.role?.toLowerCase().includes('batter') || p.role?.toLowerCase().includes('wk')).length;
-  const bowlers = mySquad.filter(p => p.role?.toLowerCase().includes('bowler')).length;
-  const allRounders = mySquad.filter(p => p.role?.toLowerCase().includes('all-rounder')).length;
-  const indian = mySquad.filter(p => p.type?.toLowerCase() === 'indian').length;
-  const overseas = mySquad.filter(p => p.type?.toLowerCase() === 'overseas').length;
+  const batters = mySquad.filter(p => (p.role || '').toLowerCase().includes('batter') || (p.role || '').toLowerCase().includes('wk')).length;
+  const bowlers = mySquad.filter(p => (p.role || '').toLowerCase().includes('bowler')).length;
+  const allRounders = mySquad.filter(p => (p.role || '').toLowerCase().includes('all-rounder')).length;
+  const indian = mySquad.filter(p => (p.type || '').toLowerCase() === 'indian').length;
+  const overseas = mySquad.filter(p => (p.type || '').toLowerCase() === 'overseas').length;
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900 leading-normal overflow-hidden pt-8 min-h-[calc(100vh-64px)] pb-12">
@@ -134,12 +165,12 @@ export default function Dashboard() {
               
               <div className="relative z-10 flex flex-col gap-12">
                 <div className="space-y-1">
-                  <span className="text-[11px] font-black uppercase tracking-[0.3em] text-blue-600">Remaining Purse</span>
+                  <span className="text-[11px] font-black uppercase tracking-[0.3em] text-blue-600">Purse Remaining</span>
                   <h2 className="text-xl font-black tracking-tight text-slate-900 italic">Financial Cap Status</h2>
                 </div>
                 
                 <div className="flex items-baseline gap-2">
-                  <span className="text-7xl lg:text-8xl font-black tracking-tighter text-slate-900">{profile?.budget || 0}</span>
+                  <span className="text-7xl lg:text-8xl font-black tracking-tighter text-slate-900">{remainingPurse.toFixed(2)}</span>
                   <span className="text-3xl font-black text-blue-600 italic">CR</span>
                 </div>
 

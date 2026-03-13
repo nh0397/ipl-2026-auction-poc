@@ -12,37 +12,49 @@ export function Navbar() {
   const [role, setRole] = useState<string | null>(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const pathname = usePathname();
 
   useEffect(() => {
-    const checkUser = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      const currentUser = session?.user ?? null;
-      setUser(currentUser);
+    const initAuth = async () => {
+      try {
+        setIsLoading(true);
+        const { data: { session } } = await supabase.auth.getSession();
+        const currentUser = session?.user ?? null;
+        setUser(currentUser);
 
-      if (currentUser) {
-        const { data: profile } = await supabase
-          .from("profiles")
-          .select("role")
-          .eq("id", currentUser.id)
-          .single();
-        setRole(profile?.role || null);
+        if (currentUser) {
+          const { data: profile } = await supabase
+            .from("profiles")
+            .select("role")
+            .eq("id", currentUser.id)
+            .single();
+          setRole(profile?.role || null);
+        }
+      } catch (error) {
+        console.error("Auth Init Error:", error);
+      } finally {
+        setIsLoading(false);
       }
     };
 
-    checkUser();
+    initAuth();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       const currentUser = session?.user ?? null;
       setUser(currentUser);
       if (currentUser) {
-        supabase
-          .from("profiles")
-          .select("role")
-          .eq("id", currentUser.id)
-          .single()
-          .then(({ data }) => setRole(data?.role || null));
+        try {
+          const { data: profile } = await supabase
+            .from("profiles")
+            .select("role")
+            .eq("id", currentUser.id)
+            .single();
+          setRole(profile?.role || null);
+        } catch (error) {
+          console.error("Auth State Change Error:", error);
+        }
       } else {
         setRole(null);
       }
@@ -67,21 +79,32 @@ export function Navbar() {
   }, [pathname]);
 
   const handleLogout = async () => {
-    localStorage.removeItem("auth_approved");
     await supabase.auth.signOut();
     window.location.href = "/";
   };
+
+  if (isLoading) {
+    return (
+      <nav className="sticky top-0 z-50 w-full border-b bg-white/90 backdrop-blur-xl h-14 md:h-16 flex items-center px-12">
+        <div className="flex items-center gap-3 md:gap-10">
+           <div className="h-9 w-9 bg-slate-100 animate-pulse rounded-xl" />
+           <div className="hidden md:flex items-center gap-1">
+              {[1,2,3,4,5].map(i => <div key={i} className="h-8 w-24 bg-slate-50 animate-pulse rounded-xl" />)}
+           </div>
+        </div>
+      </nav>
+    );
+  }
 
   if (!user) return null;
 
   const navLinks = [
     ...(role !== 'Viewer' ? [{ href: "/dashboard", label: "Dashboard", icon: LayoutDashboard }] : []),
+    { href: "/rules", label: "Rules", icon: BookOpen },
     { href: "/registry", label: "Player Pool", icon: Search },
     { href: "/squads", label: "Team Rosters", icon: Users },
-    { href: "/auction", label: "Live Auction", icon: Gavel },
-    { href: "/scoreboard", label: "Scoreboard", icon: Trophy },
-    { href: "/history", label: "History", icon: History },
-    { href: "/rules", label: "Rules", icon: BookOpen },
+    { href: "/auction", label: "Auction", icon: Gavel },
+    { href: "/scoreboard", label: "Points Table", icon: Trophy },
   ];
 
   return (

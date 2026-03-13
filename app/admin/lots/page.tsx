@@ -26,6 +26,7 @@ export default function LotAssignment() {
     const { data } = await supabase
       .from("players")
       .select("*")
+      .neq("status", "Sold")
       .order("player_name", { ascending: true });
     if (data) setPlayers(data);
     setLoading(false);
@@ -34,7 +35,7 @@ export default function LotAssignment() {
   const filteredPlayers = players.filter(p => 
     p.player_name.toLowerCase().includes(search.toLowerCase()) ||
     p.team.toLowerCase().includes(search.toLowerCase()) ||
-    p.role?.toLowerCase().includes(search.toLowerCase())
+    (p.role || '').toLowerCase().includes(search.toLowerCase())
   );
 
   const toggleSelection = (id: string) => {

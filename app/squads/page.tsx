@@ -113,8 +113,8 @@ export default function SquadsOverview() {
     const minLeft = Math.max(0, minPlayers - playersBought);
     const maxLeft = Math.max(0, maxPlayers - playersBought);
     
-    // Total purse is from their profile or config
-    const totalPurse = parseFloat(initialBudgetStr) || parseFloat(config?.budget_per_team) || 100;
+    // Total purse is from the global config
+    const totalPurse = parseFloat(config?.budget_per_team) || 150;
     
     const totalUsed = squad.reduce((acc, player) => {
        const priceStr = player.sold_price || "0";
@@ -140,9 +140,9 @@ export default function SquadsOverview() {
   const teamName = activeTeam?.team_name || activeTeam?.full_name;
   const activeSquad = playersByTeam[teamName] || [];
 
-  const batters = activeSquad.filter(p => p.role?.toLowerCase().includes('batter') || p.role?.toLowerCase().includes('wk')).length;
-  const bowlers = activeSquad.filter(p => p.role?.toLowerCase().includes('bowler')).length;
-  const allRounders = activeSquad.filter(p => p.role?.toLowerCase().includes('all-rounder')).length;
+  const batters = activeSquad.filter(p => (p.role || '').toLowerCase().includes('batter') || (p.role || '').toLowerCase().includes('wk')).length;
+  const bowlers = activeSquad.filter(p => (p.role || '').toLowerCase().includes('bowler')).length;
+  const allRounders = activeSquad.filter(p => (p.role || '').toLowerCase().includes('all-rounder')).length;
 
   const currentStats = activeTeam ? calculateTeamStats(teamName, activeTeam.budget) : null;
 
@@ -217,8 +217,10 @@ export default function SquadsOverview() {
                   
                   <div className="flex gap-4">
                     <div className="flex flex-col">
-                       <span className={cn("text-[9px] font-black uppercase tracking-widest", activeTeamId === team.id ? "text-slate-400" : "text-slate-300")}>Purse</span>
-                       <span className={cn("text-base font-black italic", activeTeamId === team.id ? "text-emerald-400" : "text-slate-600")}>{team.budget} Cr</span>
+                       <span className={cn("text-[9px] font-black uppercase tracking-widest", activeTeamId === team.id ? "text-slate-400" : "text-slate-300")}>Purse Remaining</span>
+                       <span className={cn("text-base font-black italic", activeTeamId === team.id ? "text-emerald-400" : "text-slate-600")}>
+                         {(calculateTeamStats(team.team_name || team.full_name, "").purseLeft)} Cr
+                       </span>
                     </div>
                     <div className="flex flex-col">
                        <span className={cn("text-[9px] font-black uppercase tracking-widest", activeTeamId === team.id ? "text-slate-400" : "text-slate-300")}>Players</span>
@@ -352,7 +354,7 @@ export default function SquadsOverview() {
                          </div>
 
                          <div className="p-3 bg-white rounded-xl border border-slate-100 flex flex-col items-center justify-center text-center shadow-sm bg-emerald-50/50 border-emerald-100">
-                           <span className="text-[9px] font-black text-emerald-600 uppercase tracking-widest block mb-1">Purse Left</span>
+                           <span className="text-[9px] font-black text-emerald-600 uppercase tracking-widest block mb-1">Purse Remaining</span>
                            <span className="text-xl font-black text-emerald-600">{currentStats.purseLeft}</span>
                          </div>
 
