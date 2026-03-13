@@ -253,7 +253,8 @@ export default function AuctionPage() {
         await logAction("POOL_EXHAUSTED_MOVING_TO_NEXT", { exhausted_pool: pool, next_pool: nextPool });
         await pickNextPlayer(nextPool);
       } else {
-        await supabase.from("auction_config").update({ status: "completed", updated_at: new Date().toISOString() }).eq("id", configId);
+        // Pool exhausted AND no more pools left
+        await supabase.from("auction_config").update({ status: "paused", updated_at: new Date().toISOString() }).eq("id", configId);
         await supabase.from("auction_state").update({
           status: "waiting",
           current_player_id: null,
@@ -262,7 +263,8 @@ export default function AuctionPage() {
           current_bidder_name: null,
           passed_user_ids: [],
         }).eq("id", stateId);
-        await logAction("AUCTION_COMPLETED");
+        await logAction("AUCTION_PAUSED_ALL_POOLS_FINISHED");
+        alert("All players in the final pool have been auctioned. Auction paused. If you wish to end the auction, it is an irreversible action — please do so from the Admin Command Center.");
         setSelectionMethod("random");
         await fetchAll();
       }
@@ -397,6 +399,18 @@ export default function AuctionPage() {
     await logAction("ADMIN_PICK_SPECIFIC_PLAYER", { player_id: idToPick, current_pool: freshConfig?.current_pool });
     await pickNextPlayer(freshConfig?.current_pool || "Marquee", idToPick);
     setManualPickId("");
+    setActionLoading(false);
+  };
+
+  const endAuction = async () => {
+    if (!isAdmin) return;
+    if (!confirm("CRITICAL: Are you sure you want to END the auction? This is irreversible and will finalize all squads. Proceed only if the auction is fully complete.")) return;
+    
+    setActionLoading(true);
+    const { configId } = await getAuctionIds();
+    await supabase.from("auction_config").update({ status: "completed", updated_at: new Date().toISOString() }).eq("id", configId);
+    await logAction("MANUAL_END_AUCTION");
+    await fetchAll();
     setActionLoading(false);
   };
 
@@ -721,7 +735,12 @@ export default function AuctionPage() {
                   onChange={(e) => setStartPool(e.target.value)}
                   className="h-10 px-4 rounded-xl bg-white/10 text-white font-bold text-sm border border-white/20 outline-none appearance-none cursor-pointer hover:bg-white/20 transition-all"
                 >
-                  {POOL_ORDER.map(p => <option key={p} value={p} className="text-slate-900">{p}</option>)}
+                  {POOL_ORDER.filter(p => (poolCounts[p]?.remaining ?? 0) > 0).map(p => (
+                    <option key={p} value={p} className="text-slate-900">{p} ({poolCounts[p]?.remaining} left)</option>
+                  ))}
+                  {POOL_ORDER.filter(p => (poolCounts[p]?.remaining ?? 0) > 0).length === 0 && (
+                    <option value="" className="text-slate-900">No players left</option>
+                  )}
                 </select>
                 <Button onClick={startAuction} disabled={actionLoading} className="bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-6 flex gap-2">
                   <Play size={14} /> Start Auction
@@ -737,7 +756,9 @@ export default function AuctionPage() {
                   onChange={(e) => switchPool(e.target.value)}
                   className="h-10 px-4 rounded-xl bg-white/10 text-white font-bold text-sm border border-white/20 outline-none cursor-pointer hover:bg-white/20 transition-all"
                 >
-                  {POOL_ORDER.map(p => <option key={p} value={p} className="text-slate-900">{p}</option>)}
+                  {POOL_ORDER.filter(p => (poolCounts[p]?.remaining ?? 0) > 0).map(p => (
+                    <option key={p} value={p} className="text-slate-900">{p} ({poolCounts[p]?.remaining} left)</option>
+                  ))}
                 </select>
                 <Button onClick={skipPlayer} disabled={actionLoading} className="bg-white/10 hover:bg-white/20 text-white/70 rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-5 flex gap-2 border border-white/10">
                   <Shuffle size={14} /> Skip
@@ -759,7 +780,9 @@ export default function AuctionPage() {
                   onChange={(e) => switchPool(e.target.value)}
                   className="h-10 px-4 rounded-xl bg-white/10 text-white font-bold text-sm border border-white/20 outline-none cursor-pointer hover:bg-white/20 transition-all"
                 >
-                  {POOL_ORDER.map(p => <option key={p} value={p} className="text-slate-900">{p}</option>)}
+                  {POOL_ORDER.filter(p => (poolCounts[p]?.remaining ?? 0) > 0).map(p => (
+                    <option key={p} value={p} className="text-slate-900">{p} ({poolCounts[p]?.remaining} left)</option>
+                  ))}
                 </select>
                 <Button onClick={nextPlayer} disabled={actionLoading} className="bg-blue-500 hover:bg-blue-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-6 flex gap-2">
                   <Shuffle size={14} /> Random Next
@@ -776,6 +799,17 @@ export default function AuctionPage() {
                 <Button onClick={() => pickSpecificPlayer()} disabled={actionLoading || !manualPickId} className="bg-violet-500 hover:bg-violet-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-5 flex gap-2 disabled:opacity-30">
                   <SkipForward size={14} /> Select
                 </Button>
+                <div className="h-6 w-[1px] bg-white/10 ml-4" />
+                <div className="flex flex-col items-end">
+                  <Button 
+                    onClick={endAuction}
+                    disabled={actionLoading}
+                    className="bg-red-600/20 hover:bg-red-600 text-red-500 hover:text-white border border-red-500/30 rounded-xl font-black uppercase text-[8px] tracking-[0.2em] h-10 px-4 transition-all"
+                  >
+                    End Auction ⚠️
+                  </Button>
+                  <span className="text-[7px] font-bold text-red-400 uppercase tracking-tighter mt-1 opacity-60">Irreversible Action</span>
+                </div>
               </>
             )}
           </div>
