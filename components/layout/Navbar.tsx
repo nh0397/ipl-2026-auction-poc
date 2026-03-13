@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import { LayoutDashboard, ShieldCheck, LogOut, BookOpen, ChevronDown, User, Activity, Gavel, Search, Menu, X, Users, History } from "lucide-react";
+import { LayoutDashboard, ShieldCheck, LogOut, BookOpen, ChevronDown, User, Activity, Gavel, Search, Menu, X, Users, History, Trophy, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export function Navbar() {
@@ -79,8 +79,9 @@ export function Navbar() {
     { href: "/registry", label: "Player Pool", icon: Search },
     { href: "/squads", label: "Team Rosters", icon: Users },
     { href: "/auction", label: "Live Auction", icon: Gavel },
-    { href: "/history", label: "Auction History", icon: History },
-    { href: "/rules", label: "Rulebook", icon: BookOpen },
+    { href: "/scoreboard", label: "Scoreboard", icon: Trophy },
+    { href: "/history", label: "History", icon: History },
+    { href: "/rules", label: "Rules", icon: BookOpen },
   ];
 
   return (

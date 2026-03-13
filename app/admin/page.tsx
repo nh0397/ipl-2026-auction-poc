@@ -416,7 +416,7 @@ export default function AdminDashboard() {
             <Button 
               variant="default" 
               className="bg-amber-600 hover:bg-amber-700 text-white font-black uppercase tracking-widest px-8 py-6 rounded-2xl shadow-xl transition-all"
-              onClick={() => router.push("/admin/points")}
+              onClick={() => router.push("/scoreboard")}
             >
               Open Scoreboard Editor
             </Button>

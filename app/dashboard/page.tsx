@@ -263,35 +263,20 @@ export default function Dashboard() {
         </div>
 
         {/* 3. CHAMPIONSHIP COMMAND CENTER */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 pt-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 pt-4">
              <Link 
-               href="/strategy"
+               href="/scoreboard"
                className="bg-indigo-600 p-8 rounded-[2.5rem] text-white shadow-xl shadow-indigo-100 flex items-center gap-6 group hover:scale-[1.02] transition-all"
              >
                 <div className="h-16 w-16 bg-white/10 rounded-[1.5rem] flex items-center justify-center text-white shadow-sm group-hover:bg-amber-500 transition-colors">
-                   <Zap size={28} className="fill-current" />
+                   <Trophy size={28} className="fill-current" />
                 </div>
                 <div className="flex-1">
-                   <span className="text-[10px] font-black uppercase tracking-widest text-indigo-300 block mb-1">Elite Strategy</span>
-                   <h3 className="text-2xl font-black italic tracking-tight uppercase">Strategy Room</h3>
-                   <p className="text-xs font-bold text-indigo-200 mt-1 uppercase tracking-wide">Set C/VC & Boosters</p>
+                   <span className="text-[10px] font-black uppercase tracking-widest text-indigo-300 block mb-1">Match Day Hub</span>
+                   <h3 className="text-2xl font-black italic tracking-tight uppercase">Scoreboard Hub</h3>
+                   <p className="text-xs font-bold text-indigo-200 mt-1 uppercase tracking-wide">Points, Strategy & Standings</p>
                 </div>
                 <ArrowUpRight size={20} className="text-white/30 group-hover:text-white" />
-             </Link>
-
-             <Link 
-               href="/standings"
-               className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm flex items-center gap-6 group hover:scale-[1.02] transition-all"
-             >
-                <div className="h-16 w-16 bg-amber-50 rounded-[1.5rem] flex items-center justify-center text-amber-600 shadow-sm group-hover:bg-amber-500 group-hover:text-white transition-colors">
-                   <Trophy size={28} />
-                </div>
-                <div className="flex-1">
-                   <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 block mb-1">Live Rankings</span>
-                   <h3 className="text-2xl font-black text-slate-900 italic tracking-tight uppercase">Leaderboard</h3>
-                   <p className="text-xs font-bold text-slate-400 mt-1 uppercase tracking-wide">View Global Standings</p>
-                </div>
-                <ArrowUpRight size={20} className="text-slate-200 group-hover:text-amber-500" />
              </Link>
 
              <div className="bg-slate-900 p-8 rounded-[2.5rem] text-white shadow-xl shadow-slate-200 flex flex-col gap-6 relative overflow-hidden transition-all">
