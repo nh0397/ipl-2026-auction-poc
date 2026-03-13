@@ -109,10 +109,33 @@ export default function AdminDashboard() {
     }).eq("id", auctionConfig.id);
 
     // Also reset all participants' basic budget to the new teamBudget (assuming this is pre-auction)
-    // Warning: this ignores already spent money. (In a real app, you'd calculate: newBudget - spentMoney)
     await supabase.from("profiles").update({ budget: teamBudget }).neq("role", "Viewer");
 
     alert("Configuration saved successfully! All participants now have this starting budget.");
+    setConfigLoading(false);
+  };
+
+  const endAuction = async () => {
+    // Double confirmation
+    if (!confirm("CRITICAL: Are you sure you want to END the auction? This is irreversible and will finalize all squads. Proceed only if the auction is fully complete.")) return;
+
+    if (!confirm("FINAL WARNING: Once you click OK, the auction will be marked as COMPLETED. This action CANNOT be undone. Are you absolutely certain?")) return;
+    
+    setConfigLoading(true);
+    const { data: config } = await supabase.from("auction_config").select("id").limit(1).single();
+    if (config) {
+      const { error } = await supabase.from("auction_config").update({ 
+        status: "completed", 
+        updated_at: new Date().toISOString() 
+      }).eq("id", config.id);
+      
+      if (error) {
+        alert("Error ending auction: " + error.message);
+      } else {
+        alert("Auction marked as COMPLETED successfully.");
+        fetchConfig();
+      }
+    }
     setConfigLoading(false);
   };
 
@@ -646,6 +669,39 @@ export default function AdminDashboard() {
                 onChange={(e) => setMaxPlayers(Number(e.target.value))}
                 className="w-full h-12 bg-slate-50 border border-slate-200 rounded-xl px-4 font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Global Auction Command Center - Separate & Secure */}
+        <Card className="shadow-2xl border-[3px] border-red-100 overflow-hidden rounded-[2rem] bg-red-50/20">
+          <CardHeader className="bg-red-600 text-white p-8">
+            <div className="flex items-center gap-4">
+              <div className="h-14 w-14 bg-white/20 rounded-2xl flex items-center justify-center backdrop-blur-sm">
+                <Gavel className="h-8 w-8 text-white" />
+              </div>
+              <div>
+                <CardTitle className="text-2xl font-black uppercase tracking-tight italic">Auction Command Center</CardTitle>
+                <CardDescription className="text-red-100 font-bold opacity-80">Manual Override & Finalization Control</CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="p-8">
+            <div className="flex flex-col md:flex-row items-center gap-8">
+              <div className="flex-1 space-y-2">
+                <h4 className="text-lg font-black uppercase tracking-tight text-red-900">Irreversible Action Zone</h4>
+                <p className="text-sm text-red-700/70 font-medium max-w-xl">
+                  Ending the auction is a final step that marks all squads as complete. This cannot be undone automatically. Only proceed when the live auction event is fully finished.
+                </p>
+              </div>
+              <Button 
+                variant="destructive"
+                className="bg-red-600 hover:bg-red-700 text-white font-black uppercase tracking-[0.2em] px-10 py-8 rounded-2xl shadow-xl shadow-red-200 text-sm transition-all"
+                onClick={endAuction}
+                disabled={configLoading || auctionConfig?.status === "completed"}
+              >
+                {auctionConfig?.status === "completed" ? "Auction Finished" : "End Auction Forever"}
+              </Button>
             </div>
           </CardContent>
         </Card>

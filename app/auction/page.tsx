@@ -804,17 +804,6 @@ export default function AuctionPage() {
                 <Button onClick={() => pickSpecificPlayer()} disabled={actionLoading || !manualPickId} className="bg-violet-500 hover:bg-violet-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-5 flex gap-2 disabled:opacity-30">
                   <SkipForward size={14} /> Select
                 </Button>
-                <div className="h-6 w-[1px] bg-white/10 ml-4" />
-                <div className="flex flex-col items-end">
-                  <Button 
-                    onClick={endAuction}
-                    disabled={actionLoading}
-                    className="bg-red-600/20 hover:bg-red-600 text-red-500 hover:text-white border border-red-500/30 rounded-xl font-black uppercase text-[8px] tracking-[0.2em] h-10 px-4 transition-all"
-                  >
-                    End Auction ⚠️
-                  </Button>
-                  <span className="text-[7px] font-bold text-red-400 uppercase tracking-tighter mt-1 opacity-60">Irreversible Action</span>
-                </div>
               </>
             )}
           </div>
@@ -928,7 +917,7 @@ export default function AuctionPage() {
                         className="h-14 px-10 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-black uppercase tracking-widest text-sm shadow-xl shadow-blue-200 active:scale-95 transition-all disabled:opacity-30 flex gap-3"
                       >
                         <ArrowUp size={18} />
-                        Bid {(auctionState.current_bid + auctionState.min_increment).toFixed(2)} Cr
+                        Bid {(!auctionState.current_bidder_id ? auctionState.base_price : auctionState.current_bid + auctionState.min_increment).toFixed(2)} Cr
                       </Button>
                       <Button
                         onClick={passOnPlayer}
