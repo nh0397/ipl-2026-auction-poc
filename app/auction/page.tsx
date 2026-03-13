@@ -404,7 +404,12 @@ export default function AuctionPage() {
 
   const endAuction = async () => {
     if (!isAdmin) return;
+    
+    // First confirmation
     if (!confirm("CRITICAL: Are you sure you want to END the auction? This is irreversible and will finalize all squads. Proceed only if the auction is fully complete.")) return;
+
+    // Second confirmation
+    if (!confirm("FINAL WARNING: Once you click OK, the auction will be marked as COMPLETED. This action CANNOT be undone. Are you absolutely certain?")) return;
     
     setActionLoading(true);
     const { configId } = await getAuctionIds();
