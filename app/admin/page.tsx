@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Trophy, Shield, User, ArrowLeft, RefreshCw, Settings, Save, Search, Gavel, Clock, Users, UserMinus, UserPlus, LogOut } from "lucide-react";
+import { Trophy, Shield, User, ArrowLeft, RefreshCw, Settings, Save, Search, Gavel, Clock, Users, UserMinus, UserPlus, LogOut, History as HistoryIcon } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -25,14 +25,14 @@ export default function AdminDashboard() {
 
   // Override States
   const [allPlayers, setAllPlayers] = useState<any[]>([]);
-  const [overrideMode, setOverrideMode] = useState<"reallocate" | "direct">("reallocate");
+  const [overrideMode, setOverrideMode] = useState<"reallocate" | "direct" | "release">("reallocate");
   const [sourceTeamId, setSourceTeamId] = useState<string>("");
   const [selectedOverridePlayer, setSelectedOverridePlayer] = useState<string>("");
   const [overrideBuyer, setOverrideBuyer] = useState<string>("");
   const [overridePrice, setOverridePrice] = useState<string>("");
   const [overrideLoading, setOverrideLoading] = useState(false);
   const [playerSearch, setPlayerSearch] = useState("");
-  const [activeTab, setActiveTab] = useState<"users" | "config" | "allocation">("users");
+  const [activeTab, setActiveTab] = useState<"users" | "config" | "allocation" | "sold">("users");
 
   const router = useRouter();
 
@@ -141,7 +141,6 @@ export default function AdminDashboard() {
       .update({
         status: "Available",
         auction_status: "pending",
-        pool: null,
         sold_to: null,
         sold_to_id: null,
         sold_price: null
@@ -325,6 +324,84 @@ export default function AdminDashboard() {
     setOverrideLoading(false);
   };
 
+  const executeRelease = async () => {
+    if (!selectedOverridePlayer) return;
+    setOverrideLoading(true);
+
+    const player = allPlayers.find(p => p.id === selectedOverridePlayer);
+    if (!player) {
+      setOverrideLoading(false);
+      return;
+    }
+
+    if (!confirm(`Are you sure you want to release ${player.player_name} back to the ${player.pool} pool? This will refund the team.`)) {
+      setOverrideLoading(false);
+      return;
+    }
+
+    // 1. Refund the current buyer (if any)
+    if (player.auction_status === "sold" && player.sold_to_id) {
+      const buyer = users.find(u => u.id === player.sold_to_id);
+      if (buyer) {
+        const currentPrice = typeof player.sold_price === 'string' 
+          ? parseFloat(player.sold_price.replace(/[^\d.]/g, '')) 
+          : (player.sold_price || 0);
+
+        await supabase.from("profiles").update({
+          budget: (buyer.budget || 0) + currentPrice,
+        }).eq("id", buyer.id);
+      }
+    }
+
+    // 2. Update player record
+    const { error: playerError } = await supabase.from("players").update({
+      status: "Available",
+      auction_status: "pending",
+      sold_to: null,
+      sold_to_id: null,
+      sold_price: null,
+    }).eq("id", player.id);
+
+    if (playerError) {
+      alert(`Error updating player: ${playerError.message}`);
+    } else {
+      // 3. Update Auction State if this player is currently live
+      const { data: state } = await supabase.from("auction_state").select("*").limit(1).single();
+      if (state && state.current_player_id === player.id) {
+        await supabase.from("auction_state").update({
+          status: "waiting",
+          current_player_id: null,
+          current_bid: 0,
+          current_bidder_id: null,
+          current_bidder_name: null,
+          updated_at: new Date().toISOString(),
+        }).eq("id", state.id);
+      }
+
+      // 4. Audit Log
+      await supabase.from("audit_logs").insert({
+        admin_id: currentUser.id,
+        admin_name: "Admin Override",
+        action_type: "RELEASE_PLAYER",
+        details: {
+          player_id: player.id,
+          player_name: player.player_name,
+          from_team: player.sold_to,
+          pool: player.pool
+        }
+      });
+
+      alert("Player released successfully!");
+    }
+    
+    // Refresh
+    setSelectedOverridePlayer("");
+    setSourceTeamId("");
+    fetchUsers();
+    fetchPlayers();
+    setOverrideLoading(false);
+  };
+
   if (!currentUser) return null;
 
   return (
@@ -357,6 +434,7 @@ export default function AdminDashboard() {
             { id: "users", label: "Users", icon: Users },
             { id: "config", label: "Rules", icon: Settings },
             { id: "allocation", label: "Allocation", icon: Gavel },
+            { id: "sold", label: "Sold Portfolio", icon: HistoryIcon },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -594,32 +672,24 @@ export default function AdminDashboard() {
 
               {/* Mode Toggle */}
               <div className="flex bg-slate-800 p-1 rounded-xl">
-                <button 
-                  onClick={() => {
-                    setOverrideMode("reallocate");
-                    setSelectedOverridePlayer("");
-                    setSourceTeamId("");
-                  }}
-                  className={cn(
-                    "px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all",
-                    overrideMode === "reallocate" ? "bg-amber-500 text-white" : "text-slate-400 hover:text-white"
-                  )}
-                >
-                  Re-allocate
-                </button>
-                <button 
-                  onClick={() => {
-                    setOverrideMode("direct");
-                    setSelectedOverridePlayer("");
-                    setSourceTeamId("");
-                  }}
-                  className={cn(
-                    "px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all",
-                    overrideMode === "direct" ? "bg-amber-500 text-white" : "text-slate-400 hover:text-white"
-                  )}
-                >
-                  Direct Assign
-                </button>
+                {["reallocate", "direct", "release"].map((mode) => (
+                  <button 
+                    key={mode}
+                    onClick={() => {
+                      setOverrideMode(mode as any);
+                      setSelectedOverridePlayer("");
+                      setSourceTeamId("");
+                      setOverrideBuyer("");
+                      setOverridePrice("");
+                    }}
+                    className={cn(
+                      "px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all",
+                      overrideMode === mode ? "bg-amber-500 text-white" : "text-slate-400 hover:text-white"
+                    )}
+                  >
+                    {mode === "reallocate" ? "Re-allocate" : mode === "direct" ? "Direct Assign" : "Release to Pool"}
+                  </button>
+                ))}
               </div>
             </div>
           </CardHeader>
@@ -630,9 +700,9 @@ export default function AdminDashboard() {
               {/* Step 1: Select Source (Conditional) */}
               <div className="space-y-3">
                 <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">
-                  {overrideMode === "reallocate" ? "1. From Team" : "1. Focus Pool"}
+                  {overrideMode === "reallocate" || overrideMode === "release" ? "1. From Team" : "1. Focus Pool"}
                 </label>
-                {overrideMode === "reallocate" ? (
+                {overrideMode === "reallocate" || overrideMode === "release" ? (
                   <select 
                     value={sourceTeamId}
                     onChange={(e) => {
@@ -669,13 +739,13 @@ export default function AdminDashboard() {
                 <select 
                   value={selectedOverridePlayer}
                   onChange={(e) => setSelectedOverridePlayer(e.target.value)}
-                  disabled={overrideMode === "reallocate" && !sourceTeamId}
+                  disabled={(overrideMode === "reallocate" || overrideMode === "release") && !sourceTeamId}
                   className="w-full h-14 bg-slate-50 border border-slate-200 rounded-2xl px-5 font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 transition-all disabled:opacity-30 cursor-pointer"
                 >
                   <option value="">Choose Player...</option>
                   {allPlayers
                     .filter(p => {
-                      if (overrideMode === "reallocate") return p.sold_to_id === sourceTeamId;
+                      if (overrideMode === "reallocate" || overrideMode === "release") return p.sold_to_id === sourceTeamId;
                       // Direct assign filters by pool if chosen
                       if (playerSearch) return p.pool === playerSearch && p.auction_status !== "sold";
                       return p.auction_status !== "sold";
@@ -688,7 +758,7 @@ export default function AdminDashboard() {
               </div>
 
               {/* Step 3: Select Destination */}
-              <div className="space-y-3">
+              <div className={cn("space-y-3", overrideMode === "release" && "opacity-20 pointer-events-none")}>
                 <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">3. Target Team</label>
                 <select 
                   value={overrideBuyer}
@@ -705,7 +775,7 @@ export default function AdminDashboard() {
               </div>
 
               {/* Step 4: Final Price */}
-              <div className="space-y-3">
+              <div className={cn("space-y-3", overrideMode === "release" && "opacity-20 pointer-events-none")}>
                 <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">4. Override Price</label>
                 <div className="relative">
                   <input 
@@ -724,7 +794,7 @@ export default function AdminDashboard() {
 
             <div className="mt-10 pt-8 border-t border-slate-50 flex items-center justify-between">
               <div className="flex gap-4">
-                 {overrideBuyer && overridePrice && (
+                 {overrideBuyer && overridePrice && overrideMode !== "release" && (
                     <div className={cn(
                       "px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest",
                       (() => {
@@ -761,14 +831,168 @@ export default function AdminDashboard() {
                  )}
               </div>
               <Button 
-                onClick={executeOverride} 
-                disabled={overrideLoading || !selectedOverridePlayer || !overrideBuyer || !overridePrice} 
-                className="bg-slate-900 hover:bg-black text-white font-black uppercase tracking-widest rounded-2xl h-14 px-10 shadow-xl shadow-slate-200 active:scale-95 transition-all"
+                onClick={overrideMode === "release" ? executeRelease : executeOverride} 
+                disabled={overrideLoading || !selectedOverridePlayer || (overrideMode !== "release" && (!overrideBuyer || !overridePrice))} 
+                className={cn(
+                  "font-black uppercase tracking-widest rounded-2xl h-14 px-10 shadow-xl shadow-slate-200 active:scale-95 transition-all",
+                  overrideMode === "release" ? "bg-orange-600 hover:bg-orange-700 text-white" : "bg-slate-900 hover:bg-black text-white"
+                )}
               >
-                {overrideLoading ? <RefreshCw className="h-5 w-5 animate-spin mr-3" /> : <Save className="h-5 w-5 mr-3" />}
-                Process Allocation
+                {overrideLoading ? <RefreshCw className="h-5 w-5 animate-spin mr-3" /> : (overrideMode === "release" ? <LogOut className="h-5 w-5 mr-3" /> : <Save className="h-5 w-5 mr-3" />)}
+                {overrideMode === "release" ? "Release to Pool" : "Process Allocation"}
               </Button>
             </div>
+          </CardContent>
+        </Card>
+      </div>
+    )}
+
+    {activeTab === "sold" && (
+      <div className="space-y-6">
+        <div className="flex justify-between items-center px-2">
+          <div>
+            <h2 className="text-2xl font-black uppercase tracking-tight flex items-center gap-2">
+              <HistoryIcon className="h-6 w-6 text-blue-600" />
+              Sold Player Management
+            </h2>
+            <p className="text-slate-500 font-medium tracking-tight">Undo sales and release players back to pools</p>
+          </div>
+          <div className="bg-blue-600 text-white px-4 py-2 rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-lg shadow-blue-100">
+            Total Sold: {allPlayers.filter(p => p.auction_status === "sold" || p.status === "Sold").length}
+          </div>
+        </div>
+
+        {/* Global Search for Sold Players */}
+        <div className="relative group mx-2">
+           <Search className="absolute left-5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 group-focus-within:text-blue-500 transition-colors" />
+           <input 
+             value={playerSearch}
+             onChange={(e) => setPlayerSearch(e.target.value)}
+             placeholder="Search sold players by name, team, or role..."
+             className="w-full bg-white border border-slate-200 h-14 pl-14 pr-6 rounded-2xl text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20 transition-all shadow-sm"
+           />
+        </div>
+
+        <Card className="shadow-xl border-none overflow-hidden rounded-[2rem] border border-slate-100">
+          <CardContent className="p-0">
+            <Table>
+              <TableHeader className="bg-slate-50/50">
+                <TableRow className="border-slate-100 hover:bg-transparent">
+                  <TableHead className="pl-8 font-black uppercase tracking-widest text-[10px] text-slate-400 h-14">Player</TableHead>
+                  <TableHead className="font-black uppercase tracking-widest text-[10px] text-slate-400 h-14">Sold To</TableHead>
+                  <TableHead className="font-black uppercase tracking-widest text-[10px] text-slate-400 h-14 text-right">Price</TableHead>
+                  <TableHead className="pr-8 font-black uppercase tracking-widest text-[10px] text-slate-400 h-14 text-right">Action</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {allPlayers
+                  .filter(p => {
+                    const isSold = p.auction_status === "sold" || p.status === "Sold";
+                    if (!isSold) return false;
+                    if (!playerSearch) return true;
+                    const searchLower = playerSearch.toLowerCase();
+                    return (
+                      p.player_name?.toLowerCase().includes(searchLower) ||
+                      p.sold_to?.toLowerCase().includes(searchLower) ||
+                      (p.role && p.role.toLowerCase().includes(searchLower))
+                    );
+                  })
+                  .sort((a,b) => (b.updated_at || b.created_at || '').localeCompare(a.updated_at || a.created_at || ''))
+                  .map((player) => (
+                  <TableRow key={player.id} className="border-slate-50 hover:bg-slate-50/50 transition-colors group">
+                    <TableCell className="pl-8 py-5">
+                      <div className="flex items-center gap-4">
+                        <div className="h-10 w-10 bg-slate-100 rounded-xl overflow-hidden border border-slate-200 p-0.5">
+                           <img 
+                             src={player.image_url ? (player.image_url.startsWith('http') ? player.image_url : `https://img1.hscicdn.com/image/upload/f_auto,t_h_100/${player.image_url}`) : "https://www.freeiconspng.com/uploads/no-image-icon-6.png"} 
+                             className="w-full h-full object-cover object-top rounded-lg" 
+                             alt=""
+                           />
+                        </div>
+                        <div>
+                          <div className="font-black uppercase tracking-tight text-slate-900 leading-none mb-1">{player.player_name}</div>
+                          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{player.role} • {player.pool}</div>
+                        </div>
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Badge className="bg-blue-50 text-blue-600 border-blue-100 font-bold px-3 py-1 rounded-lg">
+                        {player.sold_to}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-right font-black text-slate-900">
+                      {player.sold_price || "0.00 Cr"}
+                    </TableCell>
+                    <TableCell className="pr-8 text-right">
+                      <Button 
+                        size="sm" 
+                        variant="destructive" 
+                        className="font-black uppercase tracking-widest text-[9px] h-8 rounded-xl transition-all shadow-sm hover:shadow-red-100 active:scale-95"
+                        onClick={async () => {
+                           if (!confirm(`Are you sure you want to undo the sale for ${player.player_name}? This will refund ${player.sold_to} and return the player to the ${player.pool} pool.`)) return;
+                           
+                           setLoading(true);
+                           
+                           try {
+                             // Refund logic
+                             if (player.sold_to_id) {
+                                const buyer = users.find(u => u.id === player.sold_to_id);
+                                if (buyer) {
+                                  const currentPrice = typeof player.sold_price === 'string' 
+                                    ? parseFloat(player.sold_price.replace(/[^\d.]/g, '')) 
+                                    : (player.sold_price || 0);
+
+                                  await supabase.from("profiles").update({
+                                    budget: (buyer.budget || 0) + currentPrice,
+                                  }).eq("id", buyer.id);
+                                }
+                             }
+
+                             // Reset player
+                             const { error } = await supabase.from("players").update({
+                               status: "Available",
+                               auction_status: "pending",
+                               sold_to: null,
+                               sold_to_id: null,
+                               sold_price: null,
+                             }).eq("id", player.id);
+
+                             if (error) {
+                               alert(`Error: ${error.message}`);
+                             } else {
+                               // Audit log
+                               await supabase.from("audit_logs").insert({
+                                  admin_id: currentUser.id,
+                                  admin_name: "Admin Undo Sale",
+                                  action_type: "UNDO_SALE",
+                                  details: { player_id: player.id, player_name: player.player_name, team: player.sold_to }
+                               });
+                               alert("Sale undone successfully!");
+                             }
+                           } catch (err) {
+                             console.error(err);
+                             alert("An error occurred during undo sale.");
+                           } finally {
+                             fetchUsers();
+                             fetchPlayers();
+                             setLoading(false);
+                           }
+                        }}
+                      >
+                        Undo Sale
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {allPlayers.filter(p => p.auction_status === "sold" || p.status === "Sold").length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={4} className="text-center py-24 text-slate-300 font-black uppercase tracking-widest">
+                      No sold players found
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
           </CardContent>
         </Card>
       </div>

@@ -2,17 +2,28 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
-import { History, ArrowLeft, Trophy } from "lucide-react";
+import { History, ArrowLeft, Trophy, RotateCcw, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { getPlayerImage, cn, iplColors } from "@/lib/utils";
 
 export default function AuctionHistory() {
   const [soldPlayers, setSoldPlayers] = useState<any[]>([]);
+  const [profile, setProfile] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+
+  const isAdmin = profile?.role === "Admin";
 
   useEffect(() => {
     const fetchHistory = async () => {
       setLoading(true);
+
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        const { data: prof } = await supabase.from("profiles").select("*").eq("id", session.user.id).single();
+        setProfile(prof);
+      }
+
       const { data } = await supabase
         .from("players")
         .select("*")
@@ -31,6 +42,9 @@ export default function AuctionHistory() {
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'players' }, (payload) => {
         if (payload.new.status === 'Sold') {
           setSoldPlayers(prev => [payload.new, ...prev.filter(p => p.id !== payload.new.id)]);
+        } else if (payload.old?.status === 'Sold' && payload.new.status !== 'Sold') {
+          // If a player was sold but now isn't, remove them from the list
+          setSoldPlayers(prev => prev.filter(p => p.id !== payload.new.id));
         }
       })
       .subscribe();
@@ -39,6 +53,48 @@ export default function AuctionHistory() {
       supabase.removeChannel(channel);
     };
   }, []);
+
+  const returnToPool = async (player: any) => {
+    if (!isAdmin) return;
+    if (!confirm(`Are you sure you want to return ${player.player_name} to their original pool? This will remove them from ${player.sold_to}'s team.`)) return;
+
+    setActionLoading(player.id);
+    
+    // Reset player status
+    const { error } = await supabase
+      .from("players")
+      .update({
+        status: "Available",
+        auction_status: "pending",
+        sold_to: null,
+        sold_to_id: null,
+        sold_price: null,
+        // Optional: you could reset the pool to their original if you track it, 
+        // but typically they go back to the pool they came from.
+      })
+      .eq("id", player.id);
+
+    if (error) {
+      alert("Error returning player to pool: " + error.message);
+    } else {
+      setSoldPlayers(prev => prev.filter(p => p.id !== player.id));
+      
+      // Log the action if the audit_logs table exists
+      await supabase.from("audit_logs").insert({
+        admin_id: profile.id,
+        admin_name: profile.team_name || profile.full_name || "Unknown",
+        action_type: "RETURN_TO_POOL",
+        details: {
+          player_id: player.id,
+          player_name: player.player_name,
+          previous_buyer: player.sold_to,
+          previous_price: player.sold_price
+        }
+      });
+    }
+    
+    setActionLoading(null);
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900 leading-normal p-4 md:p-8">
@@ -108,16 +164,33 @@ export default function AuctionHistory() {
                       </div>
                     </div>
                     
-                    <div className="flex flex-col items-start sm:items-end bg-white/60 sm:bg-transparent p-3 sm:p-0 rounded-xl relative z-10">
-                      <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">
-                        Sold Price
-                      </span>
-                      <div className="flex items-baseline gap-1">
-                        <span className="text-2xl font-black tracking-tighter text-slate-900">
-                           {player.sold_price?.replace(' Cr', '') || '0'}
+                    <div className="flex items-center gap-4 relative z-10">
+                      <div className="flex flex-col items-start sm:items-end bg-white/60 sm:bg-transparent p-3 sm:p-0 rounded-xl">
+                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">
+                          Sold Price
                         </span>
-                        <span className="text-sm font-black italic text-slate-600">CR</span>
+                        <div className="flex items-baseline gap-1">
+                          <span className="text-2xl font-black tracking-tighter text-slate-900">
+                             {player.sold_price?.replace(' Cr', '') || '0'}
+                          </span>
+                          <span className="text-sm font-black italic text-slate-600">CR</span>
+                        </div>
                       </div>
+
+                      {isAdmin && (
+                        <button
+                          onClick={() => returnToPool(player)}
+                          disabled={actionLoading === player.id}
+                          className="h-12 w-12 flex items-center justify-center rounded-2xl bg-white border-2 border-slate-100 text-slate-400 hover:text-red-600 hover:border-red-100 hover:bg-red-50 transition-all shadow-sm group/btn"
+                          title="Return to Pool"
+                        >
+                          {actionLoading === player.id ? (
+                            <Loader2 className="h-5 w-5 animate-spin" />
+                          ) : (
+                            <RotateCcw className="h-5 w-5 group-hover/btn:rotate-[-45deg] transition-transform" />
+                          )}
+                        </button>
+                      )}
                     </div>
                   </div>
                 )})}

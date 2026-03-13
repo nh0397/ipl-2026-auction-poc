@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { 
   Gavel, Lock, Play, SkipForward, Trophy, XCircle, 
-  Loader2, Users, Zap, ArrowUp, Pause, ChevronRight, Hand, Shuffle, RefreshCw, Clock, Search, User, Shield, ArrowLeft, Settings, Save, History, Briefcase, Activity
+  Loader2, Users, Zap, ArrowUp, Pause, ChevronRight, Hand, Shuffle, RefreshCw, Clock, Search, User, Shield, ArrowLeft, Settings, Save, History, Briefcase, Activity, RotateCcw
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn, getPlayerImage, iplColors } from "@/lib/utils";
@@ -163,6 +163,40 @@ export default function AuctionPage() {
     });
   };
 
+  const returnToPool = async (player: any) => {
+    if (!isAdmin) return;
+    if (!confirm(`Are you sure you want to return ${player.player_name} to their original pool? This will remove them from ${player.sold_to}'s team.`)) return;
+
+    setActionLoading(true);
+    
+    // Reset player status
+    const { error } = await supabase
+      .from("players")
+      .update({
+        status: "Available",
+        auction_status: "pending",
+        sold_to: null,
+        sold_to_id: null,
+        sold_price: null,
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", player.id);
+
+    if (error) {
+      alert("Error returning player to pool: " + error.message);
+    } else {
+      await logAction("RETURN_TO_POOL", {
+        player_id: player.id,
+        player_name: player.player_name,
+        previous_buyer: player.sold_to,
+        previous_price: player.sold_price
+      });
+      await fetchAll();
+    }
+    
+    setActionLoading(false);
+  };
+
   // ─── Phase Actions ───
   const freezePools = async () => {
     setActionLoading(true);
@@ -288,6 +322,7 @@ export default function AuctionPage() {
       auction_status: "sold",
       sold_to: buyerName,
       sold_price: `${salePrice} Cr`,
+      sold_to_id: buyerId,
     }).eq("id", playerId);
 
     // Update auction state
@@ -1329,11 +1364,22 @@ export default function AuctionPage() {
                                  {player.sold_to}
                                </span>
                             </td>
-                            <td className="px-6 py-4 text-right pr-8">
+                            <td className="px-6 py-4 text-right pr-8 flex items-center justify-end gap-4">
                                <div className="flex items-baseline justify-end gap-1">
                                  <span className="text-2xl font-black tracking-tighter text-slate-900">{player.sold_price?.replace(' Cr', '')}</span>
                                  <span className="text-[10px] font-black italic text-slate-400">CR</span>
                                </div>
+
+                               {isAdmin && (
+                                 <button
+                                   onClick={() => returnToPool(player)}
+                                   disabled={actionLoading}
+                                   className="h-10 w-10 flex items-center justify-center rounded-xl bg-white border border-slate-200 text-slate-400 hover:text-red-600 hover:border-red-100 hover:bg-red-50 transition-all shadow-sm group/undo"
+                                   title="Undo Sale / Return to Pool"
+                                 >
+                                   <RotateCcw className="h-4 w-4 group-hover/undo:rotate-[-45deg] transition-transform" />
+                                 </button>
+                               )}
                             </td>
                           </tr>
                         ))
