@@ -419,7 +419,7 @@ export default function AuctionPage() {
     if (!profile || !auctionState || !currentPlayer) return;
     setActionLoading(true);
 
-    const isFirstBid = (auctionState.current_bid === 0 || auctionState.current_bid === null);
+    const isFirstBid = !auctionState.current_bidder_id;
     const newBid = isFirstBid 
       ? auctionState.base_price 
       : auctionState.current_bid + auctionState.min_increment;
@@ -437,7 +437,7 @@ export default function AuctionPage() {
       return;
     }
 
-    const isFirstBid = auctionState.current_bid === 0;
+    const isFirstBid = !auctionState.current_bidder_id;
     const minRequiredBid = isFirstBid 
       ? auctionState.base_price 
       : auctionState.current_bid + auctionState.min_increment;

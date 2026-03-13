@@ -31,7 +31,7 @@ BEGIN
     DECLARE
         v_min_required NUMERIC;
     BEGIN
-        IF v_state.current_bid = 0 THEN
+        IF v_state.current_bidder_id IS NULL THEN
             v_min_required := v_state.base_price;
         ELSE
             v_min_required := v_state.current_bid + v_state.min_increment;
