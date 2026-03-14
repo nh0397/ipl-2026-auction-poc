@@ -45,6 +45,7 @@ export default function AuctionPage() {
   const [pendingPlayers, setPendingPlayers] = useState<any[]>([]);
   const [manualPickId, setManualPickId] = useState<string>("");
   const [mySquad, setMySquad] = useState<any[]>([]);
+  const [passerNotification, setPasserNotification] = useState<string | null>(null);
 
   const isAdmin = profile?.role === "Admin";
   const isParticipant = profile?.role === "Admin" || profile?.role === "Participant";
@@ -293,7 +294,7 @@ export default function AuctionPage() {
       current_player_id: chosenPlayer.id,
       status: "active",
       base_price: basePrice,
-      current_bid: basePrice,
+      current_bid: 0,
       current_bidder_id: null,
       current_bidder_name: null,
       min_increment: poolCfg.minIncrement,
@@ -561,9 +562,18 @@ export default function AuctionPage() {
 
   return (
     <div className="min-h-screen bg-[#FDFDFF] p-4 md:p-10 font-sans">
-      <div className="max-w-5xl mx-auto space-y-8">
+      <div className="max-w-7xl mx-auto px-4 py-8">
+        {/* Pass Notification Overlay */}
+        {passerNotification && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center pointer-events-none">
+            <div className="bg-red-600 text-white px-12 py-8 rounded-[3rem] shadow-2xl shadow-red-500/50 animate-in zoom-in duration-300 flex flex-col items-center gap-2 border-[8px] border-white">
+              <span className="text-6xl font-black italic uppercase tracking-tighter">OUT!</span>
+              <span className="text-2xl font-bold uppercase tracking-widest opacity-90">{passerNotification}</span>
+            </div>
+          </div>
+        )}
 
-        {/* ── Header ── */}
+        {/* ── Tabs Navigation ── */}
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
           <div>
             <div className="flex items-center gap-2 mb-1">
@@ -772,7 +782,11 @@ export default function AuctionPage() {
                 <Button onClick={markSold} disabled={actionLoading || !auctionState?.current_bidder_id} className="bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-6 flex gap-2 disabled:opacity-30">
                   <Trophy size={14} /> Sold
                 </Button>
-                <Button onClick={markUnsold} disabled={actionLoading} className="bg-red-500 hover:bg-red-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-6 flex gap-2">
+                <Button 
+                  onClick={markUnsold} 
+                  disabled={actionLoading || (auctionState?.current_bid > 0)} 
+                  className="bg-red-500 hover:bg-red-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-6 flex gap-2 disabled:opacity-30 disabled:grayscale"
+                >
                   <XCircle size={14} /> Unsold
                 </Button>
               </>
