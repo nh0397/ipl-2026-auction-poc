@@ -380,6 +380,7 @@ export default function AdminDashboard() {
     const { error: playerError } = await supabase.from("players").update({
       status: "Available",
       auction_status: "pending",
+      pool: player.base_pool || player.pool, // Restore to original pool if tracked
       sold_to: null,
       sold_to_id: null,
       sold_price: null,
@@ -550,10 +551,10 @@ export default function AdminDashboard() {
                             <Button 
                               size="sm" 
                               variant="destructive"
-                              className="font-bold h-9 px-4 rounded-xl bg-orange-600 hover:bg-orange-700"
+                              className="font-bold h-9 px-4 rounded-xl bg-orange-600 hover:bg-orange-700 text-white"
                               onClick={() => handleRemoveTeam(profile)}
                             >
-                              <LogOut className="h-4 w-4 mr-2" />
+                              <LogOut className="h-4 w-4 mr-2 text-white" />
                               Remove Team
                             </Button>
                           </>

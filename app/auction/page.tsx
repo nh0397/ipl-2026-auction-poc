@@ -176,6 +176,7 @@ export default function AuctionPage() {
       .update({
         status: "Available",
         auction_status: "pending",
+        pool: player.base_pool || player.pool, // Restore to original pool if tracked
         sold_to: null,
         sold_to_id: null,
         sold_price: null,
@@ -213,7 +214,8 @@ export default function AuctionPage() {
     const { configId } = await getAuctionIds();
     await supabase.from("auction_config").update({ status: "live", current_pool: startPool, updated_at: new Date().toISOString() }).eq("id", configId);
     await logAction("START_AUCTION", { initial_pool: startPool });
-    await pickNextPlayer(startPool);
+    // Removed auto-pickNextPlayer(startPool) to ensure manual selection
+    await fetchAll();
     setActionLoading(false);
   };
 
@@ -231,7 +233,8 @@ export default function AuctionPage() {
     const { configId } = await getAuctionIds();
     await supabase.from("auction_config").update({ current_pool: pool, updated_at: new Date().toISOString() }).eq("id", configId);
     await logAction("SWITCH_POOL", { new_pool: pool });
-    await pickNextPlayer(pool);
+    // Removed auto-pickNextPlayer(pool) to ensure manual selection
+    await fetchAll();
     setActionLoading(false);
   };
 
@@ -252,7 +255,9 @@ export default function AuctionPage() {
         const nextPool = POOL_ORDER[currentIndex + 1];
         await supabase.from("auction_config").update({ current_pool: nextPool, updated_at: new Date().toISOString() }).eq("id", configId);
         await logAction("POOL_EXHAUSTED_MOVING_TO_NEXT", { exhausted_pool: pool, next_pool: nextPool });
-        await pickNextPlayer(nextPool);
+        // Instead of pickNextPlayer(nextPool), just pause/wait for manual intervention
+        await supabase.from("auction_state").update({ status: "waiting", current_player_id: null }).eq("id", stateId);
+        await fetchAll();
       } else {
         // Pool exhausted AND no more pools left
         await supabase.from("auction_config").update({ status: "paused", updated_at: new Date().toISOString() }).eq("id", configId);
