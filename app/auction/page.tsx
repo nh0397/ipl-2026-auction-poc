@@ -13,10 +13,10 @@ import { TeamNamePrompt } from "@/components/auction/TeamNamePrompt";
 // Pool configuration
 const POOL_CONFIG: Record<string, { basePrice: number; minIncrement: number }> = {
   "Marquee":  { basePrice: 5,   minIncrement: 0.5  },
-  "Pool 1":   { basePrice: 2,   minIncrement: 0.25 },
-  "Pool 2":   { basePrice: 1,   minIncrement: 0.25 },
-  "Pool 3":   { basePrice: 0.5, minIncrement: 0.25 },
-  "Unsold":   { basePrice: 0.5, minIncrement: 0.25 },
+  "Pool 1":   { basePrice: 2,   minIncrement: 0.5  }, // Was 0.25
+  "Pool 2":   { basePrice: 1,   minIncrement: 0.25 }, // Stays 0.25
+  "Pool 3":   { basePrice: 0.5, minIncrement: 0.1  }, // Was 0.25
+  "Unsold":   { basePrice: 0.5, minIncrement: 0.1  }, // Was 0.25
 };
 
 const POOL_ORDER = ["Marquee", "Pool 1", "Pool 2", "Pool 3", "Unsold"];
