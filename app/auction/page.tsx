@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { 
   Gavel, Lock, Play, SkipForward, Trophy, XCircle, 
-  Loader2, Users, Zap, ArrowUp, Pause, ChevronRight, Hand, Shuffle, RefreshCw, Clock, Search, User, Shield, ArrowLeft, Settings, Save, History, Briefcase, Activity, RotateCcw
+  Loader2, Users, Zap, ArrowUp, Pause, ChevronRight, Hand, Shuffle, RefreshCw, Clock, Search, User, Shield, ArrowLeft, Settings, Save, History, Briefcase, Activity, RotateCcw, Download
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn, getPlayerImage, iplColors } from "@/lib/utils";
@@ -505,6 +505,29 @@ export default function AuctionPage() {
 
     await fetchAll();
     setActionLoading(false);
+  };
+
+  const downloadTeamCSV = (team: any, players: any[]) => {
+    const headers = ["Player Name", "IPL Team", "Role", "Bid Price (Cr)"];
+    const rows = players.map(p => [
+      p.player_name,
+      p.team,
+      p.role || "N/A",
+      p.sold_price || "0"
+    ]);
+
+    let csvContent = `Team: ${team.team_name || team.full_name}\n\n`;
+    csvContent += headers.join(",") + "\n";
+    csvContent += rows.map(r => r.map(cell => `"${cell}"`).join(",")).join("\n");
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `${(team.team_name || team.full_name).replace(/\s+/g, '_')}_Roster.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   // ─── Pass / Out ───
@@ -1230,7 +1253,15 @@ export default function AuctionPage() {
                           <div className="text-xs font-bold text-slate-500 tracking-widest mt-1 uppercase">{activeTeam.full_name}</div>
                         </div>
                         
-                        <div className="flex flex-wrap gap-3">
+                        <div className="flex flex-wrap gap-3 items-center">
+                            <Button 
+                              onClick={() => downloadTeamCSV(activeTeam, teamPlayers)}
+                              variant="outline"
+                              className="bg-white border-slate-200 hover:bg-slate-50 text-slate-600 font-black uppercase text-[10px] tracking-widest h-12 px-6 rounded-2xl flex gap-2 mr-4"
+                            >
+                              <Download size={14} /> Download Roster CSV
+                            </Button>
+
                             <div className="p-3 bg-white rounded-2xl border border-slate-100 flex flex-col items-center justify-center min-w-[80px]">
                               <span className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Bat/WK</span>
                               <span className="text-xl font-black text-slate-800">{batters}</span>
