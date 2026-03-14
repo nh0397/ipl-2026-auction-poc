@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { 
   Gavel, Lock, Play, SkipForward, Trophy, XCircle, 
-  Loader2, Users, Zap, ArrowUp, Pause, ChevronRight, Hand, Shuffle, RefreshCw, Clock, Search, User, Shield, ArrowLeft, Settings, Save, History, Briefcase, Activity, RotateCcw, Download
+  Loader2, Users, Zap, ArrowUp, Pause, ChevronRight, Hand, Shuffle, RefreshCw, Clock, Search, User, Shield, ArrowLeft, Settings, Save, History, Briefcase, Activity, RotateCcw, Download, Timer
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn, getPlayerImage, iplColors } from "@/lib/utils";
@@ -46,6 +46,40 @@ export default function AuctionPage() {
   const [manualPickId, setManualPickId] = useState<string>("");
   const [mySquad, setMySquad] = useState<any[]>([]);
   const [passerNotification, setPasserNotification] = useState<string | null>(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (auctionState?.status === "active" && auctionState?.started_at) {
+      const startTime = new Date(auctionState.started_at).getTime();
+      
+      const updateTimer = () => {
+        const now = new Date().getTime();
+        const diff = Math.floor((now - startTime) / 1000);
+        setElapsedSeconds(Math.max(0, diff));
+      };
+
+      updateTimer();
+      interval = setInterval(updateTimer, 1000);
+    } else {
+      setElapsedSeconds(0);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [auctionState?.status, auctionState?.started_at]);
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const resetTimer = async () => {
+    const { stateId } = await getAuctionIds();
+    await supabase.from("auction_state").update({ started_at: new Date().toISOString() }).eq("id", stateId);
+    await fetchAll();
+  };
 
   const isAdmin = profile?.role === "Admin";
   const isParticipant = profile?.role === "Admin" || profile?.role === "Participant";
@@ -807,6 +841,10 @@ export default function AuctionPage() {
                   <Shuffle size={14} /> Skip
                 </Button>
                 <div className="h-6 w-[1px] bg-white/10" />
+                <Button onClick={resetTimer} disabled={actionLoading} className="bg-white/10 hover:bg-white/20 text-blue-400 rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-5 flex gap-2 border border-white/10">
+                  <Timer size={14} /> Reset Clock
+                </Button>
+                <div className="h-6 w-[1px] bg-white/10" />
                 <Button onClick={markSold} disabled={actionLoading || !auctionState?.current_bidder_id} className="bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-6 flex gap-2 disabled:opacity-30">
                   <Trophy size={14} /> Sold
                 </Button>
@@ -886,7 +924,12 @@ export default function AuctionPage() {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
             {/* Player Card */}
-            <div className="lg:col-span-2 bg-white rounded-[2.5rem] border border-slate-100 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.05)] overflow-hidden">
+            <div className="lg:col-span-2 bg-white rounded-[2.5rem] border border-slate-100 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.05)] overflow-hidden relative">
+              {/* Timer Badge (Safe Overlay) */}
+              <div className="absolute top-6 right-8 flex items-center gap-2 bg-slate-900 text-white px-4 py-2 rounded-2xl shadow-lg z-10">
+                <Timer size={14} className="text-blue-400 animate-pulse" />
+                <span className="text-sm font-black italic tracking-wider tabular-nums">{formatTime(elapsedSeconds)}</span>
+              </div>
               <div className="p-8 flex flex-col md:flex-row items-center gap-8">
                 <div className="h-32 w-32 rounded-[2rem] bg-slate-50 overflow-hidden ring-4 ring-white shadow-xl flex items-center justify-center text-slate-300 shrink-0">
                   {currentPlayer.image_url
