@@ -47,11 +47,11 @@ export default function Dashboard() {
           
           setRecentSignings(soldPlayers || []);
 
-          // Fetch my squad (players sold to me)
+          // Fetch my squad (players sold to me or my team name)
           const { data: squad } = await supabase
             .from("players")
             .select("*")
-            .eq("sold_to_id", session.user.id)
+            .or(`sold_to_id.eq.${session.user.id},sold_to.eq."${profileData.team_name}"`)
             .order("player_name", { ascending: true });
           setMySquad(squad || []);
 
@@ -62,10 +62,11 @@ export default function Dashboard() {
               if (payload.new.status === 'Sold') {
                 setRecentSignings(prev => [payload.new, ...prev.filter(p => p.id !== payload.new.id)].slice(0, 10));
               }
-              if (payload.new.sold_to_id === session.user.id || payload.old.sold_to_id === session.user.id) {
+              if (payload.new.sold_to_id === session.user.id || payload.old.sold_to_id === session.user.id || 
+                  payload.new.sold_to === profileData.team_name || payload.old.sold_to === profileData.team_name) {
                 supabase.from("players")
                   .select("*")
-                  .eq("sold_to_id", session.user.id)
+                  .or(`sold_to_id.eq.${session.user.id},sold_to.eq."${profileData.team_name}"`)
                   .order("player_name", { ascending: true })
                   .then(({ data }) => setMySquad(data || []));
               }

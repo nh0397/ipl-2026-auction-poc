@@ -202,7 +202,7 @@ export default function ScoreboardPage() {
     if (!selectedMatchId || !profile) return;
     setSaving(true);
 
-    const mySquadIds = allPlayers.filter(p => p.sold_to_id === profile.id).map(p => p.id);
+    const mySquadIds = allPlayers.filter(p => p.sold_to_id === profile.id || p.sold_to === profile.team_name).map(p => p.id);
     const updates = Object.entries(matchPoints)
       .filter(([playerId]) => mySquadIds.includes(playerId))
       .map(([playerId, points]) => ({
@@ -226,7 +226,7 @@ export default function ScoreboardPage() {
     const team = franchises.find(t => t.id === targetTeamId);
     if (!team) return;
 
-    const teamPlayers = allPlayers.filter(p => p.sold_to_id === targetTeamId);
+    const teamPlayers = allPlayers.filter(p => p.sold_to_id === targetTeamId || p.sold_to === team.team_name);
     
     let csvContent = "data:text/csv;charset=utf-8,";
     csvContent += "Player Name,Team,Role,Price\n";
@@ -259,7 +259,7 @@ export default function ScoreboardPage() {
 
     const standingsData = franchises.map(team => {
       let totalPoints = 0;
-      const teamPlayers = allPlayers.filter(p => p.sold_to_id === team.id);
+      const teamPlayers = allPlayers.filter(p => p.sold_to_id === team.id || p.sold_to === team.team_name);
       
       allMatches.forEach(m => {
         const nom = allNoms?.find(n => n.team_id === team.id && n.match_id === m.id);

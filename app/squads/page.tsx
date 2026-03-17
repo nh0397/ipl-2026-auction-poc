@@ -55,11 +55,13 @@ export default function SquadsOverview() {
 
       if (soldPlayers) {
         soldPlayers.forEach(p => {
-          const teamKey = p.sold_to;
-          if (teamKey && grouped[teamKey]) {
+          // Match by ID first, then fallback to team name
+          const team = teamProfiles.find(t => t.id === p.sold_to_id || t.team_name === p.sold_to);
+          const teamKey = team?.team_name || team?.full_name || p.sold_to;
+          
+          if (teamKey) {
+            if (!grouped[teamKey]) grouped[teamKey] = [];
             grouped[teamKey].push(p);
-          } else if (teamKey) {
-             grouped[teamKey] = [p];
           }
         });
       }
