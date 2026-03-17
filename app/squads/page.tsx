@@ -27,53 +27,55 @@ export default function SquadsOverview() {
   };
 
   const fetchTeamsAndSquads = async () => {
-    setLoading(true);
-    
-    // 1. Fetch all franchise owners/admins
-    const { data: teamProfiles } = await supabase
-      .from("profiles")
-      .select("*")
-      .neq("role", "Viewer")
-      .order("team_name", { ascending: true });
+    try {
+      setLoading(true);
+      
+      // 1. Fetch all franchise owners/admins
+      const { data: teamProfiles } = await supabase
+        .from("profiles")
+        .select("*")
+        .neq("role", "Viewer")
+        .order("team_name", { ascending: true });
 
-    if (!teamProfiles) {
-      setLoading(false);
-      return;
-    }
-    setTeams(teamProfiles);
+      if (!teamProfiles) return;
+      
+      setTeams(teamProfiles);
 
-    // 2. Fetch all sold players
-    const { data: soldPlayers } = await supabase
-      .from("players")
-      .select("*")
-      .eq("auction_status", "sold"); // Fixed: status -> auction_status and Sold -> sold based on admin/page.tsx
-    
-    // 3. Group players by team name
-    const grouped: Record<string, any[]> = {};
-    teamProfiles.forEach(t => {
-      grouped[t.team_name || t.full_name] = [];
-    });
-
-    if (soldPlayers) {
-      soldPlayers.forEach(p => {
-        const teamKey = p.sold_to;
-        if (teamKey && grouped[teamKey]) {
-          grouped[teamKey].push(p);
-        } else if (teamKey) {
-           grouped[teamKey] = [p];
-        }
+      // 2. Fetch all sold players
+      const { data: soldPlayers } = await supabase
+        .from("players")
+        .select("*")
+        .eq("auction_status", "sold"); 
+      
+      // 3. Group players by team name
+      const grouped: Record<string, any[]> = {};
+      teamProfiles.forEach(t => {
+        grouped[t.team_name || t.full_name] = [];
       });
-    }
 
-    setPlayersByTeam(grouped);
-    if (teamProfiles.length > 0 && !activeTeamId) {
-      setActiveTeamId(teamProfiles[0].id);
+      if (soldPlayers) {
+        soldPlayers.forEach(p => {
+          const teamKey = p.sold_to;
+          if (teamKey && grouped[teamKey]) {
+            grouped[teamKey].push(p);
+          } else if (teamKey) {
+             grouped[teamKey] = [p];
+          }
+        });
+      }
+
+      setPlayersByTeam(grouped);
+      if (teamProfiles.length > 0 && !activeTeamId) {
+        setActiveTeamId(teamProfiles[0].id);
+      }
+      
+      const { data: conf } = await supabase.from("auction_config").select("*").single();
+      setConfig(conf);
+    } catch (error) {
+      console.error("Error fetching squads data:", error);
+    } finally {
+      setLoading(false);
     }
-    
-    const { data: conf } = await supabase.from("auction_config").select("*").single();
-    setConfig(conf);
-    
-    setLoading(false);
   };
 
   useEffect(() => {

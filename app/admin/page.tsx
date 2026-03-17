@@ -145,14 +145,18 @@ export default function AdminDashboard() {
   };
 
   const fetchUsers = async () => {
-    setLoading(true);
-    const { data } = await supabase
-      .from("profiles")
-      .select("*")
-      .order("created_at", { ascending: false });
-    
-    if (data) setUsers(data);
-    setLoading(false);
+    try {
+      setLoading(true);
+      const { data } = await supabase
+        .from("profiles")
+        .select("*")
+        .order("full_name");
+      if (data) setUsers(data);
+    } catch (error) {
+      console.error("Error fetching users:", error);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleRemoveTeam = async (profile: any) => {

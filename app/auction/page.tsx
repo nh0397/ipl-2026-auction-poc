@@ -86,73 +86,77 @@ export default function AuctionPage() {
 
   // ─── Data Fetching ───
   const fetchAll = useCallback(async () => {
-    // Public data (no auth needed — viewers can see this)
-    const { data: config } = await supabase.from("auction_config").select("*").limit(1).single();
-    setAuctionConfig(config);
+    try {
+      // Public data (no auth needed — viewers can see this)
+      const { data: config } = await supabase.from("auction_config").select("*").limit(1).single();
+      setAuctionConfig(config);
 
-    const { data: state } = await supabase.from("auction_state").select("*").limit(1).single();
-    setAuctionState(state);
+      const { data: state } = await supabase.from("auction_state").select("*").limit(1).single();
+      setAuctionState(state);
 
-    // Current player
-    if (state?.current_player_id) {
-      const { data: player } = await supabase.from("players").select("*").eq("id", state.current_player_id).single();
-      setCurrentPlayer(player);
+      // Current player
+      if (state?.current_player_id) {
+        const { data: player } = await supabase.from("players").select("*").eq("id", state.current_player_id).single();
+        setCurrentPlayer(player);
 
-      const { data: bids } = await supabase
-        .from("bids")
-        .select("*")
-        .eq("player_id", state.current_player_id)
-        .order("created_at", { ascending: false })
-        .limit(20);
-      setBidHistory(bids || []);
-    } else {
-      setCurrentPlayer(null);
-      setBidHistory([]);
-    }
-
-    // Pool counts & All Players for History
-    const { data: playersData } = await supabase.from("players").select("*");
-    if (playersData) {
-      setAllPlayers(playersData || []);
-      const counts: Record<string, { total: number; remaining: number }> = {};
-      for (const pool of POOL_ORDER) {
-        const poolPlayers = playersData.filter(p => p.pool === pool);
-        counts[pool] = {
-          total: poolPlayers.length,
-          remaining: poolPlayers.filter(p => p.auction_status === "pending" || p.auction_status === "on_block").length,
-        };
+        const { data: bids } = await supabase
+          .from("bids")
+          .select("*")
+          .eq("player_id", state.current_player_id)
+          .order("created_at", { ascending: false })
+          .limit(20);
+        setBidHistory(bids || []);
+      } else {
+        setCurrentPlayer(null);
+        setBidHistory([]);
       }
-      setPoolCounts(counts);
 
-      // Pending players in current pool (for manual pick)
-      const currentPoolName = config?.current_pool || "Marquee";
-      const poolPending = playersData.filter(p => p.pool === currentPoolName && p.auction_status === "pending");
-      setPendingPlayers(poolPending);
+      // Pool counts & All Players for History
+      const { data: playersData } = await supabase.from("players").select("*");
+      if (playersData) {
+        setAllPlayers(playersData || []);
+        const counts: Record<string, { total: number; remaining: number }> = {};
+        for (const pool of POOL_ORDER) {
+          const poolPlayers = playersData.filter(p => p.pool === pool);
+          counts[pool] = {
+            total: poolPlayers.length,
+            remaining: poolPlayers.filter(p => p.auction_status === "pending" || p.auction_status === "on_block").length,
+          };
+        }
+        setPoolCounts(counts);
+
+        // Pending players in current pool (for manual pick)
+        const currentPoolName = config?.current_pool || "Marquee";
+        const poolPending = playersData.filter(p => p.pool === currentPoolName && p.auction_status === "pending");
+        setPendingPlayers(poolPending);
+      }
+
+      // All profiles (for franchise status panel) — only participants/admins
+      const { data: profiles } = await supabase.from("profiles").select("*");
+      if (profiles) {
+        const participants = profiles.filter(p => p.role === "Admin" || p.role === "Participant");
+        setAllProfiles(participants);
+        setTotalParticipants(participants.length);
+      }
+
+      // Auth-dependent data (profile)
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        const { data: prof } = await supabase.from("profiles").select("*").eq("id", session.user.id).single();
+        setProfile(prof);
+
+        const { data: squad } = await supabase
+          .from("players")
+          .select("*")
+          .eq("sold_to_id", session.user.id)
+          .order("player_name", { ascending: true });
+        setMySquad(squad || []);
+      }
+    } catch (error) {
+      console.error("Error fetching auction data:", error);
+    } finally {
+      setLoading(false);
     }
-
-    // All profiles (for franchise status panel) — only participants/admins
-    const { data: profiles } = await supabase.from("profiles").select("*");
-    if (profiles) {
-      const participants = profiles.filter(p => p.role === "Admin" || p.role === "Participant");
-      setAllProfiles(participants);
-      setTotalParticipants(participants.length);
-    }
-
-    // Auth-dependent data (profile)
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session) {
-      const { data: prof } = await supabase.from("profiles").select("*").eq("id", session.user.id).single();
-      setProfile(prof);
-
-      const { data: squad } = await supabase
-        .from("players")
-        .select("*")
-        .eq("sold_to_id", session.user.id)
-        .order("player_name", { ascending: true });
-      setMySquad(squad || []);
-    }
-
-    setLoading(false);
   }, []);
 
   useEffect(() => {

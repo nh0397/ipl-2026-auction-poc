@@ -51,57 +51,61 @@ export default function ScoreboardPage() {
   }, [selectedMatchId]);
 
   const fetchInitialData = async () => {
-    setLoading(true);
-    const { data: { session } } = await supabase.auth.getSession();
-    
-    // 1. Profile
-    if (session) {
-      const { data: profileData } = await supabase
+    try {
+      setLoading(true);
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      // 1. Profile
+      if (session) {
+        const { data: profileData } = await supabase
+          .from("profiles")
+          .select("*")
+          .eq("id", session.user.id)
+          .single();
+        setProfile(profileData);
+        setCvcChangesUsed(profileData?.cvc_changes_used || 0);
+      }
+
+      // 2. All Franchises (Teammates)
+      const { data: teamsDataRaw } = await supabase
         .from("profiles")
         .select("*")
-        .eq("id", session.user.id)
-        .single();
-      setProfile(profileData);
-      setCvcChangesUsed(profileData?.cvc_changes_used || 0);
+        .neq("role", "Viewer")
+        .order("team_name", { ascending: true });
+      
+      const teamsData = teamsDataRaw || [];
+      setFranchises(teamsData);
+
+      // Default teammate tab to the first teammate
+      if (session && teamsData.length > 0) {
+        const firstTeammate = teamsData.find(t => t.id !== session.user.id);
+        if (firstTeammate) setSelectedTeammateId(firstTeammate.id);
+      }
+
+      // 3. All Sold Players
+      const { data: playersData } = await supabase
+        .from("players")
+        .select("*")
+        .eq("auction_status", "sold")
+        .order("player_name", { ascending: true });
+      setAllPlayers(playersData || []);
+
+      // 4. All Matches
+      const { data: matchesData } = await supabase
+        .from("matches")
+        .select("*")
+        .order("match_no", { ascending: true });
+      
+      if (matchesData) {
+        setAllMatches(matchesData);
+        const nextMatch = matchesData.find(m => !m.is_locked) || matchesData[0];
+        if (nextMatch) setSelectedMatchId(nextMatch.id);
+      }
+    } catch (error) {
+      console.error("Error fetching scoreboard data:", error);
+    } finally {
+      setLoading(false);
     }
-
-    // 2. All Franchises (Teammates)
-    const { data: teamsDataRaw } = await supabase
-      .from("profiles")
-      .select("*")
-      .neq("role", "Viewer")
-      .order("team_name", { ascending: true });
-    
-    const teamsData = teamsDataRaw || [];
-    setFranchises(teamsData);
-
-    // Default teammate tab to the first teammate
-    if (session && teamsData.length > 0) {
-      const firstTeammate = teamsData.find(t => t.id !== session.user.id);
-      if (firstTeammate) setSelectedTeammateId(firstTeammate.id);
-    }
-
-    // 3. All Sold Players
-    const { data: playersData } = await supabase
-      .from("players")
-      .select("*")
-      .eq("auction_status", "sold")
-      .order("player_name", { ascending: true });
-    setAllPlayers(playersData || []);
-
-    // 4. All Matches
-    const { data: matchesData } = await supabase
-      .from("matches")
-      .select("*")
-      .order("match_no", { ascending: true });
-    
-    if (matchesData) {
-      setAllMatches(matchesData);
-      const nextMatch = matchesData.find(m => !m.is_locked) || matchesData[0];
-      if (nextMatch) setSelectedMatchId(nextMatch.id);
-    }
-
-    setLoading(false);
   };
 
   const fetchMatchSpecificData = async (matchId: string) => {

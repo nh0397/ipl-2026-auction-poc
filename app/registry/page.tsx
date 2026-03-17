@@ -37,28 +37,33 @@ export default function RegistryPage() {
   }, []);
 
   const fetchData = async () => {
-    setLoading(true);
-    const { data: { session } } = await supabase.auth.getSession();
-    
-    if (session) {
-      const { data: profileData } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", session.user.id)
-        .single();
-      setProfile(profileData);
+    try {
+      setLoading(true);
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (session) {
+        const { data: profileData } = await supabase
+          .from("profiles")
+          .select("*")
+          .eq("id", session.user.id)
+          .single();
+        setProfile(profileData);
 
-      const { data: all } = await supabase
-        .from("players")
-        .select("*")
-        .order("player_name", { ascending: true });
-      setAllPlayers(all || []);
+        const { data: all } = await supabase
+          .from("players")
+          .select("*")
+          .order("player_name", { ascending: true });
+        setAllPlayers(all || []);
 
-      // Fetch auction config if it exists
-      const { data: config } = await supabase.from("auction_config").select("*").limit(1).single();
-      if (config) setAuctionConfig(config);
+        // Fetch auction config if it exists
+        const { data: config } = await supabase.from("auction_config").select("*").limit(1).single();
+        if (config) setAuctionConfig(config);
+      }
+    } catch (error) {
+      console.error("Error fetching registry data:", error);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const filteredRegistry = allPlayers.filter(p => {
