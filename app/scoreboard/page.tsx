@@ -14,6 +14,7 @@ import {
 import { cn, getPlayerImage, iplColors } from "@/lib/utils";
 import { useRouter } from "next/navigation";
 import { calculateDream11Points, MatchStats } from "@/lib/scoring";
+import { syncMatchScores } from "@/lib/cricapi";
 
 export default function ScoreboardPage() {
   const [profile, setProfile] = useState<any>(null);
@@ -280,6 +281,24 @@ export default function ScoreboardPage() {
     setStandings(standingsData);
   };
 
+  const handleSyncScores = async () => {
+    const match = allMatches.find(m => m.id === selectedMatchId);
+    if (!match?.api_match_id) {
+      alert("This match is not linked to CricAPI.");
+      return;
+    }
+
+    setSaving(true);
+    const result = await syncMatchScores(match.id, match.api_match_id);
+    if (result.success) {
+      alert(`Successfully synced ${result.count} player scores!`);
+      await fetchMatchSpecificData(selectedMatchId);
+    } else {
+      alert("Sync failed: " + result.error);
+    }
+    setSaving(false);
+  };
+
   useEffect(() => {
     if (activeTab === "standings") {
       calculateStandings();
@@ -309,7 +328,7 @@ export default function ScoreboardPage() {
               </div>
            </div>
 
-           <div className="flex items-center gap-3 bg-slate-100 p-1 rounded-2xl border border-slate-200">
+            <div className="flex items-center gap-3 bg-slate-100 p-1 rounded-2xl border border-slate-200">
               <Button 
                 variant="ghost" 
                 size="icon" 
@@ -341,8 +360,19 @@ export default function ScoreboardPage() {
               >
                 <ChevronRight size={20} />
               </Button>
-           </div>
-        </div>
+            </div>
+
+            {profile?.role === 'Admin' && (
+              <Button 
+                onClick={handleSyncScores}
+                disabled={saving || !selectedMatch?.api_match_id}
+                className="bg-slate-900 text-white rounded-2xl font-black uppercase tracking-widest text-[10px] px-6 h-[52px] shadow-lg flex gap-2"
+              >
+                {saving ? <RefreshCw className="animate-spin" size={16} /> : <Zap size={16} className="text-yellow-400" />}
+                Sync From CricAPI
+              </Button>
+            )}
+         </div>
 
         {/* Tab Toggle */}
         <div className="flex bg-white/50 backdrop-blur-md p-1.5 rounded-[1.5rem] border border-slate-200 w-full md:w-fit">
