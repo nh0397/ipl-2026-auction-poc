@@ -1085,6 +1085,7 @@ export default function AuctionPage() {
                         onClick={passOnPlayer}
                         disabled={
                           actionLoading || 
+                          auctionState.current_bidder_id === profile?.id ||
                           (auctionState.passed_user_ids || []).includes(profile?.id)
                         }
                         className={cn(

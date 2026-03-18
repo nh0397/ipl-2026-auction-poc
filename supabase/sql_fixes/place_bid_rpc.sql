@@ -48,7 +48,7 @@ BEGIN
         current_bid = p_amount,
         current_bidder_id = p_bidder_id,
         current_bidder_name = p_bidder_name,
-        passed_user_ids = '{}', -- Reset all passes whenever a new bid is placed
+        passed_user_ids = v_state.passed_user_ids, -- Preserve 'Out' status for the whole player duration
         updated_at = NOW()
     WHERE id = v_state.id;
 
