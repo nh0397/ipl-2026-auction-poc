@@ -498,7 +498,7 @@ export default function ScoreboardPage() {
                                className="bg-emerald-600 hover:bg-emerald-700 text-white px-8 py-6 rounded-2xl font-black uppercase tracking-widest flex gap-2 shadow-xl"
                              >
                                 {saving ? <RefreshCw className="animate-spin" size={16} /> : <Save size={16} />}
-                                Sync Points ({allPlayers.filter(p => p.sold_to_id === profile.id).length})
+                                 Sync Points ({allPlayers.filter(p => p.sold_to_id === profile.id || p.sold_to === profile.team_name).length})
                              </Button>
                           )}
                           <Button 
@@ -549,11 +549,11 @@ export default function ScoreboardPage() {
                                       return false;
                                    })
                                    .map(team => {
-                                   const teamPlayers = allPlayers.filter(p => 
-                                      p.sold_to_id === team.id && 
-                                      (p.player_name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                                       team.team_name.toLowerCase().includes(searchQuery.toLowerCase()))
-                                   );
+                                    const teamPlayers = allPlayers.filter(p => 
+                                       (p.sold_to_id === team.id || p.sold_to === team.team_name) && 
+                                       (p.player_name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                                        team.team_name.toLowerCase().includes(searchQuery.toLowerCase()))
+                                    );
                                    if (teamPlayers.length === 0) return null;
 
                                    const nom = allNominations.find(n => n.team_id === team.id);
