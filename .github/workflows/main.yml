@@ -44,7 +44,7 @@ jobs:
           username: ${{ secrets.MAIL_USERNAME || secrets.SMTP_USER }}
           password: ${{ secrets.MAIL_PASSWORD || secrets.SMTP_PASS }}
           subject: 'Daily DB Backup - IPL Auction - ${{ env.CURRENT_DATE }}'
-          to: jalan.me4u@gmail.com,harshshah661992@gmail.com,tradingwithparthshah@gmail.com,naisicric97@gmail.com
+          to: naisicric97@gmail.com
           from: "IPL Auction System <${{ secrets.MAIL_USERNAME || secrets.SMTP_USER || 'backup@ipl2026.com' }}>"
           body: |
             Hello Owners,
