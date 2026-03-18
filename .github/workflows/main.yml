@@ -30,6 +30,11 @@ jobs:
       - name: Zip backup
         run: zip -r db-backup-$(date +%Y%m%d-%H%M%S).zip backups/
 
+      - name: Set Date Variables
+        run: |
+          echo "CURRENT_DATE=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
+          echo "CURRENT_DATETIME=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
+
       - name: Send email with backup
         uses: dawidd6/action-send-mail@v4
         with:
@@ -37,8 +42,15 @@ jobs:
           server_port: 587
           username: ${{ secrets.MAIL_USERNAME || secrets.SMTP_USER }}
           password: ${{ secrets.MAIL_PASSWORD || secrets.SMTP_PASS }}
-          subject: 'IPL 2026 DB Backup - $(date +%Y-%m-%d)'
-          to: jalan.me4u@gmail.com,harshshah661992@gmail.com,tradingwithparthshah@gmail.com,naisicric97@gmail.com
-          from: "IPL Backup Bot <${{ secrets.MAIL_USERNAME || secrets.SMTP_USER || 'backup@ipl2026.com' }}>"
-          body: 'Hello Owners,\n\nAttached is the latest automated SQL backup for the IPL 2026 Auction database.\n\nThis includes both schema and data dumps.\n\nDate: $(date +%Y-%m-%d %H:%M:%S) UTC'
+          subject: 'Daily DB Backup - IPL Auction - ${{ env.CURRENT_DATE }}'
+          to: naisicric97@gmail.com
+          from: "IPL Auction System <${{ secrets.MAIL_USERNAME || secrets.SMTP_USER || 'backup@ipl2026.com' }}>"
+          body: |
+            Hello Owners,
+            
+            Attached is the latest automated SQL backup for the IPL 2026 Auction database.
+            
+            This includes both schema and data dumps.
+            
+            Date: ${{ env.CURRENT_DATETIME }} UTC
           attachments: '*.zip'
