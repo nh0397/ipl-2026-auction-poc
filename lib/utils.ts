@@ -25,7 +25,7 @@ export const iplColors: Record<
     text: "text-yellow-800",
   },
   MI: { bg: "bg-blue-50", border: "border-blue-200", text: "text-blue-800" },
-  RCB: { bg: "bg-red-50", border: "border-red-200", text: "text-red-800" },
+  RCB: { bg: "bg-red-100", border: "border-red-300", text: "text-red-950" },
   KKR: {
     bg: "bg-purple-50",
     border: "border-purple-200",
@@ -38,7 +38,7 @@ export const iplColors: Record<
     text: "text-emerald-800",
   },
   LSG: { bg: "bg-cyan-50", border: "border-cyan-200", text: "text-cyan-800" },
-  PBKS: { bg: "bg-rose-50", border: "border-rose-200", text: "text-rose-800" },
+  PBKS: { bg: "bg-rose-50", border: "border-rose-200", text: "text-rose-700" },
   RR: { bg: "bg-pink-50", border: "border-pink-200", text: "text-pink-800" },
   SRH: {
     bg: "bg-orange-50",
