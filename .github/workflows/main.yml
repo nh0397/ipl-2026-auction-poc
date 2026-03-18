@@ -35,10 +35,10 @@ jobs:
         with:
           server_address: smtp.gmail.com
           server_port: 587
-          username: ${{ secrets.MAIL_USERNAME }}
-          password: ${{ secrets.MAIL_PASSWORD }}
+          username: ${{ secrets.MAIL_USERNAME || secrets.SMTP_USER }}
+          password: ${{ secrets.MAIL_PASSWORD || secrets.SMTP_PASS }}
           subject: 'IPL 2026 DB Backup - $(date +%Y-%m-%d)'
           to: jalan.me4u@gmail.com,harshshah661992@gmail.com,tradingwithparthshah@gmail.com,naisicric97@gmail.com
-          from: ${{ secrets.MAIL_USERNAME }}
+          from: "IPL Backup Bot <${{ secrets.MAIL_USERNAME || secrets.SMTP_USER || 'backup@ipl2026.com' }}>"
           body: 'Hello Owners,\n\nAttached is the latest automated SQL backup for the IPL 2026 Auction database.\n\nThis includes both schema and data dumps.\n\nDate: $(date +%Y-%m-%d %H:%M:%S) UTC'
           attachments: '*.zip'
