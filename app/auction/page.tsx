@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { RealtimeChannel } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import { 
   Gavel, Lock, Play, SkipForward, Trophy, XCircle, 
@@ -48,6 +49,8 @@ export default function AuctionPage() {
   const [passerNotification, setPasserNotification] = useState<string | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
+  const channelRef = useRef<RealtimeChannel | null>(null);
+
   useEffect(() => {
     let interval: NodeJS.Timeout;
     if (auctionState?.status === "active" && auctionState?.started_at) {
@@ -77,98 +80,156 @@ export default function AuctionPage() {
 
   const resetTimer = async () => {
     const { stateId } = await getAuctionIds();
-    await supabase.from("auction_state").update({ started_at: new Date().toISOString() }).eq("id", stateId);
-    await fetchAll();
+    const now = new Date().toISOString();
+    await supabase.from("auction_state").update({ started_at: now }).eq("id", stateId);
+    
+    // Broadcast immediate reset for smooth UI sync
+    channelRef.current?.send({
+       type: 'broadcast',
+       event: 'timer_reset',
+       payload: { started_at: now }
+    });
+    
+    await fetchAuctionState();
   };
 
   const isAdmin = profile?.role === "Admin";
   const isParticipant = profile?.role === "Admin" || profile?.role === "Participant";
 
   // ─── Data Fetching ───
-  const fetchAll = useCallback(async () => {
-    try {
-      // Public data (no auth needed — viewers can see this)
-      const { data: config } = await supabase.from("auction_config").select("*").limit(1).single();
-      setAuctionConfig(config);
-
-      const { data: state } = await supabase.from("auction_state").select("*").limit(1).single();
+  const fetchAuctionState = useCallback(async () => {
+    const { data: state } = await supabase.from("auction_state").select("*").limit(1).single();
+    if (state) {
       setAuctionState(state);
-
-      // Current player
-      if (state?.current_player_id) {
-        const { data: player } = await supabase.from("players").select("*").eq("id", state.current_player_id).single();
-        setCurrentPlayer(player);
-
-        const { data: bids } = await supabase
-          .from("bids")
-          .select("*")
-          .eq("player_id", state.current_player_id)
-          .order("created_at", { ascending: false })
-          .limit(20);
-        setBidHistory(bids || []);
+      if (state.current_player_id) {
+        // Fetch current player and bids in parallel
+        const [playerRes, bidsRes] = await Promise.all([
+          supabase.from("players").select("*").eq("id", state.current_player_id).single(),
+          supabase.from("bids")
+            .select("*")
+            .eq("player_id", state.current_player_id)
+            .order("created_at", { ascending: false })
+            .limit(20)
+        ]);
+        if (playerRes.data) setCurrentPlayer(playerRes.data);
+        if (bidsRes.data) setBidHistory(bidsRes.data);
       } else {
         setCurrentPlayer(null);
         setBidHistory([]);
       }
+    }
+  }, []);
 
-      // Pool counts & All Players for History
-      const { data: playersData } = await supabase.from("players").select("*");
-      if (playersData) {
-        setAllPlayers(playersData || []);
-        const counts: Record<string, { total: number; remaining: number }> = {};
-        for (const pool of POOL_ORDER) {
-          const poolPlayers = playersData.filter(p => p.pool === pool);
-          counts[pool] = {
-            total: poolPlayers.length,
-            remaining: poolPlayers.filter(p => p.auction_status === "pending" || p.auction_status === "on_block").length,
-          };
-        }
-        setPoolCounts(counts);
-
-        // Pending players in current pool (for manual pick)
-        const currentPoolName = config?.current_pool || "Marquee";
-        const poolPending = playersData.filter(p => p.pool === currentPoolName && p.auction_status === "pending");
-        setPendingPlayers(poolPending);
+  const fetchPoolData = useCallback(async () => {
+    const { data: playersData } = await supabase.from("players").select("*");
+    if (playersData) {
+      setAllPlayers(playersData);
+      const counts: Record<string, { total: number; remaining: number }> = {};
+      for (const pool of POOL_ORDER) {
+        const poolPlayers = playersData.filter(p => p.pool === pool);
+        counts[pool] = {
+          total: poolPlayers.length,
+          remaining: poolPlayers.filter(p => p.auction_status === "pending" || p.auction_status === "on_block").length,
+        };
       }
+      setPoolCounts(counts);
 
-      // All profiles (for franchise status panel) — only participants/admins
-      const { data: profiles } = await supabase.from("profiles").select("*");
-      if (profiles) {
-        const participants = profiles.filter(p => p.role === "Admin" || p.role === "Participant");
-        setAllProfiles(participants);
-        setTotalParticipants(participants.length);
-      }
+      // Pending players in current pool (for manual pick)
+      const { data: config } = await supabase.from("auction_config").select("current_pool").limit(1).single();
+      const currentPoolName = config?.current_pool || "Marquee";
+      const poolPending = playersData.filter(p => p.pool === currentPoolName && p.auction_status === "pending");
+      setPendingPlayers(poolPending);
+    }
+  }, []);
 
-      // Auth-dependent data (profile)
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) {
-        const { data: prof } = await supabase.from("profiles").select("*").eq("id", session.user.id).single();
-        setProfile(prof);
+  const fetchProfileData = useCallback(async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session) {
+      const { data: prof } = await supabase.from("profiles").select("*").eq("id", session.user.id).single();
+      if (prof) setProfile(prof);
 
-        const { data: squad } = await supabase
-          .from("players")
-          .select("*")
-          .eq("sold_to_id", session.user.id)
-          .order("player_name", { ascending: true });
-        setMySquad(squad || []);
-      }
+      const { data: squad } = await supabase
+        .from("players")
+        .select("*")
+        .eq("sold_to_id", session.user.id)
+        .order("player_name", { ascending: true });
+      setMySquad(squad || []);
+    }
+  }, []);
+
+  const fetchAll = useCallback(async () => {
+    try {
+      setLoading(true);
+      const { data: config } = await supabase.from("auction_config").select("*").limit(1).single();
+      if (config) setAuctionConfig(config);
+
+      await Promise.all([
+        fetchAuctionState(),
+        fetchPoolData(),
+        fetchProfileData(),
+        // All profiles (for franchise status panel)
+        supabase.from("profiles").select("*").then(({ data: profiles }) => {
+          if (profiles) {
+            const participants = profiles.filter(p => p.role === "Admin" || p.role === "Participant");
+            setAllProfiles(participants);
+            setTotalParticipants(participants.length);
+          }
+        })
+      ]);
     } catch (error) {
       console.error("Error fetching auction data:", error);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [fetchAuctionState, fetchPoolData, fetchProfileData]);
 
   useEffect(() => {
     fetchAll();
 
-    // Real-time subscriptions
+    // Real-time subscriptions with Payload-First Sync
     const channel = supabase
-      .channel("auction-room")
-      .on("postgres_changes", { event: "*", schema: "public", table: "auction_state" }, () => fetchAll())
-      .on("postgres_changes", { event: "*", schema: "public", table: "auction_config" }, () => fetchAll())
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "bids" }, () => fetchAll())
-      .on("postgres_changes", { event: "*", schema: "public", table: "players" }, () => fetchAll());
+      .channel("auction-room", { config: { broadcast: { self: false } } })
+      
+      // 1. Sync Auction State (Status, Current Bid, etc.)
+      .on("postgres_changes", { event: "*", schema: "public", table: "auction_state" }, (payload: any) => {
+        const newState = payload.new;
+        setAuctionState((prev: any) => ({ ...prev, ...newState }));
+        
+        // If player changed, we need a full sync for that player
+        if (payload.old?.current_player_id !== newState?.current_player_id) {
+           fetchAuctionState(); 
+        }
+      })
+
+      // 2. Sync Bids (Instant History Update)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "bids" }, (payload: any) => {
+        const newBid = payload.new;
+        setBidHistory(prev => {
+          // Prevent duplicates if fetchAll was also triggered
+          if (prev.some(b => b.id === newBid.id)) return prev;
+          return [newBid, ...prev].slice(0, 20);
+        });
+      })
+
+      // 3. Sync Player Status (Sold/Unsold/OnBlock)
+      .on("postgres_changes", { event: "*", schema: "public", table: "players" }, (payload: any) => {
+        const updatedPlayer = payload.new;
+        setCurrentPlayer((prev: any) => {
+          if (prev?.id === updatedPlayer.id) return { ...prev, ...updatedPlayer };
+          return prev;
+        });
+        // Throttle pool updates
+        fetchPoolData();
+      })
+
+      // 4. Handle Fast UI Broadcasts (Bypasses DB)
+      .on("broadcast", { event: "out" }, (payload) => {
+        setPasserNotification(payload.payload.name);
+        setTimeout(() => setPasserNotification(null), 3000);
+      })
+      .on("broadcast", { event: "timer_reset" }, (payload) => {
+        setAuctionState((prev: any) => ({ ...prev, started_at: payload.payload.started_at }));
+      });
       
     channel.on("presence", { event: "sync" }, () => {
       const state = channel.presenceState();
@@ -177,13 +238,18 @@ export default function AuctionPage() {
     });
 
     channel.subscribe(async (status) => {
-      if (status === "SUBSCRIBED") {
-        await channel.track({ presence: { key: profile?.id || "anonymous" } });
+      if (status === "SUBSCRIBED" && profile?.id) {
+        await channel.track({ presence: { key: profile.id } });
       }
     });
 
-    return () => { supabase.removeChannel(channel); };
-  }, [profile?.id, fetchAll]);
+    channelRef.current = channel;
+
+    return () => { 
+      supabase.removeChannel(channel); 
+      channelRef.current = null;
+    };
+  }, [profile?.id, fetchAuctionState, fetchPoolData]); // Profile ID is okay here as it only changes on login
 
   // Helper: get singleton row IDs fresh from DB (avoids stale React state)
   const getAuctionIds = async () => {
@@ -591,6 +657,13 @@ export default function AuctionPage() {
       passed_user_ids: newPassed,
       updated_at: new Date().toISOString(),
     }).eq("id", stateId);
+
+    // Broadcast immediate UI feedback
+    channelRef.current?.send({
+      type: 'broadcast',
+      event: 'out',
+      payload: { name: profile.team_name || profile.full_name || "Someone" }
+    });
 
     // Check if ALL participants have passed → auto unsold
     if (newPassed.length >= totalParticipants && totalParticipants > 0) {
