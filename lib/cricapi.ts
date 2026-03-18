@@ -76,7 +76,13 @@ export async function syncMatchScores(matchId: string, apiMatchId: string) {
         updates.push({
           match_id: matchId,
           player_id: player.id,
-          points: calculateDream11Points(stats)
+          points: calculateDream11Points(stats),
+          runs: stats.runs,
+          balls: stats.balls,
+          fours: stats.fours,
+          sixes: stats.sixes,
+          strike_rate: stats.strikeRate,
+          is_duck: stats.isDuck
         });
       });
 
@@ -90,7 +96,7 @@ export async function syncMatchScores(matchId: string, apiMatchId: string) {
         const stats: MatchStats = {
           runs: 0, balls: 0, fours: 0, sixes: 0,
           wickets: bw.w,
-          lbwBowled: 0, // Raw scorecard doesn't detail this
+          lbwBowled: 0, 
           maidens: bw.m,
           catches: 0, stumpings: 0, runOutDirect: 0, runOutIndirect: 0, dotBalls: 0,
           economyRate: bw.er,
@@ -102,8 +108,18 @@ export async function syncMatchScores(matchId: string, apiMatchId: string) {
         const bowlingPoints = calculateDream11Points(stats);
         if (updateIdx > -1) {
           updates[updateIdx].points += bowlingPoints;
+          updates[updateIdx].wickets = stats.wickets;
+          updates[updateIdx].maidens = stats.maidens;
+          updates[updateIdx].economy_rate = stats.economyRate;
         } else {
-          updates.push({ match_id: matchId, player_id: player.id, points: bowlingPoints });
+          updates.push({ 
+            match_id: matchId, 
+            player_id: player.id, 
+            points: bowlingPoints,
+            wickets: stats.wickets,
+            maidens: stats.maidens,
+            economy_rate: stats.economyRate
+          });
         }
       });
 
@@ -118,7 +134,7 @@ export async function syncMatchScores(matchId: string, apiMatchId: string) {
           runs: 0, balls: 0, fours: 0, sixes: 0, wickets: 0, lbwBowled: 0, maidens: 0,
           catches: f.c || 0,
           stumpings: f.st || 0,
-          runOutDirect: (f.re || 0) + (f.ro || 0), // Estimate run-outs
+          runOutDirect: (f.re || 0) + (f.ro || 0),
           runOutIndirect: 0,
           dotBalls: 0,
           isDuck: false,
@@ -128,8 +144,18 @@ export async function syncMatchScores(matchId: string, apiMatchId: string) {
         const fieldingPoints = calculateDream11Points(stats);
         if (updateIdx > -1) {
           updates[updateIdx].points += fieldingPoints;
+          updates[updateIdx].catches = (updates[updateIdx].catches || 0) + stats.catches;
+          updates[updateIdx].stumpings = (updates[updateIdx].stumpings || 0) + stats.stumpings;
+          updates[updateIdx].run_out_direct = (updates[updateIdx].run_out_direct || 0) + stats.runOutDirect;
         } else {
-          updates.push({ match_id: matchId, player_id: player.id, points: fieldingPoints });
+          updates.push({ 
+            match_id: matchId, 
+            player_id: player.id, 
+            points: fieldingPoints,
+            catches: stats.catches,
+            stumpings: stats.stumpings,
+            run_out_direct: stats.runOutDirect
+          });
         }
       });
     });

@@ -23,6 +23,7 @@ export default function ScoreboardPage() {
   const [allMatches, setAllMatches] = useState<any[]>([]);
   const [selectedMatchId, setSelectedMatchId] = useState<string>("");
   const [matchPoints, setMatchPoints] = useState<Record<string, number>>({});
+  const [detailedMatchPoints, setDetailedMatchPoints] = useState<any[]>([]);
   const [allNominations, setAllNominations] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -50,6 +51,34 @@ export default function ScoreboardPage() {
       fetchMatchSpecificData(selectedMatchId);
     }
   }, [selectedMatchId]);
+
+  useEffect(() => {
+    if (calcActivePlayerId && detailedMatchPoints.length > 0) {
+      const stats = detailedMatchPoints.find(p => p.player_id === calcActivePlayerId);
+      if (stats) {
+        setCalcStats({
+          runs: stats.runs || 0,
+          balls: stats.balls || 0,
+          fours: stats.fours || 0,
+          sixes: stats.sixes || 0,
+          wickets: stats.wickets || 0,
+          catches: stats.catches || 0,
+          stumpings: stats.stumpings || 0,
+          lbwBowled: stats.lbw_bowled || 0,
+          maidens: stats.maidens || 0,
+          isDuck: stats.is_duck || false,
+          strikeRate: stats.strike_rate || 0,
+          economyRate: stats.economy_rate || 0,
+          role: calcStats.role // keep role as is
+        });
+      } else {
+         setCalcStats({
+            runs: 0, balls: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, 
+            stumpings: 0, lbwBowled: 0, maidens: 0, isDuck: false, role: calcStats.role
+         });
+      }
+    }
+  }, [calcActivePlayerId, detailedMatchPoints]);
 
   const fetchInitialData = async () => {
     try {
@@ -123,6 +152,7 @@ export default function ScoreboardPage() {
       .select("*")
       .eq("match_id", matchId);
     
+    setDetailedMatchPoints(pointsData || []);
     const pointsMap: Record<string, number> = {};
     pointsData?.forEach(p => {
       pointsMap[p.player_id] = p.points;
@@ -245,11 +275,37 @@ export default function ScoreboardPage() {
     document.body.removeChild(link);
   };
 
-  const applyCalcPoints = () => {
-    if (!calcActivePlayerId) return;
+  const applyCalcPoints = async () => {
+    if (!calcActivePlayerId || !selectedMatchId) return;
+    setSaving(true);
     const finalPoints = calculateDream11Points(calcStats as MatchStats);
-    setMatchPoints(prev => ({ ...prev, [calcActivePlayerId]: finalPoints }));
-    setCalcActivePlayerId(null);
+    
+    const { error } = await supabase
+      .from("match_points")
+      .upsert({
+        match_id: selectedMatchId,
+        player_id: calcActivePlayerId,
+        points: finalPoints,
+        runs: calcStats.runs,
+        balls: calcStats.balls,
+        fours: calcStats.fours,
+        sixes: calcStats.sixes,
+        wickets: calcStats.wickets,
+        catches: calcStats.catches,
+        stumpings: calcStats.stumpings,
+        lbw_bowled: calcStats.lbwBowled,
+        maidens: calcStats.maidens,
+        is_duck: calcStats.isDuck,
+        strike_rate: calcStats.strikeRate,
+        economy_rate: calcStats.economyRate
+      }, { onConflict: "player_id,match_id" });
+
+    if (error) alert(error.message);
+    else {
+      await fetchMatchSpecificData(selectedMatchId);
+      setCalcActivePlayerId(null);
+    }
+    setSaving(false);
   };
 
   // Standings Logic
@@ -260,21 +316,32 @@ export default function ScoreboardPage() {
 
     const standingsData = franchises.map(team => {
       let totalPoints = 0;
+      let matchesPlayed = 0;
       const teamPlayers = allPlayers.filter(p => p.sold_to_id === team.id || p.sold_to === team.team_name);
       
       allMatches.forEach(m => {
         const nom = allNoms?.find(n => n.team_id === team.id && n.match_id === m.id);
+        let matchHasPoints = false;
+
         teamPlayers.forEach(player => {
           const ptRecord = allPoints?.find(p => p.player_id === player.id && p.match_id === m.id);
           if (ptRecord) {
+            matchHasPoints = true;
             let pts = ptRecord.points;
             if (nom?.captain_id === player.id) pts *= 2;
             else if (nom?.vc_id === player.id) pts *= 1.5;
             totalPoints += pts;
           }
         });
+
+        if (matchHasPoints) matchesPlayed++;
       });
-      return { ...team, totalPoints };
+
+      return {
+        ...team,
+        totalPoints,
+        matchesPlayed: Math.min(matchesPlayed, 17) // Cap at 17 as requested
+      };
     });
 
     standingsData.sort((a, b) => b.totalPoints - a.totalPoints);
@@ -628,9 +695,14 @@ export default function ScoreboardPage() {
                                             </div>
                                          </div>
                                       </td>
-                                      <td className="px-8 py-6 text-right font-black italic text-3xl tracking-tighter text-slate-900">
-                                         {Math.floor(team.totalPoints)}
-                                      </td>
+                                       <td className="px-8 py-6 text-right">
+                                          <div className="font-black italic text-3xl tracking-tighter text-slate-900 leading-none">
+                                             {Math.floor(team.totalPoints)}
+                                          </div>
+                                          <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">
+                                             {team.matchesPlayed}/17 GAMES
+                                          </div>
+                                       </td>
                                    </tr>
                                 ))}
                              </tbody>
@@ -655,31 +727,47 @@ export default function ScoreboardPage() {
                           {allPlayers.find(p => p.id === calcActivePlayerId)?.player_name}
                        </CardDescription>
                     </CardHeader>
-                    <CardContent className="px-6 pb-6 space-y-4">
-                       <div className="grid grid-cols-2 gap-2">
-                          <div className="space-y-1">
-                             <label className="text-[8px] font-black uppercase text-indigo-300">Runs</label>
-                             <Input type="number" className="h-9 bg-indigo-700 border-indigo-500 text-white font-bold" value={calcStats.runs} onChange={(e) => setCalcStats(prev => ({...prev, runs: parseInt(e.target.value) || 0}))} />
-                          </div>
-                          <div className="space-y-1">
-                             <label className="text-[8px] font-black uppercase text-indigo-300">Balls</label>
-                             <Input type="number" className="h-9 bg-indigo-700 border-indigo-500 text-white font-bold" value={calcStats.balls} onChange={(e) => setCalcStats(prev => ({...prev, balls: parseInt(e.target.value) || 0}))} />
-                          </div>
-                       </div>
-                       <div className="grid grid-cols-2 gap-2">
-                          <div className="space-y-1">
-                             <label className="text-[8px] font-black uppercase text-indigo-300">Wickets</label>
-                             <Input type="number" className="h-9 bg-indigo-700 border-indigo-500 text-white font-bold" value={calcStats.wickets} onChange={(e) => setCalcStats(prev => ({...prev, wickets: parseInt(e.target.value) || 0}))} />
-                          </div>
-                          <div className="space-y-1">
-                             <label className="text-[8px] font-black uppercase text-indigo-300">Catches</label>
-                             <Input type="number" className="h-9 bg-indigo-700 border-indigo-500 text-white font-bold" value={calcStats.catches} onChange={(e) => setCalcStats(prev => ({...prev, catches: parseInt(e.target.value) || 0}))} />
-                          </div>
-                       </div>
-                       <div className="pt-3 border-t border-indigo-500 flex justify-between items-center text-white">
-                          <span className="text-[10px] font-black uppercase tracking-widest text-indigo-200">Total</span>
-                          <span className="text-3xl font-black italic tracking-tighter">{calculateDream11Points(calcStats as MatchStats)}</span>
-                       </div>
+                     <CardContent className="px-6 pb-6 space-y-4">
+                        <div className="grid grid-cols-2 gap-2">
+                           <div className="space-y-1">
+                              <label className="text-[8px] font-black uppercase text-indigo-300">Runs</label>
+                              <Input type="number" className="h-9 bg-indigo-700 border-indigo-500 text-white font-bold" value={calcStats.runs} onChange={(e) => setCalcStats(prev => ({...prev, runs: parseInt(e.target.value) || 0}))} />
+                           </div>
+                           <div className="space-y-1">
+                              <label className="text-[8px] font-black uppercase text-indigo-300">Balls</label>
+                              <Input type="number" className="h-9 bg-indigo-700 border-indigo-500 text-white font-bold" value={calcStats.balls} onChange={(e) => setCalcStats(prev => ({...prev, balls: parseInt(e.target.value) || 0}))} />
+                           </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                           <div className="space-y-1">
+                              <label className="text-[8px] font-black uppercase text-indigo-300">4s / 6s</label>
+                              <div className="flex gap-1">
+                                <Input type="number" className="h-9 bg-indigo-700 border-indigo-500 text-white font-bold" value={calcStats.fours} onChange={(e) => setCalcStats(prev => ({...prev, fours: parseInt(e.target.value) || 0}))} />
+                                <Input type="number" className="h-9 bg-indigo-700 border-indigo-500 text-white font-bold" value={calcStats.sixes} onChange={(e) => setCalcStats(prev => ({...prev, sixes: parseInt(e.target.value) || 0}))} />
+                              </div>
+                           </div>
+                           <div className="space-y-1">
+                              <label className="text-[8px] font-black uppercase text-indigo-300">Wickets</label>
+                              <Input type="number" className="h-9 bg-indigo-700 border-indigo-500 text-white font-bold" value={calcStats.wickets} onChange={(e) => setCalcStats(prev => ({...prev, wickets: parseInt(e.target.value) || 0}))} />
+                           </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                           <div className="space-y-1">
+                              <label className="text-[8px] font-black uppercase text-indigo-300">Catches/Stump</label>
+                              <div className="flex gap-1">
+                                <Input type="number" className="h-9 bg-indigo-700 border-indigo-500 text-white font-bold" value={calcStats.catches} onChange={(e) => setCalcStats(prev => ({...prev, catches: parseInt(e.target.value) || 0}))} />
+                                <Input type="number" className="h-9 bg-indigo-700 border-indigo-500 text-white font-bold" value={calcStats.stumpings} onChange={(e) => setCalcStats(prev => ({...prev, stumpings: parseInt(e.target.value) || 0}))} />
+                              </div>
+                           </div>
+                           <div className="space-y-1">
+                              <label className="text-[8px] font-black uppercase text-indigo-300">Maidens</label>
+                              <Input type="number" className="h-9 bg-indigo-700 border-indigo-500 text-white font-bold" value={calcStats.maidens} onChange={(e) => setCalcStats(prev => ({...prev, maidens: parseInt(e.target.value) || 0}))} />
+                           </div>
+                        </div>
+                        <div className="pt-3 border-t border-indigo-500 flex justify-between items-center text-white">
+                           <span className="text-[10px] font-black uppercase tracking-widest text-indigo-200">Total</span>
+                           <span className="text-3xl font-black italic tracking-tighter">{calculateDream11Points(calcStats as MatchStats)}</span>
+                        </div>
                        <Button 
                          className="w-full bg-white text-indigo-600 hover:bg-emerald-500 hover:text-white py-5 rounded-xl font-black uppercase tracking-widest text-[10px] transition-all"
                          onClick={applyCalcPoints}
