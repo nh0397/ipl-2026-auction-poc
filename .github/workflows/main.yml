@@ -25,7 +25,8 @@ jobs:
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
-          supabase db dump --file backups/full_backup.sql --db-url "$SUPABASE_DB_URL"
+          supabase db dump --file backups/schema.sql --db-url "$SUPABASE_DB_URL"
+          supabase db dump --data-only --file backups/data.sql --db-url "$SUPABASE_DB_URL"
 
       - name: Zip backup
         run: zip -r db-backup-$(date +%Y%m%d-%H%M%S).zip backups/
