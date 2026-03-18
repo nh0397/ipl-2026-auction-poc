@@ -48,8 +48,11 @@ export default function AuctionPage() {
   const [mySquad, setMySquad] = useState<any[]>([]);
   const [passerNotification, setPasserNotification] = useState<string | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [isLockedByPeer, setIsLockedByPeer] = useState(false);
+  const [lockingPeerName, setLockingPeerName] = useState<string | null>(null);
 
   const channelRef = useRef<RealtimeChannel | null>(null);
+  const lockTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     let interval: NodeJS.Timeout;
@@ -201,14 +204,18 @@ export default function AuctionPage() {
         }
       })
 
-      // 2. Sync Bids (Instant History Update)
+      // 2. Sync Bids (Instant History Update + Clear Lock)
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "bids" }, (payload: any) => {
         const newBid = payload.new;
         setBidHistory(prev => {
-          // Prevent duplicates if fetchAll was also triggered
           if (prev.some(b => b.id === newBid.id)) return prev;
           return [newBid, ...prev].slice(0, 20);
         });
+        
+        // Success! Another bid received, clear any peer lockout
+        setIsLockedByPeer(false);
+        setLockingPeerName(null);
+        if (lockTimeoutRef.current) clearTimeout(lockTimeoutRef.current);
       })
 
       // 3. Sync Player Status (Sold/Unsold/OnBlock)
@@ -218,7 +225,6 @@ export default function AuctionPage() {
           if (prev?.id === updatedPlayer.id) return { ...prev, ...updatedPlayer };
           return prev;
         });
-        // Throttle pool updates
         fetchPoolData();
       })
 
@@ -229,6 +235,18 @@ export default function AuctionPage() {
       })
       .on("broadcast", { event: "timer_reset" }, (payload) => {
         setAuctionState((prev: any) => ({ ...prev, started_at: payload.payload.started_at }));
+      })
+      .on("broadcast", { event: "bidding_start" }, (payload) => {
+         // Another user just clicked 'Bid'. Lock our UI for a short duration.
+         setIsLockedByPeer(true);
+         setLockingPeerName(payload.payload.name);
+         
+         // Safety timeout in case their RPC fails or network drops
+         if (lockTimeoutRef.current) clearTimeout(lockTimeoutRef.current);
+         lockTimeoutRef.current = setTimeout(() => {
+           setIsLockedByPeer(false);
+           setLockingPeerName(null);
+         }, 2500); 
       });
       
     channel.on("presence", { event: "sync" }, () => {
@@ -568,6 +586,13 @@ export default function AuctionPage() {
 
   // Shared bid execution logic
   const executeBid = async (newBid: number) => {
+    // 1. Send immediate lockout broadcast to all peers
+    channelRef.current?.send({
+       type: 'broadcast',
+       event: 'bidding_start',
+       payload: { name: profile?.team_name || profile?.full_name || "Someone" }
+    });
+
     setActionLoading(true);
 
     const totalSpent = mySquad.reduce((sum, p) => {
@@ -1073,18 +1098,29 @@ export default function AuctionPage() {
                         onClick={placeBid}
                         disabled={
                           actionLoading || 
+                          isLockedByPeer ||
                           auctionState.current_bidder_id === profile?.id ||
                           (auctionState.passed_user_ids || []).includes(profile?.id)
                         }
-                        className="h-14 px-10 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-black uppercase tracking-widest text-sm shadow-xl shadow-blue-200 active:scale-95 transition-all disabled:opacity-30 flex gap-3"
+                        className="h-14 px-10 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-black uppercase tracking-widest text-sm shadow-xl shadow-blue-200 active:scale-95 transition-all disabled:opacity-30 flex gap-3 min-w-[200px]"
                       >
-                        <ArrowUp size={18} />
-                        Bid {(!auctionState.current_bidder_id ? auctionState.base_price : auctionState.current_bid + auctionState.min_increment).toFixed(2)} Cr
+                        {isLockedByPeer ? (
+                          <div className="flex items-center gap-2">
+                            <Loader2 size={16} className="animate-spin text-blue-200" />
+                            <span className="animate-pulse">{lockingPeerName} is bidding...</span>
+                          </div>
+                        ) : (
+                          <>
+                            <ArrowUp size={18} />
+                            Bid {(!auctionState.current_bidder_id ? auctionState.base_price : auctionState.current_bid + auctionState.min_increment).toFixed(2)} Cr
+                          </>
+                        )}
                       </Button>
                       <Button
                         onClick={passOnPlayer}
                         disabled={
                           actionLoading || 
+                          isLockedByPeer ||
                           auctionState.current_bidder_id === profile?.id ||
                           (auctionState.passed_user_ids || []).includes(profile?.id)
                         }
