@@ -105,6 +105,7 @@ export function Navbar() {
     { href: "/squads", label: "Team Rosters", icon: Users },
     { href: "/auction", label: "Auction", icon: Gavel },
     { href: "/scoreboard", label: "Points Table", icon: Trophy },
+    { href: "/test-scorecard", label: "Fantasy Test", icon: Zap },
   ];
 
   return (

@@ -52,7 +52,7 @@ export async function syncMatchScores(matchId: string, apiMatchId: string) {
     scorecard.forEach((inning: any) => {
       // Process Batting
       inning.batting.forEach((b: any) => {
-        const player = playerMap.get(b.player.id);
+        const player = playerMap.get(b.batsman.id);
         if (!player) return;
 
         const stats: MatchStats = {
@@ -69,7 +69,8 @@ export async function syncMatchScores(matchId: string, apiMatchId: string) {
           runOutIndirect: 0,
           dotBalls: 0,
           strikeRate: b.sr,
-          isDuck: b.r === 0 && b.dismissal !== "not out",
+          isDuck: b.r === 0 && !b['dismissal-text']?.includes("not out"),
+          isAnnounced: true, // NEW: +4 pts for playing 11
           role: mapRole(player.role)
         };
         
@@ -82,13 +83,14 @@ export async function syncMatchScores(matchId: string, apiMatchId: string) {
           fours: stats.fours,
           sixes: stats.sixes,
           strike_rate: stats.strikeRate,
-          is_duck: stats.isDuck
+          is_duck: stats.isDuck,
+          is_announced: true
         });
       });
 
       // Process Bowling
       inning.bowling.forEach((bw: any) => {
-        const player = playerMap.get(bw.player.id);
+        const player = playerMap.get(bw.bowler.id);
         if (!player) return;
 
         const updateIdx = updates.findIndex(u => u.player_id === player.id);
@@ -96,12 +98,13 @@ export async function syncMatchScores(matchId: string, apiMatchId: string) {
         const stats: MatchStats = {
           runs: 0, balls: 0, fours: 0, sixes: 0,
           wickets: bw.w,
-          lbwBowled: 0, 
+          lbwBowled: 0, // Will be filled from catching data below
           maidens: bw.m,
           catches: 0, stumpings: 0, runOutDirect: 0, runOutIndirect: 0, dotBalls: 0,
-          economyRate: bw.er,
+          economyRate: bw.eco,
           oversMoved: bw.o,
           isDuck: false,
+          isAnnounced: true, // NEW: +4 pts
           role: mapRole(player.role)
         };
 
@@ -123,38 +126,43 @@ export async function syncMatchScores(matchId: string, apiMatchId: string) {
         }
       });
 
-      // Process Fielding
-      inning.fielding.forEach((f: any) => {
-        const player = playerMap.get(f.player.id);
+      // Process Catching/Fielding & Bowling Bonuses (LBW/Bowled)
+      inning.catching.forEach((f: any) => {
+        const player = playerMap.get(f.catcher.id);
         if (!player) return;
 
         const updateIdx = updates.findIndex(u => u.player_id === player.id);
         
         const stats: MatchStats = {
-          runs: 0, balls: 0, fours: 0, sixes: 0, wickets: 0, lbwBowled: 0, maidens: 0,
-          catches: f.c || 0,
-          stumpings: f.st || 0,
-          runOutDirect: (f.re || 0) + (f.ro || 0),
+          runs: 0, balls: 0, fours: 0, sixes: 0, wickets: 0,
+          lbwBowled: (f.lbw || 0) + (f.bowled || 0),
+          maidens: 0,
+          catches: f.catch || 0,
+          stumpings: f.stumped || 0,
+          runOutDirect: f.runout || 0,
           runOutIndirect: 0,
           dotBalls: 0,
           isDuck: false,
+          isAnnounced: true, // NEW: +4 pts
           role: mapRole(player.role)
         };
 
-        const fieldingPoints = calculateDream11Points(stats);
+        const extraPoints = calculateDream11Points(stats);
         if (updateIdx > -1) {
-          updates[updateIdx].points += fieldingPoints;
+          updates[updateIdx].points += extraPoints;
           updates[updateIdx].catches = (updates[updateIdx].catches || 0) + stats.catches;
           updates[updateIdx].stumpings = (updates[updateIdx].stumpings || 0) + stats.stumpings;
           updates[updateIdx].run_out_direct = (updates[updateIdx].run_out_direct || 0) + stats.runOutDirect;
+          updates[updateIdx].lbw_bowled = (updates[updateIdx].lbw_bowled || 0) + stats.lbwBowled;
         } else {
           updates.push({ 
             match_id: matchId, 
             player_id: player.id, 
-            points: fieldingPoints,
+            points: extraPoints,
             catches: stats.catches,
             stumpings: stats.stumpings,
-            run_out_direct: stats.runOutDirect
+            run_out_direct: stats.runOutDirect,
+            lbw_bowled: stats.lbwBowled
           });
         }
       });

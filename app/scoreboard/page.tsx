@@ -41,6 +41,7 @@ export default function ScoreboardPage() {
     stumpings: 0, lbwBowled: 0, maidens: 0, isDuck: false, role: 'Batter'
   });
   const [calcActivePlayerId, setCalcActivePlayerId] = useState<string | null>(null);
+  const [showBreakdownId, setShowBreakdownId] = useState<string | null>(null);
 
   const router = useRouter();
 
@@ -199,13 +200,10 @@ export default function ScoreboardPage() {
 
         teamPlayers.forEach(player => {
           const ptRecord = allMatchPoints?.find(p => p.player_id === player.id && p.match_id === m.id);
-          if (ptRecord) {
-            matchHasPoints = true;
-            let pts = ptRecord.points;
-            if (nom?.captain_id === player.id) pts *= 2;
-            else if (nom?.vc_id === player.id) pts *= 1.5;
-            totalPoints += pts;
-          }
+            if (ptRecord) {
+              matchHasPoints = true;
+              totalPoints += ptRecord.points;
+            }
         });
 
         if (matchHasPoints) matchesPlayed++;
@@ -546,40 +544,104 @@ export default function ScoreboardPage() {
                                 </tr>
                              </thead>
                              <tbody>
-                                {allPlayers
-                                  .map(p => ({ ...p, points: allMatchPoints.find(pt => pt.player_id === p.id && pt.match_id === selectedMatchId)?.points || 0 }))
-                                  .filter(p => p.points > 0 || searchQuery === "")
-                                  .sort((a, b) => b.points - a.points)
-                                  .map((player, idx) => {
-                                     const pTeam = franchises.find(f => f.id === player.sold_to_id || f.team_name === player.sold_to);
-                                     return (
-                                        <tr key={player.id} className="border-b border-slate-50 hover:bg-slate-50/80 transition-colors">
-                                           <td className="px-8 py-5">
-                                              <span className={cn(
-                                                "h-7 w-7 flex items-center justify-center rounded-lg font-black text-xs", 
-                                                idx === 0 ? "bg-amber-500 text-white shadow-md shadow-amber-200" : "bg-slate-100 text-slate-400"
-                                              )}>
-                                                 {idx + 1}
-                                              </span>
-                                           </td>
-                                           <td className="px-8 py-5">
-                                              <div className="flex items-center gap-4">
-                                                 <div className="h-9 w-9 rounded-xl bg-slate-100 overflow-hidden shrink-0 border border-slate-200">
-                                                    <img src={getPlayerImage(player.image_url)!} className="w-full h-full object-cover object-top" />
-                                                 </div>
-                                                 <div>
-                                                    <span className="font-bold text-slate-900 block leading-tight">{player.player_name}</span>
-                                                    <span className="text-[9px] font-black uppercase text-slate-400 tracking-wider font-mono">{player.team}</span>
-                                                 </div>
-                                              </div>
-                                           </td>
-                                           <td className="px-8 py-5">
-                                              <span className="text-[10px] font-black uppercase tracking-tight text-slate-500 px-3 py-1 bg-slate-100 rounded-full">{pTeam?.team_name || 'Unsold'}</span>
-                                           </td>
-                                           <td className="px-8 py-5 text-right font-black italic text-xl text-slate-900">{player.points?.toFixed(1)}</td>
-                                        </tr>
-                                     );
-                                  })}
+                                 {allPlayers
+                                   .map(p => {
+                                      const matchPt = allMatchPoints.find(pt => pt.player_id === p.id && pt.match_id === selectedMatchId);
+                                      return { ...p, ...matchPt, points: matchPt?.points || 0 };
+                                   })
+                                   .filter(p => p.points > 0 || searchQuery === "")
+                                   .sort((a, b) => b.points - a.points)
+                                   .map((player, idx) => {
+                                      const pTeam = franchises.find(f => f.id === player.sold_to_id || f.team_name === player.sold_to);
+                                      return (
+                                         <React.Fragment key={player.id}>
+                                            <tr 
+                                              className="border-b border-slate-50 hover:bg-slate-50/80 transition-colors cursor-pointer"
+                                              onClick={() => setShowBreakdownId(showBreakdownId === player.id ? null : player.id)}
+                                            >
+                                               <td className="px-8 py-5">
+                                                  <span className={cn(
+                                                    "h-7 w-7 flex items-center justify-center rounded-lg font-black text-xs", 
+                                                    idx === 0 ? "bg-amber-500 text-white shadow-md shadow-amber-200" : "bg-slate-100 text-slate-400"
+                                                  )}>
+                                                     {idx + 1}
+                                                  </span>
+                                               </td>
+                                               <td className="px-8 py-5">
+                                                  <div className="flex items-center gap-4">
+                                                     <div className="h-9 w-9 rounded-xl bg-slate-100 overflow-hidden shrink-0 border border-slate-200">
+                                                        <img src={getPlayerImage(player.image_url)!} className="w-full h-full object-cover object-top" />
+                                                     </div>
+                                                     <div>
+                                                        <span className="font-bold text-slate-900 block leading-tight">{player.player_name}</span>
+                                                        <span className="text-[9px] font-black uppercase text-slate-400 tracking-wider font-mono">{player.team}</span>
+                                                     </div>
+                                                  </div>
+                                               </td>
+                                               <td className="px-8 py-5">
+                                                  <span className="text-[10px] font-black uppercase tracking-tight text-slate-500 px-3 py-1 bg-slate-100 rounded-full">{pTeam?.team_name || 'Unsold'}</span>
+                                               </td>
+                                               <td className="px-8 py-5 text-right font-black italic text-xl text-slate-900">{player.points?.toFixed(1)}</td>
+                                            </tr>
+                                            {showBreakdownId === player.id && (
+                                               <tr className="bg-slate-900 text-white/90">
+                                                  <td colSpan={4} className="p-8">
+                                                     <div className="grid grid-cols-2 lg:grid-cols-4 gap-8">
+                                                        <div className="space-y-4">
+                                                           <h5 className="text-[10px] font-black uppercase tracking-widest text-white/30">Batting Performance</h5>
+                                                           <div className="grid grid-cols-2 gap-4">
+                                                              <div>
+                                                                 <div className="text-[9px] font-bold text-white/40 uppercase">Runs/Balls</div>
+                                                                 <div className="text-xl font-black italic">{player.runs || 0}<span className="text-xs opacity-30 font-medium ml-1">({player.balls || 0})</span></div>
+                                                              </div>
+                                                              <div>
+                                                                 <div className="text-[9px] font-bold text-white/40 uppercase">Boundaries</div>
+                                                                 <div className="text-xl font-black italic">{player.fours || 0}<span className="text-xs opacity-30 font-medium ml-1">4s</span> {player.sixes || 0}<span className="text-xs opacity-30 font-medium ml-1">6s</span></div>
+                                                              </div>
+                                                           </div>
+                                                        </div>
+                                                        <div className="space-y-4">
+                                                           <h5 className="text-[10px] font-black uppercase tracking-widest text-white/30">Bowling Performance</h5>
+                                                           <div className="grid grid-cols-2 gap-4">
+                                                              <div>
+                                                                 <div className="text-[9px] font-bold text-white/40 uppercase">Wickets/Dots</div>
+                                                                 <div className="text-xl font-black italic">{player.wickets || 0}<span className="text-xs opacity-30 font-medium ml-1">W</span> {player.dot_balls || 0}<span className="text-xs opacity-30 font-medium ml-1">.</span></div>
+                                                              </div>
+                                                              <div>
+                                                                 <div className="text-[9px] font-bold text-white/40 uppercase">LBW/Maiden</div>
+                                                                 <div className="text-xl font-black italic">{player.lbw_bowled || 0}<span className="text-xs opacity-30 font-medium ml-1">L/B</span> {player.maidens || 0}<span className="text-xs opacity-30 font-medium ml-1">M</span></div>
+                                                              </div>
+                                                           </div>
+                                                        </div>
+                                                        <div className="space-y-4">
+                                                           <h5 className="text-[10px] font-black uppercase tracking-widest text-white/30">Fielding/Misc</h5>
+                                                           <div className="grid grid-cols-2 gap-4">
+                                                              <div>
+                                                                 <div className="text-[9px] font-bold text-white/40 uppercase">Catches/Stump</div>
+                                                                 <div className="text-xl font-black italic">{player.catches || 0}<span className="text-xs opacity-30 font-medium ml-1">C</span> {player.stumpings || 0}<span className="text-xs opacity-30 font-medium ml-1">ST</span></div>
+                                                              </div>
+                                                              <div>
+                                                                 <div className="text-[9px] font-bold text-white/40 uppercase">Run Out</div>
+                                                                 <div className="text-xl font-black italic">{player.run_out_direct || 0}<span className="text-xs opacity-30 font-medium ml-1">Dir</span> {player.run_out_indirect || 0}<span className="text-xs opacity-30 font-medium ml-1">Ind</span></div>
+                                                              </div>
+                                                           </div>
+                                                        </div>
+                                                        <div className="space-y-4">
+                                                           <h5 className="text-[10px] font-black uppercase tracking-widest text-white/30">Calculated Index</h5>
+                                                           <div className="flex items-center gap-4">
+                                                              <div className="h-12 w-12 bg-white/20 rounded-2xl flex items-center justify-center text-white shrink-0">
+                                                                 <Zap size={24} className="text-yellow-400" />
+                                                              </div>
+                                                              <div className="text-3xl font-black italic text-white">{player.points?.toFixed(1)}</div>
+                                                           </div>
+                                                        </div>
+                                                     </div>
+                                                  </td>
+                                               </tr>
+                                            )}
+                                         </React.Fragment>
+                                      );
+                                   })}
                              </tbody>
                           </table>
                        </CardContent>
