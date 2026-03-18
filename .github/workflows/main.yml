@@ -1,0 +1,42 @@
+name: Database Backup
+
+on:
+  schedule:
+    # Runs at 00:00 UTC every day
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+    # Allows manual triggering from the Actions tab
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Generate Database Dump
+        run: |
+          supabase db dump --project-ref ${{ secrets.SUPABASE_PROJECT_ID }} -p ${{ secrets.SUPABASE_DB_PASSWORD }} > backup.sql
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+
+      - name: Compress Backup
+        run: zip backup.sql.zip backup.sql
+
+      - name: Send Email with Backup
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_SERVER || 'smtp.gmail.com' }}
+          server_port: ${{ secrets.SMTP_PORT || 465 }}
+          username: ${{ secrets.SMTP_USER }}
+          password: ${{ secrets.SMTP_PASS }}
+          subject: "IPL 2026 Database Backup - $(date +'%Y-%m-%d')"
+          to: "jalan.me4u@gmail.com,harshshah661992@gmail.com,tradingwithparthshah@gmail.com,naisicric97@gmail.com"
+          from: "IPL Auction System <${{ secrets.SMTP_USER }}>"
+          body: "Hello Owners,\n\nPlease find the automated SQL backup for the IPL 2026 Auction database attached.\n\nDate: $(date +'%Y-%m-%d %H:%M:%S') UTC"
+          attachments: backup.sql.zip
