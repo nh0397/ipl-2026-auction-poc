@@ -1,17 +1,16 @@
-name: Database Backup
+name: Supabase DB Backup & Email
 
 on:
   schedule:
-    # Runs at 00:00 UTC every day
-    - cron: '0 0 * * *'
-  workflow_dispatch:
-    # Allows manual triggering from the Actions tab
+    - cron: '0 2 * * *'  # Daily at 2AM UTC
+  workflow_dispatch:  # Manual trigger
 
 jobs:
   backup:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Supabase CLI
@@ -19,24 +18,28 @@ jobs:
         with:
           version: latest
 
-      - name: Generate Database Dump
-        run: |
-          pg_dump -h aws-0-us-east-2.pooler.supabase.com -p 6543 -U "postgres.${{ secrets.SUPABASE_PROJECT_ID }}" -d postgres > backup.sql
+      - name: Create backup dir
+        run: mkdir -p backups
+
+      - name: Dump DB schema and data
         env:
-          PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          supabase db dump --data-only --file backups/data.sql "$SUPABASE_DB_URL"
+          supabase db dump --schema-only --file backups/schema.sql "$SUPABASE_DB_URL"
 
-      - name: Compress Backup
-        run: zip backup.sql.zip backup.sql
+      - name: Zip backup
+        run: zip -r db-backup-$(date +%Y%m%d-%H%M%S).zip backups/
 
-      - name: Send Email with Backup
-        uses: dawidd6/action-send-mail@v3
+      - name: Send email with backup
+        uses: dawidd6/action-send-mail@v4
         with:
-          server_address: ${{ secrets.SMTP_SERVER || 'smtp.gmail.com' }}
-          server_port: ${{ secrets.SMTP_PORT || 465 }}
-          username: ${{ secrets.SMTP_USER }}
-          password: ${{ secrets.SMTP_PASS }}
-          subject: "IPL 2026 Database Backup - $(date +'%Y-%m-%d')"
-          to: "jalan.me4u@gmail.com,harshshah661992@gmail.com,tradingwithparthshah@gmail.com,naisicric97@gmail.com"
-          from: "IPL Auction System <${{ secrets.SMTP_USER }}>"
-          body: "Hello Owners,\n\nPlease find the automated SQL backup for the IPL 2026 Auction database attached.\n\nDate: $(date +'%Y-%m-%d %H:%M:%S') UTC"
-          attachments: backup.sql.zip
+          server_address: smtp.gmail.com
+          server_port: 587
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: 'IPL 2026 DB Backup - $(date +%Y-%m-%d)'
+          to: jalan.me4u@gmail.com,harshshah661992@gmail.com,tradingwithparthshah@gmail.com,naisicric97@gmail.com
+          from: ${{ secrets.MAIL_USERNAME }}
+          body: 'Hello Owners,\n\nAttached is the latest automated SQL backup for the IPL 2026 Auction database.\n\nThis includes both schema and data dumps.\n\nDate: $(date +%Y-%m-%d %H:%M:%S) UTC'
+          attachments: '*.zip'
