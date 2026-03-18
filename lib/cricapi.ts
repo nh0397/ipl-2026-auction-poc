@@ -1,8 +1,8 @@
 import { supabase } from "./supabase";
 import { calculateDream11Points, MatchStats } from "./scoring";
 
-const API_KEY = "fd96f414-56b6-47ea-a70f-bb92b5c5527a";
-const BASE_URL = "https://api.cricapi.com/v1";
+const API_KEY = process.env.NEXT_PUBLIC_CRICAPI_KEY;
+const BASE_URL = process.env.NEXT_PUBLIC_CRICAPI_BASE_URL;
 
 /**
  * Sync fixtures for a specific series
