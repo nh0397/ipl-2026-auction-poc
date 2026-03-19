@@ -9,9 +9,11 @@ import { TeamNamePrompt } from "@/components/auction/TeamNamePrompt";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
+import { useAuth } from "@/components/auth/AuthProvider";
+
 export default function Dashboard() {
   const router = useRouter();
-  const [profile, setProfile] = useState<any>(null);
+  const { user, profile, isLoading: authLoading } = useAuth();
   const [recentSignings, setRecentSignings] = useState<any[]>([]);
   const [mySquad, setMySquad] = useState<any[]>([]);
   const [auctionConfig, setAuctionConfig] = useState<any>(null);
@@ -20,16 +22,7 @@ export default function Dashboard() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
-        
-        if (session) {
-          const { data: profileData } = await supabase
-            .from("profiles")
-            .select("*")
-            .eq("id", session.user.id)
-            .single();
-          setProfile(profileData);
-
+        if (user && profile) {
           const { data: configData } = await supabase
             .from("auction_config")
             .select("*")
@@ -51,7 +44,7 @@ export default function Dashboard() {
           const { data: squad } = await supabase
             .from("players")
             .select("*")
-            .or(`sold_to_id.eq.${session.user.id},sold_to.eq."${profileData.team_name}"`)
+            .or(`sold_to_id.eq.${user.id},sold_to.eq."${profile.team_name}"`)
             .order("player_name", { ascending: true });
           setMySquad(squad || []);
 
@@ -62,11 +55,11 @@ export default function Dashboard() {
               if (payload.new.status === 'Sold') {
                 setRecentSignings(prev => [payload.new, ...prev.filter(p => p.id !== payload.new.id)].slice(0, 10));
               }
-              if (payload.new.sold_to_id === session.user.id || payload.old.sold_to_id === session.user.id || 
-                  payload.new.sold_to === profileData.team_name || payload.old.sold_to === profileData.team_name) {
+              if (payload.new.sold_to_id === user.id || payload.old.sold_to_id === user.id || 
+                  payload.new.sold_to === profile.team_name || payload.old.sold_to === profile.team_name) {
                 supabase.from("players")
                   .select("*")
-                  .or(`sold_to_id.eq.${session.user.id},sold_to.eq."${profileData.team_name}"`)
+                  .or(`sold_to_id.eq.${user.id},sold_to.eq."${profile.team_name}"`)
                   .order("player_name", { ascending: true })
                   .then(({ data }) => setMySquad(data || []));
               }
@@ -74,21 +67,20 @@ export default function Dashboard() {
             .subscribe();
 
           return () => {
-            supabase.removeChannel(channel);
+             supabase.removeChannel(channel);
           };
-        } else {
-          // Only redirect if we've checked and there's definitely no session
+        } else if (!authLoading && !user) {
           router.replace("/");
         }
       } catch (err) {
         console.error("Dashboard Fetch Error:", err);
       } finally {
-        setLoading(false);
+        if (!authLoading) setLoading(false);
       }
     };
 
     fetchData();
-  }, [router]);
+  }, [router, user, profile, authLoading]);
 
   if (loading) {
     return (

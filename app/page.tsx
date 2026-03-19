@@ -8,7 +8,10 @@ import { Trophy, LogIn, Chrome, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 
+import { useAuth } from "@/components/auth/AuthProvider";
+
 function LoginPageContent() {
+  const { user, profile, isLoading: authLoading } = useAuth();
   const [loading, setLoading] = useState(false);
   const [dbConnected, setDbConnected] = useState<boolean | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -21,24 +24,14 @@ function LoginPageContent() {
     if (err === "not_allowed") setErrorMsg("Your account is not authorized to access this platform.");
     if (err === "auth_failed") setErrorMsg("Authentication failed. Please try again.");
 
-    // If already logged in, redirect based on role
-    const checkSession = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) {
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('role')
-          .eq('id', session.user.id)
-          .single();
-        
-        if (profile?.role === 'Viewer') {
-          router.replace("/auction");
-        } else {
-          router.replace("/dashboard");
-        }
+    // Redirect if already logged in (Stateless check)
+    if (user && profile) {
+      if (profile.role === 'Viewer') {
+        router.replace("/auction");
+      } else {
+        router.replace("/dashboard");
       }
-    };
-    checkSession();
+    }
 
     // Connection check
     const checkConnection = async () => {
@@ -50,7 +43,7 @@ function LoginPageContent() {
       }
     };
     checkConnection();
-  }, [searchParams, router]);
+  }, [searchParams, router, user, profile]);
 
   const handleGoogleLogin = async () => {
     setLoading(true);

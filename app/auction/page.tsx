@@ -11,6 +11,8 @@ import { Button } from "@/components/ui/button";
 import { cn, getPlayerImage, iplColors } from "@/lib/utils";
 import { TeamNamePrompt } from "@/components/auction/TeamNamePrompt";
 
+import { useAuth } from "@/components/auth/AuthProvider";
+
 // Pool configuration
 const POOL_CONFIG: Record<string, { basePrice: number; minIncrement: number }> = {
   "Marquee":  { basePrice: 5,   minIncrement: 0.5  },
@@ -23,7 +25,8 @@ const POOL_CONFIG: Record<string, { basePrice: number; minIncrement: number }> =
 const POOL_ORDER = ["Marquee", "Pool 1", "Pool 2", "Pool 3", "Unsold"];
 
 export default function AuctionPage() {
-  const [profile, setProfile] = useState<any>(null);
+  const { user, profile, isLoading: authLoading } = useAuth();
+  const role = profile?.role;
   const [auctionConfig, setAuctionConfig] = useState<any>(null);
   const [auctionState, setAuctionState] = useState<any>(null);
   const [currentPlayer, setCurrentPlayer] = useState<any>(null);
@@ -54,6 +57,9 @@ export default function AuctionPage() {
   const channelRef = useRef<RealtimeChannel | null>(null);
   const lockTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  const isAdmin = role === "Admin";
+  const isParticipant = role === "Admin" || role === "Participant";
+
   useEffect(() => {
     let interval: NodeJS.Timeout;
     if (auctionState?.status === "active" && auctionState?.started_at) {
@@ -82,7 +88,8 @@ export default function AuctionPage() {
   };
 
   const resetTimer = async () => {
-    const { stateId } = await getAuctionIds();
+    const res = await supabase.from("auction_state").select("id").single();
+    const stateId = res.data?.id;
     const now = new Date().toISOString();
     await supabase.from("auction_state").update({ started_at: now }).eq("id", stateId);
     
@@ -95,9 +102,6 @@ export default function AuctionPage() {
     
     await fetchAuctionState();
   };
-
-  const isAdmin = profile?.role === "Admin";
-  const isParticipant = profile?.role === "Admin" || profile?.role === "Participant";
 
   // ─── Data Fetching ───
   const fetchAuctionState = useCallback(async () => {
@@ -146,19 +150,15 @@ export default function AuctionPage() {
   }, []);
 
   const fetchProfileData = useCallback(async () => {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session) {
-      const { data: prof } = await supabase.from("profiles").select("*").eq("id", session.user.id).single();
-      if (prof) setProfile(prof);
-
+    if (user) {
       const { data: squad } = await supabase
         .from("players")
         .select("*")
-        .eq("sold_to_id", session.user.id)
+        .eq("sold_to_id", user.id)
         .order("player_name", { ascending: true });
       setMySquad(squad || []);
     }
-  }, []);
+  }, [user]);
 
   const fetchAll = useCallback(async () => {
     try {
