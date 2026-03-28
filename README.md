@@ -34,7 +34,7 @@ The Standings dashboard provides deep-dive visualizations using Recharts to help
     *   **MVP Contributors**: Which top 5 players are carrying the team's score.
     *   **Points by Role**: Distribution of points across Batters, Bowlers, WKs, and All-Rounders.
 
-![Standings Dashboard](/Users/nh/.gemini/antigravity/brain/fa68d672-968c-4d2e-93ad-2edd3970a2c4/scoreboard_standings_breakdown_1774714308266.png)
+![Standings Dashboard](./public/screenshots/standings_breakdown.png)
 
 ---
 
@@ -45,7 +45,7 @@ Our fixtures module stays in sync with the live season, providing users with a c
 *   **Match Awareness**: High-level "Today" visibility and "Points update near [Time]" logic to keep users informed of when data freshing will occur.
 *   **Player Points Verifier**: A direct audit tool for each match that allows admins to cross-reference every point distributed against the raw API scorecard.
 
-![Fixtures View](/Users/nh/.gemini/antigravity/brain/fa68d672-968c-4d2e-93ad-2edd3970a2c4/fixtures_full_page_1774680539734.png)
+![Fixtures View](./public/screenshots/fixtures_view.png)
 
 ---
 
