@@ -1,36 +1,74 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# IPL 2026 Auction Hub & Score Manager
 
-## Getting Started
+A real-time auction platform and analytical dashboard designed for precision fantasy cricket management. This system integrates a live bidding engine with an automated scoring pipeline to provide a seamless experience from the initial player draft to the final match of the season.
 
-First, run the development server:
+---
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+## ── Real-Time Auction Engine ──
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The core of the platform is a high-performance auction room that handles multi-user bidding with millisecond latency. It ensures financial integrity across all franchises while managing the complex state of a massive player pool.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+*   **Dynamic Bidding**: Real-time competition using Supabase Broadcast for zero-latency bid updates.
+*   **Budget Integrity**: Automated math that prevents teams from overspending, factoring in minimum squad requirements and remaining "purse" in real-time.
+*   **Squad Management**: Immediate sold/passed status updates across the global player registry.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+---
 
-## Learn More
+## ── Automated Scoring Pipeline ──
 
-To learn more about Next.js, take a look at the following resources:
+Beyond the auction, the platform transforms into a sophisticated Score Manager. We use a database-first approach to minimize external API costs while maintaining data freshness.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+*   **GitHub Actions Automation**: 2x daily automated sync scripts (7:30 PM & 11:30 PM IST) fetch raw scorecard data from CricAPI and update the central database.
+*   **Manual Override System**: A robust bulk-save pipeline for manual point entry, featuring "dirty state" visual indicators (yellow highlights) and atomic upserts to ensure data consistency.
+*   **Standardized Point Engine**: Automatic calculation of batting, bowling, and fielding points based on predefined tournament rules.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+---
 
-## Deploy on Vercel
+## ── Analytical Insights ──
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+The Standings dashboard provides deep-dive visualizations using Recharts to help franchises understand their progress and roster composition.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+*   **Points Progression**: Area charts showing cumulative score growth across all games.
+*   **Head-to-Head Comparison**: Bar charts for direct performance benchmarking between franchises.
+*   **Franchise Breakdown**: Donut and Pie charts visualizing:
+    *   **MVP Contributors**: Which top 5 players are carrying the team's score.
+    *   **Points by Role**: Distribution of points across Batters, Bowlers, WKs, and All-Rounders.
+
+![Standings Dashboard](/Users/nh/.gemini/antigravity/brain/fa68d672-968c-4d2e-93ad-2edd3970a2c4/scoreboard_standings_breakdown_1774714308266.png)
+
+---
+
+## ── Fixtures & Match Management ──
+
+Our fixtures module stays in sync with the live season, providing users with a clear roadmap of upcoming games and historical results.
+
+*   **Match Awareness**: High-level "Today" visibility and "Points update near [Time]" logic to keep users informed of when data freshing will occur.
+*   **Player Points Verifier**: A direct audit tool for each match that allows admins to cross-reference every point distributed against the raw API scorecard.
+
+![Fixtures View](/Users/nh/.gemini/antigravity/brain/fa68d672-968c-4d2e-93ad-2edd3970a2c4/fixtures_full_page_1774680539734.png)
+
+---
+
+## ── Technical Architecture ──
+
+*   **Frontend**: Next.js 15 (App Router)
+*   **Styling**: Tailwind CSS & Lucide React
+*   **Database & Auth**: Supabase (PostgreSQL, Real-time, RLS)
+*   **Charts**: Recharts (Custom SVG wrappers)
+*   **Automation**: GitHub Actions (Node.js runtime)
+*   **External Data**: CricAPI v1 (Scorecard JSONB)
+
+---
+
+## ── Project Setup ──
+
+To run the project locally, ensure you have Node.js 20+ installed.
+
+1.  Clone the repository.
+2.  Install dependencies: `npm install`
+3.  Set up your `.env` file with Supabase and CricAPI credentials.
+4.  Run the development server: `npm run dev`
+5.  Access the dashboard at `http://localhost:3000`.
+
+---
+© 2026 AuctionHub Council. Built for performance, accuracy, and competition.
