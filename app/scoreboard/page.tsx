@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -15,9 +15,11 @@ import { cn, getPlayerImage, iplColors } from "@/lib/utils";
 import { useRouter } from "next/navigation";
 import { calculateDream11Points, MatchStats } from "@/lib/scoring";
 import { syncMatchScores } from "@/lib/cricapi";
+import { useAuth } from "@/components/auth/AuthProvider";
 import React from "react";
 
 export default function ScoreboardPage() {
+  const { user, profile: authProfile } = useAuth();
   const [profile, setProfile] = useState<any>(null);
   const [allPlayers, setAllPlayers] = useState<any[]>([]);
   const [franchises, setFranchises] = useState<any[]>([]);
@@ -30,7 +32,7 @@ export default function ScoreboardPage() {
   const [saving, setSaving] = useState(false);
   const [cvcChangesUsed, setCvcChangesUsed] = useState(0);
   const [searchQuery, setSearchQuery] = useState("");
-  const [activeTab, setActiveTab] = useState<"sheets" | "points" | "standings">("sheets");
+  const [activeTab, setActiveTab] = useState<"sheets" | "points" | "standings" | "fixtures">("sheets");
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [standings, setStandings] = useState<any[]>([]);
   const [allMatchPoints, setAllMatchPoints] = useState<any[]>([]);
@@ -43,7 +45,18 @@ export default function ScoreboardPage() {
   const [calcActivePlayerId, setCalcActivePlayerId] = useState<string | null>(null);
   const [showBreakdownId, setShowBreakdownId] = useState<string | null>(null);
 
+  // Ref to track if data has loaded (prevents re-running standings on every render)
+  const dataLoadedRef = useRef(false);
+
   const router = useRouter();
+
+  // Sync auth profile into local state (runs once when authProfile arrives)
+  useEffect(() => {
+    if (authProfile) {
+      setProfile(authProfile);
+      setCvcChangesUsed(authProfile.cvc_changes_used || 0);
+    }
+  }, [authProfile]);
 
   useEffect(() => {
     fetchInitialData();
@@ -55,28 +68,23 @@ export default function ScoreboardPage() {
     }
   }, [selectedMatchId]);
 
+  // Only recalculate standings when the user switches to the standings tab
   useEffect(() => {
-    if (activeTab === "standings") {
+    if (activeTab === "standings" && dataLoadedRef.current) {
       calculateStandings();
     }
-  }, [activeTab, allPlayers, allMatchPoints, franchises, allMatches, allNominations]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
 
   const fetchInitialData = async () => {
     try {
       setLoading(true);
-      const { data: { session } } = await supabase.auth.getSession();
       
-      // 1. Profile
-      let currentProfile = null;
-      if (session) {
-        const { data: profileData } = await supabase
-          .from("profiles")
-          .select("*")
-          .eq("id", session.user.id)
-          .single();
-        setProfile(profileData);
-        currentProfile = profileData;
-        setCvcChangesUsed(profileData?.cvc_changes_used || 0);
+      // 1. Profile — from AuthProvider (no getSession needed)
+      let currentProfile = authProfile;
+      if (currentProfile) {
+        setProfile(currentProfile);
+        setCvcChangesUsed(currentProfile.cvc_changes_used || 0);
       }
 
       // 2. All Franchises
@@ -112,7 +120,7 @@ export default function ScoreboardPage() {
       
       if (matchesData) {
         setAllMatches(matchesData);
-        const nextMatch = matchesData.find(m => !m.is_locked) || matchesData[0];
+        const nextMatch = matchesData.find(m => m.status === 'live' || m.status === 'scheduled') || matchesData[0];
         if (nextMatch) setSelectedMatchId(nextMatch.id);
       }
 
@@ -121,6 +129,9 @@ export default function ScoreboardPage() {
         .from("match_points")
         .select("*");
       setAllMatchPoints(allPts || []);
+
+      // Mark data as loaded so standings can be calculated
+      dataLoadedRef.current = true;
     } catch (error) {
       console.error("Error fetching scoreboard data:", error);
     } finally {
@@ -322,7 +333,7 @@ export default function ScoreboardPage() {
         </div>
 
         {/* Primary Tabs */}
-        <div className="flex bg-white/50 backdrop-blur-md p-1.5 rounded-[1.5rem] border border-slate-200 w-full md:w-fit">
+        <div className="flex bg-white/50 backdrop-blur-md p-1.5 rounded-[1.5rem] border border-slate-200 w-full md:w-fit overflow-x-auto no-scrollbar">
            <button 
              onClick={() => setActiveTab("sheets")} 
              className={cn(
@@ -349,6 +360,15 @@ export default function ScoreboardPage() {
              )}
            >
               <Medal size={14} /> Standings
+           </button>
+           <button 
+             onClick={() => setActiveTab("fixtures")} 
+             className={cn(
+               "flex items-center gap-2 px-8 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", 
+               activeTab === "fixtures" ? "bg-slate-900 text-white shadow-lg" : "text-slate-400 hover:text-slate-900"
+             )}
+           >
+              <History size={14} /> Fixtures
            </button>
         </div>
 
@@ -457,16 +477,16 @@ export default function ScoreboardPage() {
                                                   ))}
                                                   <td className="px-8 py-4 text-right font-black italic text-sm text-slate-900 sticky right-0 bg-white group-hover:bg-slate-50 border-l border-slate-100 z-10">{rowTotal}</td>
                                                </tr>
-                                            );
-                                         })}
-                                         <tr className="bg-slate-900 text-white">
-                                            <td className="px-8 py-4 sticky left-0 bg-slate-900 z-10 font-black text-[10px] uppercase tracking-widest opacity-60">Squad Performance</td>
-                                            {colTotals.map((t, i) => <td key={i} className="px-4 py-4 text-center font-black text-[11px] underline underline-offset-4 decoration-white/20">{t}</td>)}
-                                            <td className="px-8 py-4 text-right font-black italic text-xl sticky right-0 bg-slate-900 z-10">{colTotals.reduce((a, b) => a + b, 0)}</td>
-                                         </tr>
-                                      </React.Fragment>
-                                   );
-                                })}
+                                             );
+                                          })}
+                                          <tr className="bg-slate-900 text-white">
+                                             <td className="px-8 py-4 sticky left-0 bg-slate-900 z-10 font-black text-[10px] uppercase tracking-widest opacity-60">Squad Performance</td>
+                                             {colTotals.map((t, i) => <td key={i} className="px-4 py-4 text-center font-black text-[11px] underline underline-offset-4 decoration-white/20">{t}</td>)}
+                                             <td className="px-8 py-4 text-right font-black italic text-xl sticky right-0 bg-slate-900 z-10">{colTotals.reduce((a, b) => a + b, 0)}</td>
+                                          </tr>
+                                       </React.Fragment>
+                                    );
+                                 })}
                              </tbody>
                           </table>
                        </div>
@@ -495,7 +515,7 @@ export default function ScoreboardPage() {
                             onChange={(e) => setSelectedMatchId(e.target.value)} 
                             className="bg-transparent font-black italic uppercase text-xs tracking-tighter text-slate-900 focus:outline-none cursor-pointer px-4"
                           >
-                             {allMatches.map(m => <option key={m.id} value={m.id}>{m.title} (Game {m.match_no})</option>)}
+                             {allMatches.map(m => <option key={m.id} value={m.id}>{m.title} (G{m.match_no})</option>)}
                           </select>
                           <Button 
                             variant="ghost" 
@@ -697,6 +717,85 @@ export default function ScoreboardPage() {
                           </table>
                        </CardContent>
                     </Card>
+                 </div>
+              )}
+
+              {activeTab === "fixtures" && (
+                 <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-500">
+                    <div className="flex justify-between items-center mb-4 bg-white p-8 rounded-[2rem] border border-slate-200">
+                       <div>
+                          <h2 className="text-xl font-black italic uppercase tracking-tighter">Season Fixtures</h2>
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Found {allMatches.length} Matches Schedule</p>
+                       </div>
+                       {profile?.role === 'Admin' && (
+                          <div className="flex gap-2">
+                             <Button 
+                               onClick={async () => {
+                                 setSaving(true);
+                                 try {
+                                   const { syncFixtures } = await import("@/lib/cricapi");
+                                   const result = await syncFixtures("87c62aac-bc3c-4738-ab93-19da0690488f");
+                                   if (result.success) {
+                                      alert(`Successfully synced ${result.count} fixtures!`);
+                                      window.location.reload();
+                                   } else alert(result.error);
+                                 } catch (e: any) { alert(e.message); }
+                                 setSaving(false);
+                               }}
+                               className="bg-slate-900 text-white rounded-xl font-black uppercase text-[10px] px-6 h-12 shadow-lg flex gap-3 transition-all"
+                             >
+                                <RefreshCw className={cn(saving && "animate-spin")} size={14} /> Sync All Fixtures
+                             </Button>
+                          </div>
+                       )}
+                    </div>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                       {allMatches.map((m) => {
+                          const isCompleted = m.status === 'completed';
+                          const isLive = m.status === 'live';
+                          
+                          return (
+                            <div 
+                              key={m.id} 
+                              className="bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-xl group hover:border-slate-900 hover:-translate-y-1 transition-all duration-300 relative overflow-hidden"
+                            >
+                               {isLive && <div className="absolute top-0 right-0 p-4 animate-pulse"><Zap className="text-red-500" size={16} /></div>}
+                               
+                               <div className="flex justify-between items-start mb-6">
+                                  <div className="flex items-center gap-2">
+                                     <div className="h-2 w-2 rounded-full bg-slate-900" />
+                                     <span className="font-black text-[10px] uppercase tracking-widest text-slate-400">Match {m.match_no}</span>
+                                  </div>
+                                  <span className={cn(
+                                     "text-[8px] font-black uppercase px-4 py-1.5 rounded-full tracking-widest shadow-sm",
+                                     isCompleted ? "bg-emerald-500 text-white" :
+                                     isLive ? "bg-red-500 text-white" :
+                                     "bg-slate-100 text-slate-500"
+                                  )}>
+                                     {m.status || 'scheduled'}
+                                  </span>
+                               </div>
+                               
+                               <h3 className="font-black italic uppercase text-lg text-slate-900 leading-none mb-6 group-hover:text-indigo-600 transition-colors">{m.title}</h3>
+                               
+                               <div className="flex flex-col gap-3">
+                                  <div className="flex items-center gap-3 bg-slate-50 p-3 rounded-2xl">
+                                     <div className="h-8 w-8 bg-white rounded-xl flex items-center justify-center text-slate-900 shadow-sm">
+                                        <Clock size={14} />
+                                     </div>
+                                     <div className="flex flex-col">
+                                        <span className="text-[10px] font-black text-slate-400 uppercase leading-none tracking-tight">Kickoff</span>
+                                        <span className="text-[11px] font-black text-slate-900 uppercase italic">
+                                          {new Date(m.date_time).toLocaleString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                                        </span>
+                                     </div>
+                                  </div>
+                               </div>
+                            </div>
+                          );
+                       })}
+                    </div>
                  </div>
               )}
            </div>

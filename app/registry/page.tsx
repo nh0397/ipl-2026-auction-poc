@@ -7,8 +7,10 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn, getPlayerImage, iplColors } from "@/lib/utils";
+import { useAuth } from "@/components/auth/AuthProvider";
 
 export default function RegistryPage() {
+  const { profile: authProfile } = useAuth();
   const [profile, setProfile] = useState<any>(null);
   const [allPlayers, setAllPlayers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -22,6 +24,11 @@ export default function RegistryPage() {
   const [activeTeam, setActiveTeam] = useState<string>("All Teams");
   const lastClickedIndex = useRef<number | null>(null);
   const [auctionConfig, setAuctionConfig] = useState<any>(null);
+
+  // Sync auth profile
+  useEffect(() => {
+    if (authProfile) setProfile(authProfile);
+  }, [authProfile]);
 
   // Admin sees Unallocated tab, everyone sees the pool tabs
   const isAdmin = profile?.role === "Admin";
@@ -39,26 +46,16 @@ export default function RegistryPage() {
   const fetchData = async () => {
     try {
       setLoading(true);
-      const { data: { session } } = await supabase.auth.getSession();
-      
-      if (session) {
-        const { data: profileData } = await supabase
-          .from("profiles")
-          .select("*")
-          .eq("id", session.user.id)
-          .single();
-        setProfile(profileData);
 
-        const { data: all } = await supabase
-          .from("players")
-          .select("*")
-          .order("player_name", { ascending: true });
-        setAllPlayers(all || []);
+      const { data: all } = await supabase
+        .from("players")
+        .select("*")
+        .order("player_name", { ascending: true });
+      setAllPlayers(all || []);
 
-        // Fetch auction config if it exists
-        const { data: config } = await supabase.from("auction_config").select("*").limit(1).single();
-        if (config) setAuctionConfig(config);
-      }
+      // Fetch auction config if it exists
+      const { data: config } = await supabase.from("auction_config").select("*").limit(1).single();
+      if (config) setAuctionConfig(config);
     } catch (error) {
       console.error("Error fetching registry data:", error);
     } finally {

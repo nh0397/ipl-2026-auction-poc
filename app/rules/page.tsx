@@ -6,17 +6,23 @@ import { RulesEditor } from "@/components/rules/RulesEditor";
 import { RulesView } from "@/components/rules/RulesView";
 import { Button } from "@/components/ui/button";
 import { Edit2, Eye, ShieldAlert as ShieldIcon } from "lucide-react";
+import { useAuth } from "@/components/auth/AuthProvider";
 
 export default function RulesPage() {
+  const { profile: authProfile } = useAuth();
   const [content, setContent] = useState<string>("");
   const [isEditing, setIsEditing] = useState(false);
   const [role, setRole] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  // Sync role from auth context
+  useEffect(() => {
+    if (authProfile) setRole(authProfile.role || "Participant");
+  }, [authProfile]);
+
   useEffect(() => {
     fetchRules();
-    checkRole();
 
     // Subscribe to realtime updates
     const channel = supabase
@@ -44,18 +50,6 @@ export default function RulesPage() {
       supabase.removeChannel(channel);
     };
   }, []);
-
-  const checkRole = async () => {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session?.user) {
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("role")
-        .eq("id", session.user.id)
-        .single();
-      setRole(profile?.role || "Participant");
-    }
-  };
 
   const fetchRules = async () => {
     const { data, error } = await supabase

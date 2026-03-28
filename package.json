@@ -9,7 +9,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "sync:fixtures": "tsx scripts/sync-fixtures.ts",
+    "sync:auto": "tsx scripts/auto-sync-scores.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.2.0",
@@ -49,9 +51,11 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "dotenv": "^16.4.5",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",
+    "tsx": "^4.19.0",
     "typescript": "^5"
   }
 }

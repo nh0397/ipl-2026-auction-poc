@@ -10,8 +10,10 @@ import { Badge } from "@/components/ui/badge";
 import { Trophy, Shield, User, ArrowLeft, RefreshCw, Settings, Save, Search, Gavel, Clock, Users, UserMinus, UserPlus, LogOut, History as HistoryIcon } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useAuth } from "@/components/auth/AuthProvider";
 
 export default function AdminDashboard() {
+  const { user, profile: authProfile } = useAuth();
   const [users, setUsers] = useState<any[]>([]);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -37,32 +39,20 @@ export default function AdminDashboard() {
   const router = useRouter();
 
   useEffect(() => {
-    const checkAuth = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        router.push("/");
-        return;
-      }
+    // Use AuthProvider data instead of calling getSession
+    if (!user) {
+      router.push("/");
+      return;
+    }
+    if (authProfile?.role !== "Admin") {
+      router.push("/");
+      return;
+    }
 
-      // Check if user is Admin
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("role")
-        .eq("id", session.user.id)
-        .single();
-
-      if (profile?.role !== "Admin") {
-        router.push("/");
-        return;
-      }
-
-      setCurrentUser(session.user);
-      fetchUsers();
-      fetchConfig();
-      fetchPlayers();
-    };
-
-    checkAuth();
+    setCurrentUser(user);
+    fetchUsers();
+    fetchConfig();
+    fetchPlayers();
 
     // Set up Real-time subscriptions
     const channel = supabase
@@ -87,7 +77,8 @@ export default function AdminDashboard() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [router]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, authProfile]);
 
   const fetchConfig = async () => {
     const { data } = await supabase.from("auction_config").select("*").limit(1).single();

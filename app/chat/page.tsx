@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { Send, MessageSquare } from "lucide-react";
+import { useAuth } from "@/components/auth/AuthProvider";
 
 interface Message {
   id: string;
@@ -19,6 +20,7 @@ interface Profile {
 }
 
 export default function ChatPage() {
+  const { user, profile: authProfile } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState("");
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -26,19 +28,20 @@ export default function ChatPage() {
   const [sending, setSending] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
+  // Sync auth profile
+  useEffect(() => {
+    if (authProfile) {
+      setProfile({
+        id: authProfile.id,
+        full_name: authProfile.full_name,
+        role: authProfile.role,
+      });
+    }
+  }, [authProfile]);
+
   useEffect(() => {
     const init = async () => {
-      // Get current user profile
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return;
-
-      const { data: profileData } = await supabase
-        .from("profiles")
-        .select("id, full_name, role")
-        .eq("id", session.user.id)
-        .single();
-
-      setProfile(profileData);
+      if (!user) return;
 
       // Load existing messages
       const { data: msgs } = await supabase
@@ -68,7 +71,7 @@ export default function ChatPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [user]);
 
   // Auto-scroll to bottom when messages change
   useEffect(() => {

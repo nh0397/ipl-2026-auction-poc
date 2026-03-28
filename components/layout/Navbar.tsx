@@ -60,7 +60,7 @@ export function Navbar() {
     { href: "/registry", label: "Player Pool", icon: Search },
     { href: "/squads", label: "Team Rosters", icon: Users },
     { href: "/auction", label: "Auction", icon: Gavel },
-    { href: "/scoreboard", label: "Points Table", icon: Trophy },
+    { href: "/scoreboard", label: "Points & Fixtures", icon: Trophy },
     { href: "/test-scorecard", label: "Fantasy Test", icon: Zap },
   ];
 

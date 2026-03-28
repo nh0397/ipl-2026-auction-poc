@@ -1,8 +1,10 @@
 import { supabase } from "./supabase";
 import { calculateDream11Points, MatchStats } from "./scoring";
+import testScorecard from "./data/test_scorecard.json";
 
 const API_KEY = process.env.NEXT_PUBLIC_CRICAPI_KEY;
 const BASE_URL = process.env.NEXT_PUBLIC_CRICAPI_BASE_URL;
+const USE_MOCK_API = process.env.NEXT_PUBLIC_USE_MOCK_API === 'true';
 
 /**
  * Sync fixtures for a specific series
@@ -38,8 +40,14 @@ export async function syncFixtures(seriesId: string) {
  */
 export async function syncMatchScores(matchId: string, apiMatchId: string) {
   try {
-    const response = await fetch(`${BASE_URL}/match_scorecard?apikey=${API_KEY}&id=${apiMatchId}`);
-    const data = await response.json();
+    let data;
+    if (USE_MOCK_API) {
+      console.log("Using Mock API data for scorecard sync");
+      data = testScorecard;
+    } else {
+      const response = await fetch(`${BASE_URL}/match_scorecard?apikey=${API_KEY}&id=${apiMatchId}`);
+      data = await response.json();
+    }
 
     if (data.status !== "success") throw new Error(data.reason || "Failed to fetch scorecard");
 
@@ -171,7 +179,11 @@ export async function syncMatchScores(matchId: string, apiMatchId: string) {
     const { error } = await supabase.from("match_points").upsert(updates, { onConflict: "player_id,match_id" });
     if (error) throw error;
 
-    return { success: true, count: updates.length };
+    return { 
+      success: true, 
+      count: updates.length,
+      matchEnded: data.data.matchEnded 
+    };
   } catch (err: any) {
     console.error("Error syncing scores:", err);
     return { success: false, error: err.message };

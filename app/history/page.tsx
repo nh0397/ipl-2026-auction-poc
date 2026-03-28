@@ -5,8 +5,10 @@ import { supabase } from "@/lib/supabase";
 import { History, ArrowLeft, Trophy, RotateCcw, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { getPlayerImage, cn, iplColors } from "@/lib/utils";
+import { useAuth } from "@/components/auth/AuthProvider";
 
 export default function AuctionHistory() {
+  const { profile: authProfile } = useAuth();
   const [soldPlayers, setSoldPlayers] = useState<any[]>([]);
   const [profile, setProfile] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -14,15 +16,14 @@ export default function AuctionHistory() {
 
   const isAdmin = profile?.role === "Admin";
 
+  // Sync auth profile
+  useEffect(() => {
+    if (authProfile) setProfile(authProfile);
+  }, [authProfile]);
+
   useEffect(() => {
     const fetchHistory = async () => {
       setLoading(true);
-
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) {
-        const { data: prof } = await supabase.from("profiles").select("*").eq("id", session.user.id).single();
-        setProfile(prof);
-      }
 
       const { data } = await supabase
         .from("players")

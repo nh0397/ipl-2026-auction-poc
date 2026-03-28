@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState, useRef } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
 
@@ -29,13 +29,16 @@ export function AuthProvider({
   const [profile, setProfile] = useState(initialProfile);
   const [isLoading, setIsLoading] = useState(!initialSession);
   const router = useRouter();
+  const hasInitialized = useRef(false);
 
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       const currentUser = session?.user ?? null;
       setUser(currentUser);
       
-      if (event === 'SIGNED_IN') {
+      // ONLY refresh on actual sign-in/sign-out transitions,
+      // NOT on INITIAL_SESSION or TOKEN_REFRESHED (which cause infinite loops).
+      if (event === 'SIGNED_IN' && hasInitialized.current) {
         const { data: prof } = await supabase
           .from("profiles")
           .select("*")
@@ -48,13 +51,15 @@ export function AuthProvider({
         router.refresh();
       }
       
+      hasInitialized.current = true;
       setIsLoading(false);
     });
 
     return () => {
       subscription.unsubscribe();
     };
-  }, [router]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <AuthContext.Provider value={{ user, profile, isLoading }}>
