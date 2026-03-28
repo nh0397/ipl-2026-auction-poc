@@ -4,54 +4,78 @@ import * as dotenv from 'dotenv';
 dotenv.config();
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-const apiKey = process.env.NEXT_PUBLIC_CRICAPI_KEY!;
-const baseUrl = process.env.NEXT_PUBLIC_CRICAPI_BASE_URL!;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
+const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Indian Premier League 2026 Series ID
-const DEFAULT_SERIES_ID = "87c62aac-bc3c-4738-ab93-19da0690488f"; 
+const API_URL = "https://api.cricapi.com/v1/series_info?apikey=REMOVED_KEY&id=87c62aac-bc3c-4738-ab93-19da0690488f";
 
-async function syncFixtures(seriesId: string) {
-  console.log(`Starting fixture sync for series: ${seriesId}`);
-  
-  try {
-    const response = await fetch(`${baseUrl}/series_info?apikey=${apiKey}&id=${seriesId}`);
-    const data: any = await response.json();
-    
-    if (data.status !== "success") {
-      throw new Error(data.reason || "Failed to fetch fixtures from CricAPI");
-    }
-
-    const matches = data.data.matchList;
-    console.log(`Found ${matches.length} matches. Processing...`);
-
-    const formattedMatches = matches.map((m: any) => ({
-      api_match_id: m.id,
-      match_no: parseInt(m.name.match(/(\d+)/)?.[0] || "0"),
-      title: m.name.split(",")[0],
-      date_time: m.dateTimeGMT,
-    }));
-
-    const { data: upsertData, error } = await supabase
-      .from("matches")
-      .upsert(formattedMatches, { onConflict: "match_no" });
-
-    if (error) throw error;
-
-    console.log("✅ Successfully synced fixtures to database!");
-    console.table(formattedMatches.slice(0, 5).map((m: any) => ({
-      No: m.match_no,
-      Match: m.title,
-      Date: m.date_time
-    })));
-    
-  } catch (err: any) {
-    console.error("❌ Sync Error:", err.message);
-  }
+function extractMatchNo(name: string): number {
+  // "Sunrisers Hyderabad vs Delhi Capitals, 31st Match, ..." → 31
+  const match = name.match(/(\d+)(?:st|nd|rd|th)\s+Match/i);
+  return match ? parseInt(match[1]) : 0;
 }
 
-// Get series ID from command line or use default
-const targetSeries = process.argv[2] || DEFAULT_SERIES_ID;
-syncFixtures(targetSeries);
+async function syncFixtures() {
+  console.log("🏏 Fetching IPL 2026 fixtures from CricAPI...");
+  
+  const response = await fetch(API_URL);
+  const data: any = await response.json();
+  
+  if (data.status !== "success") {
+    console.error("❌ API Error:", data);
+    return;
+  }
+
+  const matchList = data.data.matchList;
+  console.log(`Found ${matchList.length} matches. Transforming...`);
+
+  const rows = matchList.map((m: any) => ({
+    api_match_id: m.id,
+    match_no: extractMatchNo(m.name),
+    title: m.name.split(",")[0].trim(),
+    venue: m.venue || null,
+    match_date: m.date,
+    date_time_gmt: m.dateTimeGMT,
+    team1_name: m.teamInfo?.[0]?.name || m.teams?.[0] || null,
+    team1_short: m.teamInfo?.[0]?.shortname || null,
+    team1_img: m.teamInfo?.[0]?.img || null,
+    team2_name: m.teamInfo?.[1]?.name || m.teams?.[1] || null,
+    team2_short: m.teamInfo?.[1]?.shortname || null,
+    team2_img: m.teamInfo?.[1]?.img || null,
+    status: m.matchEnded ? 'completed' : m.matchStarted ? 'live' : 'scheduled',
+    match_started: m.matchStarted || false,
+    match_ended: m.matchEnded || false,
+  }));
+
+  // Sort by match number
+  rows.sort((a: any, b: any) => a.match_no - b.match_no);
+
+  console.log(`\nInserting ${rows.length} fixtures into database...`);
+
+  const { data: result, error } = await supabase
+    .from("fixtures")
+    .upsert(rows, { onConflict: "api_match_id" });
+
+  if (error) {
+    console.error("❌ Database Error:", error.message);
+    console.error("Details:", error);
+    return;
+  }
+
+  console.log("✅ Successfully synced all fixtures!\n");
+  
+  // Print summary
+  console.table(
+    rows.slice(0, 10).map((r: any) => ({
+      "#": r.match_no,
+      Match: r.title,
+      Date: r.match_date,
+      Venue: r.venue?.split(",")[0],
+      Status: r.status,
+    }))
+  );
+  console.log(`... and ${rows.length - 10} more matches.`);
+}
+
+syncFixtures().catch(console.error);

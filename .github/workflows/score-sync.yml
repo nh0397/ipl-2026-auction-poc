@@ -1,32 +1,34 @@
-name: Automated Score Sync
+name: Daily Score Sync (IPL 2026)
 
 on:
   schedule:
-    # Run every 30 minutes
-    - cron: '*/30 * * * *'
+    # 7:30 PM IST = 14:00 UTC. Match ends around 18:00 UTC (11:30 PM IST).
+    - cron: '0 18 * * *'
+    # 3:30 PM IST = 10:00 UTC. Match ends around 14:00 UTC (7:30 PM IST).
+    - cron: '0 14 * * *'
+  
+  # Allow manual trigger from the GitHub Actions tab
   workflow_dispatch:
-    # Allow manual triggering
 
 jobs:
-  sync:
+  sync_score:
     runs-on: ubuntu-latest
+    
     steps:
-      - name: Checkout Repository
+      - name: Checkout the repository
         uses: actions/checkout@v4
-
+      
       - name: Setup Node.js
-        uses: actions/checkout@v4
+        uses: actions/setup-node@v4
         with:
-          node-version: '20'
-
-      - name: Install Dependencies
-        run: npm install
-
-      - name: Run Auto Sync
+          node-version: '18'
+          
+      - name: Install dependencies (dotenv)
+        run: npm install dotenv
+        
+      - name: Run Score Sync Script
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
-          NEXT_PUBLIC_CRICAPI_KEY: ${{ secrets.NEXT_PUBLIC_CRICAPI_KEY }}
-          NEXT_PUBLIC_CRICAPI_BASE_URL: ${{ secrets.NEXT_PUBLIC_CRICAPI_BASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: npm run sync:auto
+          NEXT_PUBLIC_CRICAPI_KEY: ${{ secrets.NEXT_PUBLIC_CRICAPI_KEY }}
+        run: node scripts/sync-scores.js

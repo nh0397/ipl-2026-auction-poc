@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/components/auth/AuthProvider";
-import { LayoutDashboard, ShieldCheck, LogOut, BookOpen, ChevronDown, User, Activity, Gavel, Search, Menu, X, Users, History, Trophy, Zap } from "lucide-react";
+import { LayoutDashboard, ShieldCheck, LogOut, BookOpen, ChevronDown, User, Activity, Gavel, Search, Menu, X, Users, History, Trophy, Zap, Calendar } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export function Navbar() {
@@ -41,7 +41,7 @@ export function Navbar() {
 
   if (isLoading) {
     return (
-      <nav className="sticky top-0 z-50 w-full border-b bg-white/90 backdrop-blur-xl h-14 md:h-16 flex items-center px-12">
+      <nav className="sticky top-0 z-50 w-full border-b bg-white/90 backdrop-blur-xl h-14 md:h-16 flex items-center px-4 md:px-12">
         <div className="flex items-center gap-3 md:gap-10">
            <div className="h-9 w-9 bg-slate-100 animate-pulse rounded-xl" />
            <div className="hidden md:flex items-center gap-1">
@@ -55,13 +55,12 @@ export function Navbar() {
   if (!user) return null;
 
   const navLinks = [
-    ...(role !== 'Viewer' ? [{ href: "/dashboard", label: "Dashboard", icon: LayoutDashboard }] : []),
+    ...(role !== 'Viewer' ? [{ href: "/dashboard", label: "My Team", icon: LayoutDashboard }] : []),
     { href: "/rules", label: "Rules", icon: BookOpen },
-    { href: "/registry", label: "Player Pool", icon: Search },
-    { href: "/squads", label: "Team Rosters", icon: Users },
+    { href: "/registry", label: "Players", icon: Search },
+    { href: "/squads", label: "Squads", icon: Users },
     { href: "/auction", label: "Auction", icon: Gavel },
-    { href: "/scoreboard", label: "Points & Fixtures", icon: Trophy },
-    { href: "/test-scorecard", label: "Fantasy Test", icon: Zap },
+    { href: "/scoreboard", label: "Score Manager", icon: Trophy },
   ];
 
   return (
