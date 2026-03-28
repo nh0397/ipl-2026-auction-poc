@@ -8,7 +8,8 @@ const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PU
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-const API_URL = "https://api.cricapi.com/v1/series_info?apikey=REMOVED_KEY&id=87c62aac-bc3c-4738-ab93-19da0690488f";
+const CRICAPI_KEY = process.env.NEXT_PUBLIC_CRICAPI_KEY!;
+const API_URL = `https://api.cricapi.com/v1/series_info?apikey=${CRICAPI_KEY}&id=87c62aac-bc3c-4738-ab93-19da0690488f`;
 
 function extractMatchNo(name: string): number {
   // "Sunrisers Hyderabad vs Delhi Capitals, 31st Match, ..." → 31

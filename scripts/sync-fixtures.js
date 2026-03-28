@@ -4,9 +4,12 @@
 
 const https = require("https");
 
-const API_URL = "https://api.cricapi.com/v1/series_info?apikey=REMOVED_KEY&id=87c62aac-bc3c-4738-ab93-19da0690488f";
-const SUPABASE_URL = "https://iujqohkwnoqvmpxhbzec.supabase.co";
-const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml1anFvaGt3bm9xdm1weGhiemVjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMwNzAxOTIsImV4cCI6MjA4ODY0NjE5Mn0.aVlTAHWOXlui65bvsSWqoLGuUmE8d2IJ9pnupi0y2QE";
+require('dotenv').config();
+
+const API_KEY = process.env.NEXT_PUBLIC_CRICAPI_KEY;
+const API_URL = `https://api.cricapi.com/v1/series_info?apikey=${API_KEY}&id=87c62aac-bc3c-4738-ab93-19da0690488f`;
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
 function httpGet(url) {
   return new Promise((resolve, reject) => {
