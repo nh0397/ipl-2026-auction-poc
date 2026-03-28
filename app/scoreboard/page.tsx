@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { supabase } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card";
 import { 
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart as BarChartRecharts, Bar
@@ -78,6 +78,7 @@ export default function ScoreboardPage() {
   const [allNominations, setAllNominations] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [pendingEdits, setPendingEdits] = useState<Record<string, { player_id: string, match_id: string, points: number }>>({});
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState<"sheets" | "standings" | "fixtures">("sheets");
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
@@ -210,6 +211,13 @@ export default function ScoreboardPage() {
     const points = parseFloat(value) || 0;
     const match = allMatches.find(m => m.match_no === matchNo);
     if (!match) return;
+
+    // Track pending edit
+    setPendingEdits(prev => ({
+      ...prev,
+      [`${playerId}_${match.id}`]: { player_id: playerId, match_id: match.id, points }
+    }));
+
     setAllMatchPoints(prev => {
       const existingIdx = prev.findIndex(p => p.player_id === playerId && p.match_id === match.id);
       if (existingIdx >= 0) {
@@ -221,15 +229,21 @@ export default function ScoreboardPage() {
     });
   };
 
-  const saveSeasonPoints = async (playerId: string, matchNo: number, value: string) => {
-    const points = parseFloat(value) || 0;
-    const match = allMatches.find(m => m.match_no === matchNo);
-    if (!match) return;
+  const handleBulkSave = async () => {
+    const edits = Object.values(pendingEdits);
+    if (edits.length === 0) return;
+    
     setSaving(true);
     const { error } = await supabase
       .from("match_points")
-      .upsert({ player_id: playerId, match_id: match.id, points }, { onConflict: "player_id,match_id" });
-    if (error) console.error("Error saving point:", error);
+      .upsert(edits, { onConflict: "player_id,match_id" });
+      
+    if (error) {
+      console.error("Error bulk saving points:", error);
+      alert("Failed to save some points.");
+    } else {
+      setPendingEdits({});
+    }
     setSaving(false);
   };
 
@@ -478,24 +492,31 @@ export default function ScoreboardPage() {
                       
                       {/* Compact game grid */}
                       <div className="grid grid-cols-9 gap-1">
-                        {playerScores.slice(0, 17).map((score, idx) => (
-                          <div key={idx} className="text-center">
-                            <div className="text-[7px] font-bold text-slate-400 mb-0.5">G{idx + 1}</div>
-                            {isMyTeam ? (
-                              <input 
-                                type="number" step="0.5" value={score || ""} 
-                                onChange={(e) => updateSeasonPoint(player.id, idx + 1, e.target.value)} 
-                                onBlur={(e) => saveSeasonPoints(player.id, idx + 1, e.target.value)}
-                                className="w-full h-7 text-center font-black text-[9px] bg-slate-50 border border-slate-100 rounded-md focus:ring-1 focus:ring-slate-900" 
-                                placeholder="0"
-                              />
-                            ) : (
-                              <div className={cn("h-7 flex items-center justify-center font-black text-[9px] bg-slate-50 rounded-md", score > 0 ? "text-slate-900" : "text-slate-200")}>
-                                {score || 0}
-                              </div>
-                            )}
-                          </div>
-                        ))}
+                        {playerScores.slice(0, 17).map((score, idx) => {
+                          const matchObj = allMatches.find(m => m.match_no === idx + 1);
+                          const isDirty = matchObj && pendingEdits[`${player.id}_${matchObj.id}`] !== undefined;
+
+                          return (
+                            <div key={idx} className="text-center">
+                              <div className="text-[7px] font-bold text-slate-400 mb-0.5">G{idx + 1}</div>
+                              {isMyTeam ? (
+                                <input 
+                                  type="number" step="0.5" value={score || ""} 
+                                  onChange={(e) => updateSeasonPoint(player.id, idx + 1, e.target.value)} 
+                                  className={cn(
+                                    "w-full h-7 text-center font-black text-[9px] border rounded-md focus:ring-1 focus:ring-slate-900 transition-colors",
+                                    isDirty ? "bg-amber-100 border-amber-300 text-amber-900" : "bg-slate-50 border-slate-100"
+                                  )} 
+                                  placeholder="0"
+                                />
+                              ) : (
+                                <div className={cn("h-7 flex items-center justify-center font-black text-[9px] bg-slate-50 rounded-md", score > 0 ? "text-slate-900" : "text-slate-200")}>
+                                  {score || 0}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   );
@@ -548,21 +569,28 @@ export default function ScoreboardPage() {
                                                 </div>
                                              </div>
                                           </td>
-                                          {playerScores.map((score, idx) => (
-                                             <td key={idx} className="px-2 py-4 text-center">
-                                                {isMyTeam ? (
-                                                   <Input 
-                                                     type="number" step="0.5" value={score || ""} 
-                                                     onChange={(e) => updateSeasonPoint(player.id, idx + 1, e.target.value)} 
-                                                     onBlur={(e) => saveSeasonPoints(player.id, idx + 1, e.target.value)}
-                                                     className="h-8 w-16 mx-auto text-center font-black text-[10px] bg-slate-50 border-none rounded-lg focus:ring-1 focus:ring-slate-900" 
-                                                     placeholder="0"
-                                                   />
-                                                ) : (
-                                                   <span className={cn("font-black text-[10px]", score > 0 ? "text-slate-900" : "text-slate-200")}>{score || 0}</span>
-                                                )}
-                                             </td>
-                                          ))}
+                                          {playerScores.map((score, idx) => {
+                                             const matchObj = allMatches.find(m => m.match_no === idx + 1);
+                                             const isDirty = matchObj && pendingEdits[`${player.id}_${matchObj.id}`] !== undefined;
+                                             
+                                             return (
+                                               <td key={idx} className="px-2 py-4 text-center">
+                                                  {isMyTeam ? (
+                                                     <Input 
+                                                       type="number" step="0.5" value={score || ""} 
+                                                       onChange={(e) => updateSeasonPoint(player.id, idx + 1, e.target.value)} 
+                                                       className={cn(
+                                                         "h-8 w-16 mx-auto text-center font-black text-[10px] border-none rounded-lg focus:ring-1 focus:ring-slate-900 transition-colors",
+                                                         isDirty ? "bg-amber-100 text-amber-900 ring-1 ring-amber-300 shadow-inner" : "bg-slate-50 focus:bg-white"
+                                                       )} 
+                                                       placeholder="0"
+                                                     />
+                                                  ) : (
+                                                     <span className={cn("font-black text-[10px]", score > 0 ? "text-slate-900" : "text-slate-200")}>{score || 0}</span>
+                                                  )}
+                                               </td>
+                                             );
+                                          })}
                                           <td className="px-8 py-4 text-right font-black italic text-sm text-slate-900 sticky right-0 bg-white group-hover:bg-slate-50 border-l border-slate-100 z-10">{rowTotal}</td>
                                        </tr>
                                      );
@@ -1093,6 +1121,22 @@ export default function ScoreboardPage() {
                 </div>
               )}
             </div>
+          </div>
+        )}
+
+        {/* Global Floating Save Button for Pending Edits */}
+        {Object.keys(pendingEdits).length > 0 && (
+          <div className="fixed bottom-6 right-6 z-50 animate-in slide-in-from-bottom-5 fade-in duration-300">
+            <Button
+              onClick={handleBulkSave}
+              disabled={saving}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white rounded-[2rem] px-8 py-7 shadow-2xl flex gap-3 items-center font-black uppercase tracking-widest text-xs border-[4px] border-white/20 backdrop-blur-md transition-all hover:scale-105 active:scale-95 cursor-pointer"
+            >
+              {saving ? <Loader2 className="animate-spin h-5 w-5 opacity-70" /> : <Save className="h-5 w-5 opacity-90" />}
+              <span className="flex flex-col items-start leading-none gap-0.5">
+                Save Changes <span className="text-[9px] text-emerald-100 opacity-80">{Object.keys(pendingEdits).length} Edits Pending</span>
+              </span>
+            </Button>
           </div>
         )}
       </div>
