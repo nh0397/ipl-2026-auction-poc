@@ -743,15 +743,15 @@ export default function ScoreboardPage() {
                   </div>
 
                   {/* Per-Game Bar Chart */}
-                  {maxGames > 0 && (
-                    <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-6 shadow-sm">
-                      <div className="flex items-center justify-between mb-4">
-                        <div>
-                          <h3 className="text-sm sm:text-base font-black uppercase italic tracking-tight text-slate-900">Head-to-Head</h3>
-                          <p className="text-[8px] sm:text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">Per-game comparison</p>
-                        </div>
-                        <BarChart3 className="h-5 w-5 text-emerald-500" />
+                  <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-6 shadow-sm">
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <h3 className="text-sm sm:text-base font-black uppercase italic tracking-tight text-slate-900">Head-to-Head</h3>
+                        <p className="text-[8px] sm:text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">Per-game comparison</p>
                       </div>
+                      <BarChart3 className="h-5 w-5 text-emerald-500" />
+                    </div>
+                    {maxGames > 0 ? (
                       <div className="w-full h-48 sm:h-56">
                         <ResponsiveContainer width="100%" height="100%">
                           <BarChartRecharts data={perGameData} margin={{ top: 5, right: 5, bottom: 5, left: -15 }}>
@@ -771,8 +771,10 @@ export default function ScoreboardPage() {
                           </BarChartRecharts>
                         </ResponsiveContainer>
                       </div>
-                    </div>
-                  )}
+                    ) : (
+                      <div className="h-48 flex items-center justify-center text-slate-300 font-bold text-sm">No game data yet</div>
+                    )}
+                  </div>
 
                   {/* Franchise Deep Dive Breakdown */}
                   <div className="bg-slate-900 rounded-2xl p-4 sm:p-6 shadow-xl">
