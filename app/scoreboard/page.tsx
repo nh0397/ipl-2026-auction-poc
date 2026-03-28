@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card";
 import { 
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  BarChart as BarChartRecharts, Bar
+  BarChart as BarChartRecharts, Bar, PieChart, Pie, Cell, Legend
 } from "recharts";
 import { Input } from "@/components/ui/input";
 import { 
@@ -82,6 +82,7 @@ export default function ScoreboardPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState<"sheets" | "standings" | "fixtures">("sheets");
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
+  const [analyticsTeamId, setAnalyticsTeamId] = useState<string | null>(null);
   const [standings, setStandings] = useState<any[]>([]);
   const [allMatchPoints, setAllMatchPoints] = useState<any[]>([]);
 
@@ -660,22 +661,31 @@ export default function ScoreboardPage() {
                 return row;
               });
 
-              // Predicted final score (linear regression extrapolation to 17 games)
-              const predictions = standings.map(team => {
-                const scores = (teamGameScores[team.team_name] || []).filter(s => s !== 0);
-                if (scores.length < 1) return { ...team, predicted: 0, trend: "neutral" as const };
-                const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
-                // Simple trend: compare second half to first half
-                const mid = Math.floor(scores.length / 2) || 1;
-                const firstHalf = scores.slice(0, mid).reduce((a, b) => a + b, 0) / mid;
-                const secondHalf = scores.slice(mid).reduce((a, b) => a + b, 0) / (scores.length - mid);
-                const trendFactor = firstHalf > 0 ? secondHalf / firstHalf : 1;
-                const predicted = Math.round(avg * trendFactor * 17);
-                const trend = trendFactor > 1.05 ? "up" as const : trendFactor < 0.95 ? "down" as const : "neutral" as const;
-                return { ...team, predicted, trend };
-              }).sort((a, b) => b.predicted - a.predicted);
+              // Prepare Deep Dive Analytics
+              const currentAnalyticsTeam = franchises.find(f => f.id === analyticsTeamId) || franchises[0];
+              const analyticsTeamPlayers = currentAnalyticsTeam ? allPlayers.filter(p => p.sold_to_id === currentAnalyticsTeam.id || p.sold_to === currentAnalyticsTeam.team_name) : [];
+              
+              const playerPointsList = analyticsTeamPlayers.map(p => {
+                const points = allMatchPoints.filter(pt => pt.player_id === p.id).reduce((a, b) => a + b.points, 0);
+                return { ...p, points };
+              }).filter(p => p.points > 0).sort((a, b) => b.points - a.points);
+              
+              const top5 = playerPointsList.slice(0, 5);
+              const othersPts = playerPointsList.slice(5).reduce((a, b) => a + b.points, 0);
+              const contributorData = top5.map(p => ({
+                name: p.player_name.split(' ')[0], 
+                value: p.points 
+              }));
+              if (othersPts > 0) contributorData.push({ name: 'Others', value: othersPts });
 
-              const maxPredicted = Math.max(...predictions.map(p => p.predicted), 1);
+              const roles = ['Batter', 'Bowler', 'All-Rounder', 'WK'];
+              const ROLE_COLORS = { 'Batter': '#3b82f6', 'Bowler': '#ec4899', 'All-Rounder': '#10b981', 'WK': '#f59e0b' } as Record<string, string>;
+              const roleData = roles.map(role => ({
+                name: role,
+                value: playerPointsList.filter(p => p.role === role).reduce((a, b) => a + b.points, 0)
+              })).filter(r => r.value > 0);
+              
+              const PIE_COLORS = ["#10b981", "#3b82f6", "#f59e0b", "#8b5cf6", "#ec4899", "#94a3b8"];
 
               return (
                 <>
@@ -764,55 +774,89 @@ export default function ScoreboardPage() {
                     </div>
                   )}
 
-                  {/* Predicted Final Scores */}
+                  {/* Franchise Deep Dive Breakdown */}
                   <div className="bg-slate-900 rounded-2xl p-4 sm:p-6 shadow-xl">
-                    <div className="flex items-center justify-between mb-5">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
                       <div>
-                        <h3 className="text-sm sm:text-base font-black uppercase italic tracking-tight text-white">Predicted Final</h3>
+                        <h3 className="text-sm sm:text-base font-black uppercase italic tracking-tight text-white">Franchise Breakdown</h3>
                         <p className="text-[8px] sm:text-[9px] font-bold text-white/40 uppercase tracking-widest mt-0.5">
-                          Extrapolated to 17 games based on current trend
+                          Player Contributions & Role Distribution
                         </p>
                       </div>
-                      <Target className="h-5 w-5 text-yellow-400" />
+                      
+                      <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+                        {franchises.map(f => (
+                          <Button 
+                            key={f.id}
+                            onClick={() => setAnalyticsTeamId(f.id)}
+                            className={cn(
+                              "h-7 rounded-lg text-[10px] font-black uppercase px-3 whitespace-nowrap",
+                              (analyticsTeamId ? analyticsTeamId === f.id : currentAnalyticsTeam?.id === f.id)
+                                ? "bg-white text-slate-900" 
+                                : "bg-white/10 text-white/70 hover:bg-white/20"
+                            )}
+                          >
+                            {f.team_name}
+                          </Button>
+                        ))}
+                      </div>
                     </div>
-                    <div className="space-y-3">
-                      {predictions.map((team, idx) => (
-                        <div key={team.id} className="flex items-center gap-3">
-                          <span className={cn(
-                            "h-6 w-6 flex items-center justify-center rounded-lg font-black text-[10px] flex-shrink-0",
-                            idx === 0 ? "bg-yellow-400 text-slate-900" : "bg-white/10 text-white/50"
-                          )}>
-                            {idx + 1}
-                          </span>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center justify-between mb-1">
-                              <span className="text-xs font-black text-white uppercase truncate">{team.team_name}</span>
-                              <div className="flex items-center gap-2">
-                                <span className={cn(
-                                  "text-[9px] font-black uppercase",
-                                  team.trend === "up" ? "text-emerald-400" : team.trend === "down" ? "text-red-400" : "text-white/30"
-                                )}>
-                                  {team.trend === "up" ? "↑ Trending Up" : team.trend === "down" ? "↓ Declining" : "→ Steady"}
-                                </span>
-                                <span className="text-sm font-black text-white">{team.predicted}</span>
-                              </div>
-                            </div>
-                            <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
-                              <div
-                                className={cn(
-                                  "h-full rounded-full transition-all duration-700",
-                                  idx === 0 ? "bg-yellow-400" : idx <= 1 ? "bg-blue-400" : "bg-white/20"
-                                )}
-                                style={{ width: `${maxPredicted > 0 ? (team.predicted / maxPredicted) * 100 : 0}%` }}
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      ))}
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                      {/* Sub-Chart: Top Contributors */}
+                      <div className="h-48 sm:h-56">
+                        <h4 className="text-center text-[10px] font-bold text-slate-300 uppercase tracking-widest mb-2">MVP Contributors</h4>
+                        {contributorData.length > 0 ? (
+                          <ResponsiveContainer width="100%" height="100%">
+                            <PieChart>
+                              <Pie
+                                data={contributorData}
+                                cx="50%" cy="50%"
+                                innerRadius="55%" outerRadius="80%"
+                                paddingAngle={3}
+                                stroke="none"
+                                dataKey="value"
+                              >
+                                {contributorData.map((entry, index) => (
+                                  <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
+                                ))}
+                              </Pie>
+                              <Tooltip contentStyle={{ borderRadius: 12, border: "none", backgroundColor: "#1e293b", color: "white", fontSize: 11, fontWeight: 700 }} itemStyle={{ color: 'white' }} />
+                              <Legend wrapperStyle={{ fontSize: 10, fontWeight: 700, opacity: 0.8 }} />
+                            </PieChart>
+                          </ResponsiveContainer>
+                        ) : (
+                          <div className="flex h-full items-center justify-center text-white/30 text-[10px] font-bold uppercase">No Match Data</div>
+                        )}
+                      </div>
+
+                      {/* Sub-Chart: Role Distribution */}
+                      <div className="h-48 sm:h-56">
+                        <h4 className="text-center text-[10px] font-bold text-slate-300 uppercase tracking-widest mb-2">Points by Role</h4>
+                        {roleData.length > 0 ? (
+                          <ResponsiveContainer width="100%" height="100%">
+                            <PieChart>
+                              <Pie
+                                data={roleData}
+                                cx="50%" cy="50%"
+                                innerRadius="0%" outerRadius="80%"
+                                stroke="#0f172a"
+                                strokeWidth={2}
+                                dataKey="value"
+                              >
+                                {roleData.map((entry, index) => (
+                                  <Cell key={`cell-${index}`} fill={ROLE_COLORS[entry.name] || PIE_COLORS[1]} />
+                                ))}
+                              </Pie>
+                              <Tooltip contentStyle={{ borderRadius: 12, border: "none", backgroundColor: "#1e293b", color: "white", fontSize: 11, fontWeight: 700 }} itemStyle={{ color: 'white' }} />
+                              <Legend wrapperStyle={{ fontSize: 10, fontWeight: 700, opacity: 0.8 }} />
+                            </PieChart>
+                          </ResponsiveContainer>
+                        ) : (
+                          <div className="flex h-full items-center justify-center text-white/30 text-[10px] font-bold uppercase">No Match Data</div>
+                        )}
+                      </div>
                     </div>
-                    {maxGames === 0 && (
-                      <p className="text-white/30 text-xs font-bold text-center mt-4">No data yet — predictions appear after the first game</p>
-                    )}
                   </div>
                 </>
               );
