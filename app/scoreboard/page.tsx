@@ -1300,7 +1300,7 @@ export default function ScoreboardPage() {
                                 </div>
                                 
                                 {/* Status Metadata or Actions */}
-                                {match.scorecard ? (
+                                {match.scorecard && Object.keys(match.scorecard).length > 0 ? (
                                   <div className="flex items-center gap-2">
                                     <Button
                                       variant="outline"
