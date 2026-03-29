@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useMemo } from "react";
 import { supabase } from "@/lib/supabase";
-import { Calendar, MapPin, Clock, ChevronDown, Trophy, Loader2 } from "lucide-react";
+import { Calendar, MapPin, Clock, ChevronDown, Trophy, Loader2, XCircle, User, Zap, ChevronRight, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface Fixture {
@@ -51,6 +51,9 @@ export default function FixturesPage() {
   const [fixtures, setFixtures] = useState<Fixture[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<"all" | "upcoming" | "completed">("all");
+  const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
+  const [scorecardData, setScorecardData] = useState<any>(null);
+  const [scorecardLoading, setScorecardLoading] = useState(false);
   
   const today = useMemo(() => getTodayIST(), []);
 
@@ -97,8 +100,25 @@ export default function FixturesPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <Loader2 className="h-8 w-8 text-blue-600 animate-spin" />
+      <div className="min-h-screen bg-slate-50">
+        <div className="bg-white border-b border-slate-100 mb-6">
+          <div className="max-w-3xl mx-auto px-4 py-8 animate-pulse">
+            <div className="h-10 w-48 bg-slate-200 rounded-xl mb-4" />
+            <div className="h-2 w-full bg-slate-100 rounded-full mb-4" />
+            <div className="flex gap-2">
+              <div className="h-10 w-24 bg-slate-100 rounded-xl" />
+              <div className="h-10 w-24 bg-slate-100 rounded-xl" />
+            </div>
+          </div>
+        </div>
+        <div className="max-w-3xl mx-auto px-4 space-y-6">
+          {[1, 2, 3].map(i => (
+            <div key={i} className="animate-pulse">
+               <div className="h-6 w-32 bg-slate-200 rounded-lg mb-3" />
+               <div className="h-32 w-full bg-white rounded-2xl border border-slate-100 shadow-sm" />
+            </div>
+          ))}
+        </div>
       </div>
     );
   }
@@ -241,12 +261,12 @@ export default function FixturesPage() {
                         </div>
 
                         {/* Teams */}
-                        <div className="flex items-center justify-between gap-3 mb-4">
+                        <div className="flex items-center justify-between gap-3 mb-2">
                           {/* Team 1 */}
                           <div className="flex items-center gap-2.5 sm:gap-3 flex-1 min-w-0">
                             {match.team1_img && (
                               <img 
-                                src={match.team1_img} 
+                                src={match.team1_img.replace('p.imgci.com/lsci/', 'img1.hscicdn.com/inline/').replace('/lsci/', '/').startsWith('https') ? match.team1_img.replace('p.imgci.com/lsci/', 'img1.hscicdn.com/inline/').replace('/lsci/', '/') : `https://img1.hscicdn.com/inline${match.team1_img.replace('/lsci/', '/')}`} 
                                 alt={match.team1_short || ""} 
                                 className="h-9 w-9 sm:h-10 sm:w-10 rounded-xl object-contain bg-slate-50 border border-slate-100 p-1 flex-shrink-0"
                               />
@@ -255,22 +275,32 @@ export default function FixturesPage() {
                               <div className="text-sm sm:text-base font-black uppercase tracking-tight text-slate-900 truncate">
                                 {cleanShort(match.team1_short) || match.team1_name}
                               </div>
-                              <div className="text-[10px] sm:text-xs font-bold text-slate-400 truncate hidden sm:block">
-                                {match.team1_name}
-                              </div>
                             </div>
                           </div>
 
-                          {/* VS */}
-                          <div className={cn(
-                            "text-xs font-black uppercase px-3 py-1.5 rounded-xl flex-shrink-0",
-                            isMatchToday && !isCompleted
-                              ? "bg-blue-50 text-blue-600"
-                              : isCompleted
-                                ? "bg-slate-50 text-slate-400"
-                                : "bg-slate-50 text-slate-500"
-                          )}>
-                            VS
+                          {/* VS / Score */}
+                          <div className="flex flex-col items-center gap-1 flex-shrink-0 min-w-[60px]">
+                            {match.scorecard?.livescore && match.scorecard.livescore !== "N/A" ? (
+                              <div className={cn(
+                                "text-sm font-black px-3 py-1.5 rounded-xl whitespace-nowrap shadow-sm border animate-in fade-in zoom-in duration-300",
+                                isLive 
+                                  ? "bg-red-50 text-red-600 border-red-100" 
+                                  : "bg-slate-900 text-white border-slate-800"
+                              )}>
+                                {match.scorecard.livescore}
+                              </div>
+                            ) : (
+                              <div className={cn(
+                                "text-xs font-black uppercase px-3 py-1.5 rounded-xl",
+                                isMatchToday && !isCompleted
+                                  ? "bg-blue-50 text-blue-600"
+                                  : isCompleted
+                                    ? "bg-slate-50 text-slate-400"
+                                    : "bg-slate-50 text-slate-500"
+                              )}>
+                                VS
+                              </div>
+                            )}
                           </div>
 
                           {/* Team 2 */}
@@ -279,13 +309,10 @@ export default function FixturesPage() {
                               <div className="text-sm sm:text-base font-black uppercase tracking-tight text-slate-900 truncate">
                                 {cleanShort(match.team2_short) || match.team2_name}
                               </div>
-                              <div className="text-[10px] sm:text-xs font-bold text-slate-400 truncate hidden sm:block">
-                                {match.team2_name}
-                              </div>
                             </div>
                             {match.team2_img && (
                               <img 
-                                src={match.team2_img} 
+                                src={match.team2_img.replace('p.imgci.com/lsci/', 'img1.hscicdn.com/inline/').replace('/lsci/', '/').startsWith('https') ? match.team2_img.replace('p.imgci.com/lsci/', 'img1.hscicdn.com/inline/').replace('/lsci/', '/') : `https://img1.hscicdn.com/inline${match.team2_img.replace('/lsci/', '/')}`} 
                                 alt={match.team2_short || ""} 
                                 className="h-9 w-9 sm:h-10 sm:w-10 rounded-xl object-contain bg-slate-50 border border-slate-100 p-1 flex-shrink-0"
                               />
@@ -293,12 +320,20 @@ export default function FixturesPage() {
                           </div>
                         </div>
 
+                        {/* Match Status/Update */}
+                        {match.status && match.status !== "Upcoming" && (
+                          <div className="mb-3">
+                            <div className={cn(
+                              "text-center text-[10px] font-black uppercase tracking-wider py-1 rounded-lg",
+                              isLive ? "bg-red-50 text-red-500" : "bg-slate-50 text-slate-500"
+                            )}>
+                              {match.status}
+                            </div>
+                          </div>
+                        )}
+
                         {/* Meta info */}
                         <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[10px] sm:text-xs font-bold text-slate-400">
-                          <div className="flex items-center gap-1.5">
-                            <Clock className="h-3 w-3" />
-                            {formatTime(match.date_time_gmt)} IST
-                          </div>
                           {match.venue && (
                             <div className="flex items-center gap-1.5 truncate">
                               <MapPin className="h-3 w-3 flex-shrink-0" />
@@ -306,6 +341,39 @@ export default function FixturesPage() {
                             </div>
                           )}
                         </div>
+
+                        {/* View Scorecard Button / Pending Status */}
+                        {match.match_ended && match.scorecard?.innings?.length > 0 ? (
+                          <div className="mt-4 pt-4 border-t border-slate-50">
+                            <button
+                               onClick={async () => {
+                                 setSelectedMatchId(match.api_match_id);
+                                 setScorecardLoading(true);
+                                 try {
+                                   const res = await fetch(`http://127.0.0.1:5000/scorecard?id=${match.api_match_id}`);
+                                   const data = await res.json();
+                                   setScorecardData(data);
+                                 } catch (e) {
+                                   console.error(e);
+                                 } finally {
+                                   setScorecardLoading(false);
+                                 }
+                               }}
+                               className="w-full flex items-center justify-center gap-2 py-3 bg-slate-900 hover:bg-black text-white rounded-xl text-xs font-black uppercase tracking-widest transition-all shadow-md shadow-slate-200 group"
+                            >
+                              <FileText className="h-3.5 w-3.5 text-slate-400 group-hover:text-blue-400 transition-colors" />
+                              View Full Scorecard
+                              <ChevronRight className="h-3.5 w-3.5 ml-1 opacity-50 group-hover:opacity-100 transition-opacity" />
+                            </button>
+                          </div>
+                        ) : (isMatchToday || isPast) && (
+                          <div className="mt-4 pt-4 border-t border-slate-50">
+                            <div className="flex items-center justify-center gap-2 py-3 bg-amber-50 rounded-xl text-[10px] font-black uppercase tracking-widest text-amber-600">
+                               <Loader2 className="h-3 w-3 animate-spin" />
+                               Score updates pending
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
                   );
@@ -322,6 +390,124 @@ export default function FixturesPage() {
           </div>
         )}
       </div>
+
+      {/* Scorecard Modal */}
+      {selectedMatchId && (
+        <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-300">
+          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setSelectedMatchId(null)} />
+          
+          <div className="relative w-full max-w-4xl max-h-[90vh] bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl flex flex-col overflow-hidden animate-in slide-in-from-bottom duration-500">
+            {/* Modal Header */}
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-white sticky top-0 z-10">
+              <div className="flex items-center gap-4">
+                <div className="h-10 w-10 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-100">
+                  <Trophy className="h-5 w-5 text-white" />
+                </div>
+                <div>
+                  <h2 className="text-sm sm:text-lg font-black uppercase tracking-tight text-slate-900">
+                    {scorecardData?.match_title || "Full Scorecard"}
+                  </h2>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                    Live from Cricbuzz Scraper
+                  </p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setSelectedMatchId(null)}
+                className="p-2 hover:bg-slate-100 rounded-full transition-colors group"
+              >
+                <XCircle className="h-6 w-6 text-slate-300 group-hover:text-slate-600" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 sm:p-8 space-y-10 no-scrollbar">
+              {scorecardLoading ? (
+                <div className="flex flex-col items-center justify-center py-20 gap-4">
+                   <Loader2 className="h-10 w-10 text-blue-600 animate-spin" />
+                   <p className="text-xs font-black text-slate-400 uppercase tracking-widest animate-pulse">Syncing Stats...</p>
+                </div>
+              ) : scorecardData?.innings ? (
+                scorecardData.innings.map((inning: any, idx: number) => (
+                  <div key={idx} className="space-y-6">
+                    <div className="flex items-center gap-3 border-b-2 border-slate-900 pb-3">
+                       <Zap className="h-4 w-4 text-blue-600 fill-blue-600" />
+                       <h3 className="text-sm sm:text-base font-black uppercase tracking-wider text-slate-900">
+                         {inning.inning}
+                       </h3>
+                    </div>
+
+                    {/* Batting Table */}
+                    <div className="space-y-3">
+                      <div className="rounded-2xl border border-slate-100 overflow-hidden shadow-sm">
+                        <div className="bg-slate-50 px-4 py-3 flex items-center text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                          <div className="flex-1">Batsman</div>
+                          <div className="w-10 text-right">R</div>
+                          <div className="w-10 text-right">B</div>
+                          <div className="w-12 text-right">SR</div>
+                        </div>
+                        <div className="divide-y divide-slate-100 bg-white">
+                          {inning.batsmen.map((b: any, bidx: number) => (
+                            <div key={bidx} className="px-4 py-4 flex items-center hover:bg-slate-50 transition-colors">
+                              <div className="flex-1 min-w-0 pr-2">
+                                <div className="text-xs font-black text-slate-900 uppercase truncate">
+                                  {b.name}
+                                </div>
+                                <div className="text-[10px] text-slate-400 font-bold truncate">
+                                  {b.out_by}
+                                </div>
+                              </div>
+                              <div className="w-10 text-right text-xs font-black text-slate-900">{b.runs}</div>
+                              <div className="w-10 text-right text-[10px] font-bold text-slate-400">{b.balls}</div>
+                              <div className="w-12 text-right text-[10px] font-black text-blue-600">{b.sr}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Bowling Table */}
+                    <div className="space-y-3">
+                      <div className="rounded-2xl border border-slate-100 overflow-hidden shadow-sm">
+                        <div className="bg-slate-50 px-4 py-3 flex items-center text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                          <div className="flex-1">Bowler</div>
+                          <div className="w-10 text-right">O</div>
+                          <div className="w-10 text-right">R</div>
+                          <div className="w-10 text-right">W</div>
+                          <div className="w-12 text-right">Eco</div>
+                        </div>
+                        <div className="divide-y divide-slate-100 bg-white">
+                          {inning.bowlers.map((bo: any, boidx: number) => (
+                            <div key={boidx} className="px-4 py-4 flex items-center hover:bg-slate-50 transition-colors">
+                              <div className="flex-1 min-w-0 pr-2">
+                                <div className="text-xs font-black text-slate-900 uppercase truncate">
+                                  {bo.name}
+                                </div>
+                              </div>
+                              <div className="w-10 text-right text-xs font-black text-slate-900">{bo.overs}</div>
+                              <div className="w-10 text-right text-[10px] font-bold text-slate-400">{bo.runs}</div>
+                              <div className="w-10 text-right text-xs font-black text-blue-600">{bo.wickets}</div>
+                              <div className="w-12 text-right text-[10px] font-black text-slate-400">{bo.economy || (bo.runs/(parseFloat(bo.overs)||1)).toFixed(2)}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              ) : null}
+            </div>
+            
+            <div className="p-4 bg-slate-50 border-t border-slate-100 text-center">
+               <button 
+                  onClick={() => setSelectedMatchId(null)}
+                  className="px-8 py-3 bg-white border border-slate-200 text-slate-900 rounded-xl text-xs font-black uppercase tracking-widest shadow-sm"
+               >
+                 Close
+               </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

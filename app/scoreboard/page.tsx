@@ -8,6 +8,9 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart as BarChartRecharts, Bar, PieChart, Pie, Cell, Legend
 } from "recharts";
+import { 
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogTrigger 
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { 
   Trophy, Medal, Shield, Zap, Star, Activity, 
@@ -19,9 +22,10 @@ import {
 import { cn, getPlayerImage, iplColors } from "@/lib/utils";
 import { useRouter } from "next/navigation";
 import { calculateDream11Points, MatchStats } from "@/lib/scoring";
-import { syncMatchScores } from "@/lib/cricapi";
+// Removed syncMatchScores import since lib/cricapi was deleted
 import { useAuth } from "@/components/auth/AuthProvider";
 import React from "react";
+import ScorecardViewer from "@/components/scoreboard/ScorecardViewer";
 
 // ─── Fixture helpers ────────────────────────────────────────────────
 interface Fixture {
@@ -41,6 +45,7 @@ interface Fixture {
   status: string;
   match_started: boolean;
   match_ended: boolean;
+  scorecard: any | null;
 }
 
 function getTodayIST(): string {
@@ -85,6 +90,10 @@ export default function ScoreboardPage() {
   const [analyticsTeamId, setAnalyticsTeamId] = useState<string | null>(null);
   const [standings, setStandings] = useState<any[]>([]);
   const [allMatchPoints, setAllMatchPoints] = useState<any[]>([]);
+  const [expandedScorecardId, setExpandedScorecardId] = useState<string | null>(null);
+  const [subLoading, setSubLoading] = useState(false);
+  const [tabLoading, setTabLoading] = useState(false);
+  const [scorecardMatch, setScorecardMatch] = useState<Fixture | null>(null);
 
   // Fixtures from DB
   const [fixtures, setFixtures] = useState<Fixture[]>([]);
@@ -117,12 +126,16 @@ export default function ScoreboardPage() {
   }, [selectedMatchId]);
 
   useEffect(() => {
-    if (activeTab === "standings" && dataLoadedRef.current) calculateStandings();
+    if (activeTab === "standings") fetchStandingsData();
   }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab === "sheets" && selectedTeamId) fetchTeamData(selectedTeamId);
+  }, [activeTab, selectedTeamId]);
 
   // Fetch fixtures from DB when tab is activated
   useEffect(() => {
-    if (activeTab === "fixtures" && fixtures.length === 0) {
+    if (activeTab === "fixtures") {
       fetchFixtures();
     }
   }, [activeTab]);
@@ -138,51 +151,80 @@ export default function ScoreboardPage() {
   const fetchInitialData = async () => {
     try {
       setLoading(true);
-      let currentProfile = authProfile;
-      if (currentProfile) {
-        setProfile(currentProfile);
-      }
+      if (authProfile) setProfile(authProfile);
 
-      const { data: teamsDataRaw } = await supabase
-        .from("profiles")
-        .select("*")
-        .neq("role", "Viewer")
-        .order("team_name", { ascending: true });
+      // Lightweight initial load
+      const [teamsRes, matchesRes] = await Promise.all([
+        supabase.from("profiles").select("*").neq("role", "Viewer").order("team_name", { ascending: true }),
+        supabase.from("matches").select("*").order("match_no", { ascending: true })
+      ]);
       
-      const teamsData = teamsDataRaw || [];
+      const teamsData = teamsRes.data || [];
       setFranchises(teamsData);
 
-      if (currentProfile) setSelectedTeamId(currentProfile.id);
+      if (authProfile) setSelectedTeamId(authProfile.id);
       else if (teamsData.length > 0) setSelectedTeamId(teamsData[0].id);
 
-      const { data: playersData } = await supabase
-        .from("players")
-        .select("*")
-        .eq("auction_status", "sold")
-        .order("player_name", { ascending: true });
-      setAllPlayers(playersData || []);
-
-      const { data: matchesData } = await supabase
-        .from("matches")
-        .select("*")
-        .order("match_no", { ascending: true });
-      
-      if (matchesData) {
-        setAllMatches(matchesData);
-        const nextMatch = matchesData.find(m => m.status === 'live' || m.status === 'scheduled') || matchesData[0];
+      if (matchesRes.data) {
+        setAllMatches(matchesRes.data);
+        const nextMatch = matchesRes.data.find(m => m.status === 'live' || m.status === 'scheduled') || matchesRes.data[0];
         if (nextMatch) setSelectedMatchId(nextMatch.id);
       }
 
-      const { data: allPts } = await supabase
-        .from("match_points")
-        .select("*");
-      setAllMatchPoints(allPts || []);
-
       dataLoadedRef.current = true;
     } catch (error) {
-      console.error("Error fetching scoreboard data:", error);
+      console.error("Error fetching initial scoreboard data:", error);
     } finally {
-      setLoading(false);
+      // Ensure loading is ALWAYS set to false to prevent infinite loops
+      setTimeout(() => setLoading(false), 300); 
+    }
+  };
+
+  const fetchTeamData = async (teamId: string) => {
+    if (!teamId) return;
+    try {
+      setSubLoading(true);
+      // Only fetch players for THIS team
+      const { data: teamPlayers } = await supabase
+        .from("players")
+        .select("*")
+        .eq("sold_to_id", teamId)
+        .order("player_name", { ascending: true });
+      
+      setAllPlayers(teamPlayers || []);
+      
+      // Fetch points for these players across all matches
+      const playerIds = teamPlayers?.map(p => p.id) || [];
+      if (playerIds.length > 0) {
+        const { data: pts } = await supabase
+          .from("match_points")
+          .select("*")
+          .in("player_id", playerIds);
+        setAllMatchPoints(pts || []);
+      }
+    } catch (error) {
+      console.error("Error loading team data:", error);
+    } finally {
+      setSubLoading(false);
+    }
+  };
+
+  const fetchStandingsData = async () => {
+    try {
+      setTabLoading(true);
+      // For standings we need ALL points, but we can aggregate later
+      const { data: allPts } = await supabase.from("match_points").select("player_id, match_id, points");
+      setAllMatchPoints(allPts || []);
+      
+      // We also need all sold players to map them to teams
+      const { data: soldPlayers } = await supabase.from("players").select("id, sold_to_id, team_name").eq("auction_status", "sold");
+      setAllPlayers(soldPlayers || []);
+      
+      calculateStandings(soldPlayers || [], allPts || []);
+    } catch (err) {
+      console.error("Standings error:", err);
+    } finally {
+      setTabLoading(false);
     }
   };
 
@@ -248,14 +290,17 @@ export default function ScoreboardPage() {
     setSaving(false);
   };
 
-  const calculateStandings = () => {
+  const calculateStandings = (playersSource?: any[], pointsSource?: any[]) => {
+    const players = playersSource || allPlayers;
+    const points = pointsSource || allMatchPoints;
+    
     const standingsData = franchises.map(team => {
       let totalPoints = 0;
       let matchesPlayed = 0;
       let bestMatch = 0;
       let worstMatch = Infinity;
       const matchScores: number[] = [];
-      const teamPlayers = allPlayers.filter(p => p.sold_to_id === team.id || p.sold_to === team.team_name);
+      const teamPlayers = players.filter(p => p.sold_to_id === team.id || p.sold_to === team.team_name);
       
       allMatches.forEach(m => {
         let matchTotal = 0;
@@ -300,17 +345,8 @@ export default function ScoreboardPage() {
   };
 
   const handleSyncScores = async () => {
-    const match = allMatches.find(m => m.id === selectedMatchId);
-    if (!match?.api_match_id) { alert("This match is not linked to CricAPI."); return; }
-    setSaving(true);
-    const result = await syncMatchScores(match.id, match.api_match_id);
-    if (result.success) {
-      alert(`Successfully synced ${result.count} player scores!`);
-      const { data: allPts } = await supabase.from("match_points").select("*");
-      setAllMatchPoints(allPts || []);
-      fetchMatchSpecificData(selectedMatchId);
-    } else alert("Sync failed: " + result.error);
-    setSaving(false);
+    alert("CricAPI sync is disabled. Use the Python sync engine to update scores from ESPN.");
+    // In a future step, we can point this to a local API route to run the Python script.
   };
 
   const downloadSquadCSV = (targetTeamId: string) => {
@@ -369,15 +405,18 @@ export default function ScoreboardPage() {
   }, [filteredFixtures]);
 
   // ─── Loading ──────────────────────────────────────────────────────
-  if (loading) return (
-    <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-       <Loader2 className="h-8 w-8 text-slate-400 animate-spin" />
-    </div>
-  );
-
   const selectedMatch = allMatches.find(m => m.id === selectedMatchId);
   const completedFixtures = fixtures.filter(f => f.match_ended || f.match_date < today).length;
   const todayFixtures = fixtures.filter(f => f.match_date === today);
+
+  if (loading) return (
+    <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+       <div className="flex flex-col items-center gap-4">
+          <Loader2 className="h-10 w-10 text-slate-900 animate-spin" />
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Booting Analytics...</p>
+       </div>
+    </div>
+  );
 
   // ─── Render ───────────────────────────────────────────────────────
   return (
@@ -458,13 +497,22 @@ export default function ScoreboardPage() {
             </div>
 
             {/* ── Mobile: Card-Based Score View ── */}
-            <div className="block sm:hidden space-y-3">
+            <div className="block sm:hidden space-y-3 relative">
+              {subLoading && (
+                <div className="absolute inset-0 bg-slate-50/50 backdrop-blur-[1px] z-10 flex items-center justify-center py-12 rounded-2xl">
+                  <Loader2 className="h-8 w-8 text-slate-300 animate-spin" />
+                </div>
+              )}
               {franchises.filter(f => f.id === selectedTeamId).map(team => {
                 const isMyTeam = team.id === profile?.id;
                 const teamPlayers = allPlayers
                   .filter(p => (p.sold_to_id === team.id || p.sold_to === team.team_name) && p.player_name.toLowerCase().includes(searchQuery.toLowerCase()))
                   .sort((a, b) => (a.team || "").localeCompare(b.team || ""));
                 
+                if (teamPlayers.length === 0 && !subLoading) return (
+                  <div key="none" className="text-center py-12 text-slate-300 font-bold uppercase text-xs">No Players Assigned</div>
+                );
+
                 return teamPlayers.map(player => {
                   const playerScores = Array(17).fill(0);
                   allMatchPoints.filter(pt => pt.player_id === player.id).forEach(pt => {
@@ -477,8 +525,10 @@ export default function ScoreboardPage() {
                     <div key={player.id} className={cn("bg-white rounded-2xl border border-slate-100 p-4 shadow-sm", iplColors[player.team]?.bg)}>
                       <div className="flex items-center justify-between mb-3">
                         <div className="flex items-center gap-3">
-                          <div className="h-10 w-10 rounded-xl bg-slate-100 overflow-hidden shrink-0 border border-slate-100">
-                            <img src={getPlayerImage(player.image_url)!} className="w-full h-full object-cover object-top" />
+                          <div className="h-10 w-10 rounded-xl bg-slate-100 overflow-hidden shrink-0 border border-slate-100 italic flex items-center justify-center">
+                            {player.image_url ? (
+                               <img src={getPlayerImage(player.image_url)!} className="w-full h-full object-cover object-top" />
+                            ) : <User size={16} className="text-slate-200" />}
                           </div>
                           <div>
                             <div className="font-bold text-slate-900 text-sm">{player.player_name}</div>
@@ -486,8 +536,33 @@ export default function ScoreboardPage() {
                           </div>
                         </div>
                         <div className="text-right">
-                          <div className="text-lg font-black italic text-slate-900">{rowTotal}</div>
-                          <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Total</div>
+                          <Dialog>
+                             <DialogTrigger render={
+                                <button className="text-right hover:scale-105 transition-transform cursor-help">
+                                   <div className="text-lg font-black italic text-slate-900 leading-none">
+                                      {rowTotal % 1 === 0 ? rowTotal : rowTotal.toFixed(1)}
+                                   </div>
+                                   <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest mt-0.5">Total Points</div>
+                                </button>
+                             } />
+                             <DialogContent className="max-w-md bg-white rounded-3xl p-6 border-none shadow-2xl">
+                                <DialogHeader>
+                                   <DialogTitle className="text-xl font-black italic uppercase tracking-tighter">Points Breakdown</DialogTitle>
+                                   <DialogDescription className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">
+                                      Overall Performance • {player.player_name}
+                                   </DialogDescription>
+                                </DialogHeader>
+                                <div className="space-y-4 mt-4">
+                                   <div className="bg-slate-900 rounded-[2rem] p-6 text-center shadow-xl">
+                                      <div className="text-slate-400 text-[10px] font-black uppercase tracking-[0.2em] mb-1">Season Total</div>
+                                      <div className="text-5xl font-black italic text-white tracking-tighter">{rowTotal % 1 === 0 ? rowTotal : rowTotal.toFixed(1)}</div>
+                                   </div>
+                                   <p className="text-[10px] font-bold text-slate-400 text-center uppercase tracking-widest">
+                                      Tap individual game scores in desktop view for per-match breakdown
+                                   </p>
+                                </div>
+                             </DialogContent>
+                          </Dialog>
                         </div>
                       </div>
                       
@@ -506,12 +581,12 @@ export default function ScoreboardPage() {
                                   onChange={(e) => updateSeasonPoint(player.id, idx + 1, e.target.value)} 
                                   className={cn(
                                     "w-full h-7 text-center font-black text-[9px] border rounded-md focus:ring-1 focus:ring-slate-900 transition-colors",
-                                    isDirty ? "bg-amber-100 border-amber-300 text-amber-900" : "bg-slate-50 border-slate-100"
+                                    isDirty ? "bg-amber-100 border-amber-300 text-amber-900" : "bg-slate-100 border-slate-100"
                                   )} 
                                   placeholder="0"
                                 />
                               ) : (
-                                <div className={cn("h-7 flex items-center justify-center font-black text-[9px] bg-slate-50 rounded-md", score > 0 ? "text-slate-900" : "text-slate-200")}>
+                                <div className={cn("h-7 flex items-center justify-center font-black text-[9px] bg-slate-50/50 rounded-md", score > 0 ? "text-slate-900" : "text-slate-200")}>
                                   {score || 0}
                                 </div>
                               )}
@@ -525,28 +600,41 @@ export default function ScoreboardPage() {
               })}
             </div>
 
-            {/* ── Desktop: Table View ── */}
-            <div className="hidden sm:block bg-white rounded-[2.5rem] border border-slate-200 shadow-xl overflow-hidden">
-               <div className="overflow-x-auto no-scrollbar">
-                  <table className="w-full text-left border-collapse min-w-[1200px]">
-                     <thead className="bg-slate-50 sticky top-0 z-20">
-                        <tr>
-                           <th className="px-8 py-5 text-[10px] font-black uppercase tracking-widest text-slate-400 sticky left-0 bg-slate-50 z-30 min-w-[240px]">Player Detail</th>
-                           {[...Array(17)].map((_, i) => <th key={i} className="px-4 py-5 text-center text-[10px] font-black uppercase tracking-widest text-slate-400">G{i+1}</th>)}
-                           <th className="px-8 py-5 text-right text-[10px] font-black uppercase tracking-widest text-slate-900 sticky right-0 bg-slate-50 z-30">Total</th>
-                        </tr>
-                     </thead>
-                     <tbody className="text-sm">
-                         {franchises.filter(f => f.id === selectedTeamId).map(team => {
-                            const isMyTeam = team.id === profile?.id;
-                            const teamPlayers = allPlayers
-                              .filter(p => (p.sold_to_id === team.id || p.sold_to === team.team_name) && p.player_name.toLowerCase().includes(searchQuery.toLowerCase()))
-                              .sort((a, b) => (a.team || "").localeCompare(b.team || ""));
-                            const colTotals = Array(17).fill(0);
+             {/* ── Desktop: Table View ── */}
+             <div className="hidden sm:block bg-white rounded-[2.5rem] border border-slate-200 shadow-xl overflow-hidden relative">
+                {subLoading && (
+                  <div className="absolute inset-0 bg-white/60 backdrop-blur-[2px] z-40 flex items-center justify-center">
+                    <div className="flex flex-col items-center gap-3">
+                       <Loader2 className="h-10 w-10 text-slate-900 animate-spin" />
+                       <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Loading Squad...</span>
+                    </div>
+                  </div>
+                )}
+                <div className="overflow-x-auto no-scrollbar">
+                   <table className="w-full text-left border-collapse min-w-[1200px]">
+                      <thead className="bg-slate-50 sticky top-0 z-20">
+                         <tr>
+                            <th className="px-8 py-5 text-[10px] font-black uppercase tracking-widest text-slate-400 sticky left-0 bg-slate-50 z-30 min-w-[240px]">Player Detail</th>
+                            {[...Array(17)].map((_, i) => <th key={i} className="px-4 py-5 text-center text-[10px] font-black uppercase tracking-widest text-slate-400">G{i+1}</th>)}
+                            <th className="px-8 py-5 text-right text-[10px] font-black uppercase tracking-widest text-slate-900 sticky right-0 bg-slate-50 z-30">Total</th>
+                         </tr>
+                      </thead>
+                      <tbody className="text-sm">
+                          {franchises.filter(f => f.id === selectedTeamId).map(team => {
+                             const isMyTeam = team.id === profile?.id;
+                             const filteredPlayers = allPlayers
+                               .filter(p => (p.sold_to_id === team.id || p.sold_to === team.team_name) && p.player_name.toLowerCase().includes(searchQuery.toLowerCase()))
+                               .sort((a, b) => (a.team || "").localeCompare(b.team || ""));
+                             
+                             if (filteredPlayers.length === 0 && !subLoading) return (
+                               <tr key="empty"><td colSpan={19} className="py-20 text-center text-slate-300 font-bold uppercase tracking-widest">No Players Found</td></tr>
+                             );
+                             
+                             const colTotals = Array(17).fill(0);
 
                            return (
                               <React.Fragment key={team.id}>
-                                 {teamPlayers.map(player => {
+                                 {filteredPlayers.map(player => {
                                     const playerScores = Array(17).fill(0);
                                     allMatchPoints.filter(pt => pt.player_id === player.id).forEach(pt => {
                                        const m = allMatches.find(match => match.id === pt.match_id);
@@ -592,7 +680,33 @@ export default function ScoreboardPage() {
                                                </td>
                                              );
                                           })}
-                                          <td className="px-8 py-4 text-right font-black italic text-sm text-slate-900 sticky right-0 bg-white group-hover:bg-slate-50 border-l border-slate-100 z-10">{rowTotal}</td>
+                                          <td className="px-8 py-4 text-right font-black italic text-sm text-slate-900 sticky right-0 bg-white group-hover:bg-slate-50 border-l border-slate-100 z-10">
+                                             <Dialog>
+                                                <DialogTrigger render={
+                                                   <button className="text-right group-hover:scale-110 transition-transform cursor-help min-w-[60px]">
+                                                      <div className="text-sm font-black italic text-slate-900 leading-none">{rowTotal % 1 === 0 ? rowTotal : rowTotal.toFixed(1)}</div>
+                                                      <div className="text-[7px] font-black text-slate-400 uppercase tracking-widest mt-0.5">Points</div>
+                                                   </button>
+                                                } />
+                                                <DialogContent className="max-w-md bg-white rounded-3xl p-6 border-none shadow-2xl">
+                                                   <DialogHeader>
+                                                      <DialogTitle className="text-xl font-black italic uppercase tracking-tighter">Points Breakdown</DialogTitle>
+                                                      <DialogDescription className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">
+                                                         Overall Performance • {player.player_name}
+                                                      </DialogDescription>
+                                                   </DialogHeader>
+                                                   <div className="space-y-4 mt-4">
+                                                      <div className="bg-slate-900 rounded-[2rem] p-6 text-center shadow-xl">
+                                                         <div className="text-slate-400 text-[10px] font-black uppercase tracking-[0.2em] mb-1">Season Total</div>
+                                                         <div className="text-5xl font-black italic text-white tracking-tighter">{rowTotal % 1 === 0 ? rowTotal : rowTotal.toFixed(1)}</div>
+                                                      </div>
+                                                      <p className="text-[10px] font-bold text-slate-400 text-center uppercase tracking-widest">
+                                                         Tap individual game scores for per-match breakdown
+                                                      </p>
+                                                   </div>
+                                                </DialogContent>
+                                             </Dialog>
+                                          </td>
                                        </tr>
                                      );
                                   })}
@@ -864,9 +978,17 @@ export default function ScoreboardPage() {
               );
             })()}
 
-            {/* Standings Table */}
-            <Card className="bg-white border-slate-200 shadow-2xl rounded-2xl sm:rounded-[2.5rem] overflow-hidden">
-               <CardHeader className="p-4 sm:p-8 border-b border-slate-100 bg-slate-50/50">
+                   {/* Standings Table */}
+                   <Card className="bg-white border-slate-200 shadow-2xl rounded-2xl sm:rounded-[2.5rem] overflow-hidden relative">
+                      {tabLoading && (
+                        <div className="absolute inset-0 bg-white/60 backdrop-blur-[2px] z-40 flex items-center justify-center">
+                          <div className="flex flex-col items-center gap-3">
+                             <Loader2 className="h-10 w-10 text-slate-900 animate-spin" />
+                             <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Recalculating Standings...</span>
+                          </div>
+                        </div>
+                      )}
+                      <CardHeader className="p-4 sm:p-8 border-b border-slate-100 bg-slate-50/50">
                   <CardTitle className="text-lg sm:text-2xl font-black uppercase italic tracking-tighter text-slate-900">Season Championship</CardTitle>
                   <CardDescription className="text-slate-400 font-bold uppercase text-[8px] sm:text-[9px] tracking-widest mt-1">Overall standings with deep analytics</CardDescription>
                </CardHeader>
@@ -889,9 +1011,21 @@ export default function ScoreboardPage() {
                               <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">{team.squadSize} players • {team.matchesPlayed} games</div>
                             </div>
                           </div>
-                          <div className="text-right">
-                            <div className="text-xl font-black italic text-slate-900">{Math.floor(team.totalPoints)}</div>
-                            <div className="text-[8px] font-black text-blue-500 uppercase">pts</div>
+                          <div className="text-right flex flex-col items-end gap-1">
+                            <div className="text-[10px] font-black italic text-slate-900 leading-none">{Math.floor(team.totalPoints)} <span className="text-[8px] text-blue-500 uppercase not-italic">pts</span></div>
+                            <Button 
+                                variant="ghost" 
+                                size="sm" 
+                                className="h-6 px-0 text-[8px] font-black uppercase tracking-widest text-blue-600 hover:bg-transparent"
+                                onClick={(e) => {
+                                   e.stopPropagation();
+                                   setFixtureFilter("all");
+                                   setActiveTab("fixtures");
+                                   setSearchQuery(team.team_name);
+                                }}
+                             >
+                                <ChevronRight size={10} />
+                             </Button>
                           </div>
                         </div>
                         <div className="grid grid-cols-4 gap-2">
@@ -960,7 +1094,22 @@ export default function ScoreboardPage() {
                               <td className="px-6 py-6 text-center font-black text-sm text-red-500">{team.worstMatch}</td>
                               <td className="px-6 py-6 text-center font-black text-sm text-blue-500">{team.consistency}</td>
                               <td className="px-8 py-6 text-right">
-                                 <div className="font-black italic text-3xl text-slate-900 tracking-tighter">{Math.floor(team.totalPoints)}</div>
+                                 <div className="flex flex-col items-end gap-2">
+                                    <div className="font-black italic text-3xl text-slate-900 tracking-tighter">{Math.floor(team.totalPoints)}</div>
+                                    <Button 
+                                       variant="ghost" 
+                                       size="sm" 
+                                       className="h-7 text-[9px] font-black uppercase tracking-widest text-blue-600 hover:bg-blue-50"
+                                       onClick={(e) => {
+                                          e.stopPropagation();
+                                          setFixtureFilter("all");
+                                          setActiveTab("fixtures");
+                                          setSearchQuery(team.team_name);
+                                       }}
+                                    >
+                                       View Matches <ChevronRight size={12} />
+                                    </Button>
+                                 </div>
                               </td>
                            </tr>
                         ))}
@@ -1020,15 +1169,29 @@ export default function ScoreboardPage() {
                 <div className="mt-4 p-3 sm:p-4 bg-blue-50 border border-blue-200 rounded-xl sm:rounded-2xl">
                   <div className="text-[9px] font-black text-blue-600 uppercase tracking-widest mb-2">🏏 Today's Match{todayFixtures.length > 1 ? "es" : ""}</div>
                   {todayFixtures.map(m => (
-                    <div key={m.id} className="flex items-center justify-between">
-                      <div className="flex items-center gap-2 sm:gap-3">
-                        {m.team1_img && <img src={m.team1_img} alt="" className="h-7 w-7 sm:h-8 sm:w-8 rounded-lg object-contain bg-white p-0.5 border" />}
-                        <span className="font-black text-sm sm:text-base text-slate-900">{cleanShort(m.team1_short)}</span>
-                        <span className="text-xs font-bold text-blue-400 mx-1">vs</span>
-                        <span className="font-black text-sm sm:text-base text-slate-900">{cleanShort(m.team2_short)}</span>
-                        {m.team2_img && <img src={m.team2_img} alt="" className="h-7 w-7 sm:h-8 sm:w-8 rounded-lg object-contain bg-white p-0.5 border" />}
+                    <div key={m.id} className="flex items-center justify-between mt-2 first:mt-0">
+                      <div className="flex items-center gap-2 sm:gap-4 flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                           <div className="h-8 w-8 rounded-lg bg-white border border-blue-100 flex items-center justify-center overflow-hidden shrink-0">
+                              {m.team1_img ? (
+                                 <img src={getPlayerImage(m.team1_img) || ""} alt="" className="w-full h-full object-contain p-0.5" />
+                              ) : <Shield size={14} className="text-blue-200" />}
+                           </div>
+                           <span className="font-black text-sm text-slate-900 truncate">{cleanShort(m.team1_short)}</span>
+                        </div>
+                        
+                        <div className="text-[10px] font-black text-blue-300 px-2 italic">VS</div>
+                        
+                        <div className="flex items-center gap-2 flex-1 min-w-0 justify-end">
+                           <span className="font-black text-sm text-slate-900 truncate">{cleanShort(m.team2_short)}</span>
+                           <div className="h-8 w-8 rounded-lg bg-white border border-blue-100 flex items-center justify-center overflow-hidden shrink-0">
+                              {m.team2_img ? (
+                                 <img src={getPlayerImage(m.team2_img) || ""} alt="" className="w-full h-full object-contain p-0.5" />
+                              ) : <Shield size={14} className="text-blue-200" />}
+                           </div>
+                        </div>
                       </div>
-                      <div className="text-[10px] font-bold text-blue-500">{formatTime(m.date_time_gmt)} IST</div>
+                      <div className="text-[10px] font-black text-blue-600 ml-4 py-1 px-2 rounded-lg bg-white border border-blue-100 whitespace-nowrap">{formatTime(m.date_time_gmt)}</div>
                     </div>
                   ))}
                 </div>
@@ -1067,46 +1230,56 @@ export default function ScoreboardPage() {
                             className={cn(
                               "relative bg-white rounded-xl sm:rounded-2xl border overflow-hidden transition-all",
                               isMatchToday && !isCompleted
-                                ? "border-blue-200 shadow-lg shadow-blue-100 ring-2 ring-blue-100"
-                                : isCompleted
-                                  ? "border-slate-100 opacity-70"
-                                  : "border-slate-100 shadow-sm hover:shadow-md"
+                                ? "border-blue-200 shadow-xl shadow-blue-50 ring-2 ring-blue-100"
+                                : "border-slate-100 shadow-sm hover:shadow-md"
                             )}
                           >
                             <div className="p-3 sm:p-5">
                               {/* Match no + status */}
-                              <div className="flex items-center justify-between mb-2 sm:mb-3">
+                              <div className="flex items-center justify-between mb-3">
                                 <div className="text-[9px] sm:text-[10px] font-black text-slate-400 uppercase tracking-widest">
                                   Match {match.match_no}
                                 </div>
                                 {isCompleted && (
-                                  <div className="flex items-center gap-1 text-[9px] sm:text-[10px] font-black text-slate-400 uppercase">
-                                    <Trophy className="h-3 w-3" /> Done
+                                  <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-slate-50 text-[8px] sm:text-[9px] font-black text-slate-500 uppercase tracking-tighter">
+                                    <ListChecks size={10} /> Finished
                                   </div>
                                 )}
                               </div>
 
                               {/* Teams */}
-                              <div className="flex items-center justify-between gap-2 sm:gap-3 mb-2 sm:mb-3">
-                                <div className="flex items-center gap-2 flex-1 min-w-0">
-                                  {match.team1_img && (
-                                    <img src={match.team1_img} alt="" className="h-8 w-8 sm:h-10 sm:w-10 rounded-lg sm:rounded-xl object-contain bg-slate-50 border p-0.5 flex-shrink-0" />
-                                  )}
-                                  <span className="text-sm sm:text-base font-black uppercase text-slate-900 truncate">{cleanShort(match.team1_short) || match.team1_name}</span>
+                              <div className="flex items-center justify-between gap-2 sm:gap-6 mb-4">
+                                <div className="flex items-center gap-3 flex-1 min-w-0">
+                                  <div className="h-10 w-10 sm:h-12 sm:w-12 rounded-xl sm:rounded-2xl bg-slate-50 border border-slate-100 flex items-center justify-center overflow-hidden shrink-0">
+                                     {match.team1_img ? (
+                                        <img src={getPlayerImage(match.team1_img) || ""} alt="" className="w-full h-full object-contain p-1" />
+                                     ) : <Shield size={20} className="text-slate-200" />}
+                                  </div>
+                                  <div className="min-w-0">
+                                     <div className="text-sm sm:text-lg font-black uppercase text-slate-900 truncate leading-none mb-1">{cleanShort(match.team1_short)}</div>
+                                     <div className="text-[8px] font-bold text-slate-400 uppercase truncate tracking-widest">{match.team1_name}</div>
+                                  </div>
                                 </div>
 
-                                <div className={cn(
-                                  "text-[10px] sm:text-xs font-black uppercase px-2.5 sm:px-3 py-1 rounded-lg sm:rounded-xl flex-shrink-0",
-                                  isMatchToday && !isCompleted ? "bg-blue-50 text-blue-600" : "bg-slate-50 text-slate-400"
-                                )}>
-                                  VS
+                                <div className="flex flex-col items-center">
+                                   <div className={cn(
+                                      "text-[10px] sm:text-[11px] font-black uppercase px-3 py-1.5 rounded-xl flex-shrink-0 border",
+                                      isMatchToday && !isCompleted ? "bg-blue-600 text-white border-blue-400 shadow-lg shadow-blue-100" : "bg-slate-50 text-slate-400 border-slate-100"
+                                   )}>
+                                      VS
+                                   </div>
                                 </div>
 
-                                <div className="flex items-center gap-2 flex-1 min-w-0 justify-end">
-                                  <span className="text-sm sm:text-base font-black uppercase text-slate-900 truncate">{cleanShort(match.team2_short) || match.team2_name}</span>
-                                  {match.team2_img && (
-                                    <img src={match.team2_img} alt="" className="h-8 w-8 sm:h-10 sm:w-10 rounded-lg sm:rounded-xl object-contain bg-slate-50 border p-0.5 flex-shrink-0" />
-                                  )}
+                                <div className="flex items-center gap-3 flex-1 min-w-0 justify-end text-right">
+                                  <div className="min-w-0">
+                                     <div className="text-sm sm:text-lg font-black uppercase text-slate-900 truncate leading-none mb-1">{cleanShort(match.team2_short)}</div>
+                                     <div className="text-[8px] font-bold text-slate-400 uppercase truncate tracking-widest">{match.team2_name}</div>
+                                  </div>
+                                  <div className="h-10 w-10 sm:h-12 sm:w-12 rounded-xl sm:rounded-2xl bg-slate-50 border border-slate-100 flex items-center justify-center overflow-hidden shrink-0">
+                                     {match.team2_img ? (
+                                        <img src={getPlayerImage(match.team2_img) || ""} alt="" className="w-full h-full object-contain p-1" />
+                                     ) : <Shield size={20} className="text-slate-200" />}
+                                  </div>
                                 </div>
                               </div>
 
@@ -1125,25 +1298,14 @@ export default function ScoreboardPage() {
                                   )}
                                 </div>
                                 
-                                {/* Scorecard Action */}
+
+                                {/* Status Metadata */}
                                 {(() => {
                                   const matchDate = new Date(match.date_time_gmt);
                                   const expectedEndTime = new Date(matchDate.getTime() + 4 * 60 * 60 * 1000); // Start + 4 hours
                                   const now = new Date();
-                                  const hasEndedPassed = now > expectedEndTime || match.match_ended;
-
-                                  if (hasEndedPassed && match.api_match_id) {
-                                    return (
-                                      <a
-                                        href={`/test-scorecard?id=${match.api_match_id}`}
-                                        className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white text-[10px] sm:text-xs font-black uppercase rounded-lg transition-colors"
-                                      >
-                                        <Trophy className="h-3 w-3 text-yellow-500" /> Player Points
-                                      </a>
-                                    );
-                                  }
-
                                   const expectedTimeStr = expectedEndTime.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "Asia/Kolkata" });
+                                  
                                   return (
                                     <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 text-amber-600 text-[9px] sm:text-[10px] font-black uppercase rounded-lg">
                                       <Clock className="h-3 w-3" /> Points update near {expectedTimeStr}
@@ -1152,6 +1314,11 @@ export default function ScoreboardPage() {
                                 })()}
                               </div>
                             </div>
+                            {expandedScorecardId === match.api_match_id && match.scorecard && (
+                              <div className="border-t border-slate-100 bg-slate-50/50 pt-4 pb-8 px-2 sm:px-6">
+                                <ScorecardViewer scorecard={match.scorecard as any} />
+                              </div>
+                            )}
                           </div>
                         );
                       })}
