@@ -1400,20 +1400,20 @@ export default function ScoreboardPage() {
                                                            <div className="text-xs font-black text-slate-900 uppercase leading-none">{player?.player_name || "Unknown"}</div>
                                                            <div className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter mt-1">{player?.role}</div>
                                                         </td>
-                                                        <td className="px-3 py-3 text-xs font-black text-slate-600 text-center">{p.runs || 0}</td>
-                                                        <td className="px-3 py-3 text-xs font-black text-slate-600 text-center">{p.wickets || 0}</td>
-                                                        <td className="px-3 py-3 text-xs font-black text-slate-600 text-center">{(p.catches || 0) + (p.stumpings || 0)}</td>
-                                                        <td className="px-4 py-3 text-sm font-black text-amber-600 text-right">{Math.round(p.points)}</td>
-                                                     </tr>
-                                                  );
-                                               });
-                                            })()}
-                                         </tbody>
-                                      </table>
-                                   </div>
-                                 </div>
-                               </DialogContent>
-                             </Dialog>
+                                                       <td className="px-3 py-3 text-xs font-black text-slate-600 text-center">{String(p.runs || 0)}</td>
+                                                       <td className="px-3 py-3 text-xs font-black text-slate-600 text-center">{String(p.wickets || 0)}</td>
+                                                       <td className="px-3 py-3 text-xs font-black text-slate-600 text-center">{String((p.catches || 0) + (p.stumpings || 0))}</td>
+                                                       <td className="px-4 py-3 text-sm font-black text-amber-600 text-right">{String(Math.round(p.points || 0))}</td>
+                                                    </tr>
+                                                 );
+                                              });
+                                           })()}
+                                        </tbody>
+                                     </table>
+                                  </div>
+                                </div>
+                              </DialogContent>
+                            </Dialog>
                           </div>
                         );
                       })}
