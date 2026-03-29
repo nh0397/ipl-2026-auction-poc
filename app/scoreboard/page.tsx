@@ -277,11 +277,52 @@ export default function ScoreboardPage() {
                         <div className="bg-slate-900 rounded-[2rem] p-6 shadow-xl h-80">
                            <div className="flex justify-between mb-4">
                               <h3 className="text-sm font-black uppercase italic text-white">{currentAnalyticsTeam?.team_name} Split</h3>
-                              <div className="flex gap-1">{franchises.slice(0, 3).map(f => <button key={f.id} onClick={() => setAnalyticsTeamId(f.id)} className={cn("text-[8px] font-black uppercase px-2 py-1 rounded", analyticsTeamId === f.id || (!analyticsTeamId && standings[0].id === f.id) ? "bg-white text-slate-900" : "bg-white/10 text-white/40")}>{f.team_name}</button>)}</div>
-                           </div>
-                           <div className="grid grid-cols-2 h-full pb-8">
-                              <ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={contributorData} cx="50%" cy="50%" innerRadius="40%" outerRadius="70%" dataKey="value" stroke="none">{contributorData.map((_, i) => <Cell key={i} fill={TEAM_COLORS[i % TEAM_COLORS.length]} />)}</Pie><Tooltip /><Legend wrapperStyle={{fontSize:9}} /></PieChart></ResponsiveContainer>
-                              <ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={roleData} cx="50%" cy="50%" outerRadius="70%" dataKey="value" stroke="none">{roleData.map((_, i) => <Cell key={i} fill={["#3b82f6", "#ef4444", "#10b981", "#f59e0b"][i]} />)}</Pie><Tooltip /><Legend wrapperStyle={{fontSize:9}} /></PieChart></ResponsiveContainer>
+                            <div className="flex gap-1">
+                               {franchises.slice(0, 3).map(f => (
+                                 <button 
+                                   key={f.id} 
+                                   onClick={() => setAnalyticsTeamId(f.id)} 
+                                   className={cn(
+                                     "text-[8px] font-black uppercase px-2 py-1 rounded", 
+                                     analyticsTeamId === f.id || (!analyticsTeamId && standings[0]?.id === f.id) 
+                                       ? "bg-white text-slate-900" 
+                                       : "bg-white/10 text-white/40"
+                                   )}
+                                 >
+                                   {f.team_name}
+                                 </button>
+                               ))}
+                            </div>
+                         </div>
+                         <div className="grid grid-cols-2 h-full pb-8">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <PieChart>
+                                <Pie 
+                                  data={contributorData} 
+                                  cx="50%" cy="50%" 
+                                  innerRadius="40%" outerRadius="70%" 
+                                  dataKey="value" stroke="none"
+                                >
+                                  {contributorData?.map((_, i) => <Cell key={i} fill={TEAM_COLORS[i % TEAM_COLORS.length]} />)}
+                                </Pie>
+                                <Tooltip />
+                                <Legend wrapperStyle={{fontSize:9}} />
+                              </PieChart>
+                            </ResponsiveContainer>
+                            <ResponsiveContainer width="100%" height="100%">
+                              <PieChart>
+                                <Pie 
+                                  data={roleData} 
+                                  cx="50%" cy="50%" 
+                                  outerRadius="70%" 
+                                  dataKey="value" stroke="none"
+                                >
+                                  {roleData?.map((_, i) => <Cell key={i} fill={["#3b82f6", "#ef4444", "#10b981", "#f59e0b"][i]} />)}
+                                </Pie>
+                                <Tooltip />
+                                <Legend wrapperStyle={{fontSize:9}} />
+                              </PieChart>
+                            </ResponsiveContainer>
                            </div>
                         </div>
                      </div>
