@@ -576,7 +576,7 @@ async def scrape(page: Page) -> Dict[str, Any]:
         "innings": innings,
     }
 
-async def run(url: str) -> None:
+async def run(url: str) -> Optional[Dict[str, Any]]:
     log("Launching Chromium")
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -629,7 +629,7 @@ async def run(url: str) -> None:
             )
 
             log(f"JSON written to {OUTFILE}")
-            print(json.dumps(data, indent=2, ensure_ascii=False))
+            return data
 
         except Exception as e:
             log(f"Fatal error: {e}")
@@ -638,6 +638,117 @@ async def run(url: str) -> None:
         finally:
             await browser.close()
             log("Browser closed")
+
+def clean_name(name):
+    n = name.replace("(c)", "").replace("(vc)", "").replace("†", "").replace("(s/r)", "")
+    return n.strip().lower()
+
+# ──────────────────────────────────────────────
+# Full Scoring Engine
+# ──────────────────────────────────────────────
+
+def calculate_batting_points(r, b, fours, sixes, sr, dismissal, role):
+    try:
+        rv, bv, foursv, sixesv = int(r or 0), int(b or 0), int(fours or 0), int(sixes or 0)
+        srv = float(str(sr).replace('-', '0') or 0)
+    except: return 0
+    points = rv + (foursv * 4) + (sixesv * 6)
+    if rv >= 100: points += 16
+    elif rv >= 75: points += 12
+    elif rv >= 50: points += 8
+    elif rv >= 25: points += 4
+    is_duck = (rv == 0 and "not out" not in dismissal.lower())
+    if is_duck and role != 'Bowler': points -= 2
+    if (rv >= 20 or bv >= 10) and role != 'Bowler':
+        if srv >= 170: points += 6
+        elif srv >= 150: points += 4
+        elif srv >= 130: points += 2
+        elif srv < 50: points -= 6
+        elif srv < 60: points -= 4
+        elif srv < 70: points -= 2
+    return points
+
+def calculate_bowling_points(w, m, dots, eco, overs, role):
+    try:
+        wv, mv, dotsv = int(w or 0), int(m or 0), int(dots or 0)
+        ecov, oversv = float(str(eco).replace('-', '0') or 0), float(str(overs).replace('-', '0') or 0)
+    except: return 0
+    points = (wv * 30) + (mv * 12) + (dotsv * 1)
+    if wv >= 5: points += 12
+    elif wv >= 4: points += 8
+    elif wv >= 3: points += 4
+    if oversv >= 2:
+        if ecov < 5: points += 6
+        elif ecov < 6: points += 4
+        elif ecov < 7: points += 2
+        elif ecov >= 12: points -= 6
+        elif ecov >= 11: points -= 4
+        elif ecov >= 10: points -= 2
+    return points
+
+def apply_multipliers(points, r, w):
+    try:
+        rv, wv = int(r or 0), int(w or 0)
+    except: return points
+    mult = 1.0
+    if rv >= 150: mult = max(mult, 4.0)
+    elif rv >= 100: mult = max(mult, 3.0)
+    elif rv >= 75: mult = max(mult, 1.75)
+    elif rv >= 45: mult = max(mult, 1.5)
+    elif rv >= 25: mult = max(mult, 1.25)
+    if wv >= 5: mult = max(mult, 4.0)
+    elif wv >= 3: mult = max(mult, 2.0)
+    elif wv >= 2: mult = max(mult, 1.5)
+    return points * mult
+
+def calculate_match_points(sc_data, fixture_uuid, api_match_id):
+    log(f"Calculating and Storing Points for match {api_match_id}...")
+    res = requests.get(f"{SUPABASE_URL}/rest/v1/players?select=id,player_name,role", headers=HEADERS)
+    players_map = {clean_name(p['player_name']): p for p in res.json()}
+    match_points = []
+    
+    for inning in sc_data.get('innings', []):
+        for b in inning.get('batting', []):
+            if b.get('player') in ["BATTING", ""]: continue
+            name = clean_name(b['player'])
+            if name in players_map:
+                p = players_map[name]
+                bat_pts = calculate_batting_points(b['R'], b['B'], b['4s'], b['6s'], b['SR'], b['dismissal'], p['role'])
+                match_points.append({
+                    "match_id": fixture_uuid, "player_id": p['id'], "points": bat_pts + 4,
+                    "runs": int(b['R'] or 0), "balls": int(b['B'] or 0), "wickets": 0
+                })
+        for bw in inning.get('bowling', []):
+            if bw.get('bowler') in ["BOWLING", ""]: continue
+            name = clean_name(bw['bowler'])
+            if name in players_map:
+                p = players_map[name]
+                bow_pts = calculate_bowling_points(bw['W'], bw['M'], bw['0s'], bw['ECON'], bw['O'], p['role'])
+                found = False
+                for entry in match_points:
+                    if entry['player_id'] == p['id']:
+                        entry['points'] += bow_pts
+                        entry['wickets'] = int(bw['W'] or 0)
+                        found = True
+                        break
+                if not found:
+                    match_points.append({
+                        "match_id": fixture_uuid, "player_id": p['id'], "points": bow_pts + 4,
+                        "wickets": int(bw['W'] or 0), "runs": 0, "balls": 0
+                    })
+    # Map to Match record for final storage
+    match_res = requests.get(f"{SUPABASE_URL}/rest/v1/matches?api_match_id=eq.{api_match_id}", headers=HEADERS)
+    match_record = match_res.json()
+    if match_record and match_points:
+        m_uuid = match_record[0]['id']
+        for entry in match_points:
+            entry['match_id'] = m_uuid
+            entry['points'] = apply_multipliers(entry['points'], entry.get('runs', 0), entry.get('wickets', 0))
+        # Clear existing
+        requests.delete(f"{SUPABASE_URL}/rest/v1/match_points?match_id=eq.{m_uuid}", headers=HEADERS)
+        # Store
+        requests.post(f"{SUPABASE_URL}/rest/v1/match_points", headers=HEADERS, json=match_points)
+        log(f"✅ Stored {len(match_points)} point records with multipliers.")
 
 async def main():
     parser = argparse.ArgumentParser()
@@ -673,7 +784,23 @@ async def main():
         log(f"Identified Match: {f['title']}")
         log(f"Generated URL: {dynamic_url}")
         
-        await run(dynamic_url)
+        data = await run(dynamic_url)
+
+        if data:
+            log(f"Finalizing Database Updates for {f['api_match_id']}...")
+            # Update Scorecard in Fixtures
+            status = data.get('match_info', {}).get('result', '') or data.get('match_info', {}).get('status', '') or (f.get('status') or "")
+            upd = {
+                "scorecard": data,
+                "status": status,
+                "match_started": len(data.get('innings', [])) > 0,
+                "match_ended": "won" in status.lower()
+            }
+            requests.patch(f"{SUPABASE_URL}/rest/v1/fixtures?id=eq.{f['id']}", headers=HEADERS, json=upd)
+            log("Fixture scorecard updated in Supabase.")
+            
+            # Populate Points
+            calculate_match_points(data, f['id'], f['api_match_id'])
 
 if __name__ == "__main__":
     try:
