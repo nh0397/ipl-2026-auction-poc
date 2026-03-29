@@ -1346,56 +1346,74 @@ export default function ScoreboardPage() {
                             </div>
                             
                             {/* Expanded Views */}
-                            {expandedScorecardId === match.api_match_id && match.scorecard && (
-                              <div className="border-t border-slate-100 bg-slate-50/50 pt-4 pb-8 px-2 sm:px-6">
-                                <ScorecardViewer scorecard={match.scorecard as any} />
-                              </div>
-                            )}
+                             {expandedScorecardId === match.api_match_id && match.scorecard && (
+                               <div className="border-t border-slate-100 bg-slate-50/50 pt-4 pb-8 px-2 sm:px-6">
+                                 <ScorecardViewer scorecard={match.scorecard as any} />
+                               </div>
+                             )}
 
-                            {/* Expanded Points Table */}
-                            {expandedPointsId === match.api_match_id && (
-                              <div className="border-t border-slate-100 bg-amber-50/30 pt-4 pb-8 px-4 sm:px-6">
-                                <div className="max-w-xl mx-auto space-y-3">
-                                  <div className="text-[10px] font-black text-amber-600 uppercase tracking-widest mb-2 flex items-center gap-2">
-                                     <Trophy size={14} /> Fantasy Point Breakdown
-                                  </div>
-                                  <div className="overflow-hidden border border-amber-100 rounded-xl bg-white shadow-sm">
-                                     <table className="w-full text-left border-collapse">
-                                        <thead>
-                                           <tr className="bg-amber-50/50 border-b border-amber-100">
-                                              <th className="px-3 py-2 text-[9px] font-black text-amber-900 uppercase">Player</th>
-                                              <th className="px-3 py-2 text-[9px] font-black text-amber-900 uppercase text-center">R</th>
-                                              <th className="px-3 py-2 text-[9px] font-black text-amber-900 uppercase text-center">W</th>
-                                              <th className="px-3 py-2 text-[10px] font-black text-amber-900 uppercase text-right">Points</th>
-                                           </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-amber-50">
-                                           {(() => {
-                                              const matchRec = allMatches.find(m => m.api_match_id === match.api_match_id);
-                                              if (!matchRec) return <tr><td colSpan={4} className="px-3 py-4 text-[10px] text-amber-400 font-bold italic text-center">Point calculation pending...</td></tr>;
-                                              const pts = allMatchPoints.filter(p => p.match_id === matchRec.id).sort((a, b) => b.points - a.points);
-                                              if (pts.length === 0) return <tr><td colSpan={4} className="px-3 py-4 text-[10px] text-amber-400 font-bold italic text-center">No calculations found.</td></tr>;
-                                              return pts.map(p => {
-                                                 const player = allPlayers.find(pl => pl.id === p.player_id);
-                                                 return (
-                                                    <tr key={p.id} className="hover:bg-amber-50/20 transition-colors">
-                                                       <td className="px-3 py-2.5">
-                                                          <div className="text-[10px] font-black text-slate-800 uppercase leading-none">{player?.player_name || "Unknown"}</div>
-                                                          <div className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter mt-0.5">{player?.role}</div>
-                                                       </td>
-                                                       <td className="px-3 py-2.5 text-[10px] font-bold text-slate-600 text-center">{p.runs || 0}</td>
-                                                       <td className="px-3 py-2.5 text-[10px] font-bold text-slate-600 text-center">{p.wickets || 0}</td>
-                                                       <td className="px-3 py-2.5 text-[11px] font-black text-amber-600 text-right">{Math.round(p.points)}</td>
-                                                    </tr>
-                                                 );
-                                              });
-                                           })()}
-                                        </tbody>
-                                     </table>
-                                  </div>
-                                </div>
-                              </div>
-                            )}
+                             {/* Match Points Modal */}
+                             <Dialog open={expandedPointsId === match.api_match_id} onOpenChange={(open) => setExpandedPointsId(open ? match.api_match_id : null)}>
+                               <DialogContent className="max-w-2xl bg-white border-0 shadow-2xl p-0 rounded-[2rem] overflow-hidden">
+                                 <DialogHeader className="bg-amber-600 p-6 sm:p-8 text-white">
+                                   <div className="flex items-center gap-3 mb-2">
+                                     <div className="h-10 w-10 bg-white/20 rounded-xl flex items-center justify-center backdrop-blur-md">
+                                       <Trophy size={20} className="text-white" />
+                                     </div>
+                                     <div>
+                                        <DialogTitle className="text-xl sm:text-2xl font-black uppercase tracking-tighter leading-none">Match Analytics</DialogTitle>
+                                        <DialogDescription className="text-amber-100 font-bold uppercase text-[9px] tracking-widest mt-1 opacity-80">
+                                          Fantasy Point Summary • {match.team1_short} vs {match.team2_short}
+                                        </DialogDescription>
+                                     </div>
+                                   </div>
+                                 </DialogHeader>
+                                 
+                                 <div className="p-4 sm:p-8 max-h-[60vh] overflow-y-auto no-scrollbar">
+                                   <div className="overflow-hidden border border-slate-100 rounded-2xl bg-white shadow-sm">
+                                      <table className="w-full text-left border-collapse">
+                                         <thead>
+                                            <tr className="bg-slate-50 border-b border-slate-100">
+                                               <th className="px-4 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest">Player</th>
+                                               <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase text-center">R</th>
+                                               <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase text-center">W</th>
+                                               <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase text-center">F</th>
+                                               <th className="px-4 py-3 text-[11px] font-black text-slate-900 uppercase text-right">Points</th>
+                                            </tr>
+                                         </thead>
+                                         <tbody className="divide-y divide-slate-50">
+                                            {(() => {
+                                               const matchRec = allMatches.find(m => m.api_match_id === match.api_match_id);
+                                               if (!matchRec) return <tr><td colSpan={5} className="px-4 py-8 text-center text-slate-400 font-bold italic">Calculation pending...</td></tr>;
+                                               
+                                               const pts = allMatchPoints
+                                                 .filter(p => p.match_id === matchRec.id)
+                                                 .sort((a, b) => b.points - a.points);
+                                               
+                                               if (pts.length === 0) return <tr><td colSpan={5} className="px-4 py-8 text-center text-slate-400 font-bold italic">No calculations found for this match yet.</td></tr>;
+
+                                               return pts.map(p => {
+                                                  const player = allPlayers.find(pl => pl.id === p.player_id);
+                                                  return (
+                                                     <tr key={p.id} className="hover:bg-slate-50 transition-colors">
+                                                        <td className="px-4 py-3">
+                                                           <div className="text-xs font-black text-slate-900 uppercase leading-none">{player?.player_name || "Unknown"}</div>
+                                                           <div className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter mt-1">{player?.role}</div>
+                                                        </td>
+                                                        <td className="px-3 py-3 text-xs font-black text-slate-600 text-center">{p.runs || 0}</td>
+                                                        <td className="px-3 py-3 text-xs font-black text-slate-600 text-center">{p.wickets || 0}</td>
+                                                        <td className="px-3 py-3 text-xs font-black text-slate-600 text-center">{(p.catches || 0) + (p.stumpings || 0)}</td>
+                                                        <td className="px-4 py-3 text-sm font-black text-amber-600 text-right">{Math.round(p.points)}</td>
+                                                     </tr>
+                                                  );
+                                               });
+                                            })()}
+                                         </tbody>
+                                      </table>
+                                   </div>
+                                 </div>
+                               </DialogContent>
+                             </Dialog>
                           </div>
                         );
                       })}

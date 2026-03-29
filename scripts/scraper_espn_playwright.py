@@ -643,6 +643,114 @@ def clean_name(name):
     n = name.replace("(c)", "").replace("(vc)", "").replace("†", "").replace("(s/r)", "")
     return n.strip().lower()
 
+def calculate_player_points(stats, role):
+    r, b, fours, sixes, sr = stats.get('R', 0), stats.get('B', 0), stats.get('4s', 0), stats.get('6s', 0), stats.get('SR', 0)
+    w, m, dots, eco, overs = stats.get('W', 0), stats.get('M', 0), stats.get('0s', 0), stats.get('ECON', 0), stats.get('O', 0)
+    catches, stumpings = stats.get('catches', 0), stats.get('stumpings', 0)
+
+    # Batting Points
+    pts = r + (fours * 1) + (sixes * 2) 
+    if r >= 100: pts += 16
+    elif r >= 75: pts += 12
+    elif r >= 50: pts += 8
+    elif r >= 30: pts += 4
+    if r == 0 and stats.get('out', False) and role != 'Bowler': pts -= 2
+    if (r >= 20 or b >= 10) and role != 'Bowler':
+        if sr > 170: pts += 6
+        elif sr > 150: pts += 4
+        elif sr > 130: pts += 2
+        elif sr < 60: pts -= 4
+        elif sr < 70: pts -= 2
+
+    # Bowling Points
+    pts += (w * 25) + (m * 12) + (dots * 1)
+    if w >= 5: pts += 16
+    elif w >= 4: pts += 8
+    elif w >= 3: pts += 4
+    if overs >= 2:
+        if eco < 5: pts += 6
+        elif eco < 6: pts += 4
+        elif eco < 7: pts += 2
+        elif eco > 11: pts -= 4
+        elif eco > 10: pts -= 2
+
+    # Fielding / WK
+    pts += (catches * 8) + (stumpings * 12)
+    return pts
+
+def apply_multipliers(points, r, w):
+    mult = 1.0
+    if r >= 100 or w >= 5: mult = 4.0
+    elif r >= 75 or w >= 4: mult = 3.0
+    elif r >= 50 or w >= 3: mult = 2.0
+    elif r >= 30 or w >= 2: mult = 1.5
+    return points * mult
+
+def calculate_match_points(sc_data, fixture_uuid, api_match_id):
+    log(f"Running Integrated Scoring for match {api_match_id}...")
+    res = requests.get(f"{SUPABASE_URL}/rest/v1/players?select=id,player_name,role", headers=HEADERS)
+    players_map = {clean_name(p['player_name']): p for p in res.json()}
+    match_stats = {} 
+
+    for inning in sc_data.get('innings', []):
+        for b in inning.get('batting', []):
+            name = clean_name(b.get('player', ''))
+            if name in players_map:
+                pid = players_map[name]['id']
+                if pid not in match_stats: match_stats[pid] = {'R':0,'B':0,'4s':0,'6s':0,'SR':0,'W':0,'M':0,'0s':0,'ECON':0,'O':0,'catches':0,'stumpings':0,'out':False}
+                try:
+                    match_stats[pid].update({
+                        'R': int(b.get('R', 0)), 'B': int(b.get('B', 0)), '4s': int(b.get('4s', 0)), '6s': int(b.get('6s', 0)),
+                        'SR': float(str(b.get('SR', 0)).replace('-', '0')), 'out': "not out" not in b.get('dismissal', '').lower()
+                    })
+                except: pass
+                d = b.get('dismissal', '').lower()
+                if 'c ' in d:
+                    fielder = clean_name(d.split('c ')[1].split(' b ')[0])
+                    if fielder in players_map:
+                        fpid = players_map[fielder]['id']
+                        if fpid not in match_stats: match_stats[fpid] = {'R':0,'B':0,'4s':0,'6s':0,'SR':0,'W':0,'M':0,'0s':0,'ECON':0,'O':0,'catches':0,'stumpings':0,'out':False}
+                        match_stats[fpid]['catches'] += 1
+                if 'st ' in d:
+                    wk = clean_name(d.split('st ')[1].split(' b ')[0])
+                    if wk in players_map:
+                        wpid = players_map[wk]['id']
+                        if wpid not in match_stats: match_stats[wpid] = {'R':0,'B':0,'4s':0,'6s':0,'SR':0,'W':0,'M':0,'0s':0,'ECON':0,'O':0,'catches':0,'stumpings':0,'out':False}
+                        match_stats[wpid]['stumpings'] += 1
+
+        for bw in inning.get('bowling', []):
+            name = clean_name(bw.get('bowler', ''))
+            if name in players_map:
+                pid = players_map[name]['id']
+                if pid not in match_stats: match_stats[pid] = {'R':0,'B':0,'4s':0,'6s':0,'SR':0,'W':0,'M':0,'0s':0,'ECON':0,'O':0,'catches':0,'stumpings':0,'out':False}
+                try:
+                    match_stats[pid].update({
+                        'W': int(bw.get('W', 0)), 'M': int(bw.get('M', 0)), '0s': int(bw.get('0s', 0)),
+                        'ECON': float(str(bw.get('ECON', 0)).replace('-', '0')), 'O': float(str(bw.get('O', 0)).replace('-', '0'))
+                    })
+                except: pass
+
+    m_res = requests.get(f"{SUPABASE_URL}/rest/v1/matches?api_match_id=eq.{api_match_id}", headers=HEADERS)
+    match_record = m_res.json()
+    if not match_record: return
+    m_uuid = match_record[0]['id']
+
+    final_payload = []
+    for pid, stats in match_stats.items():
+        p_info = next(pl for pl in players_map.values() if pl['id'] == pid)
+        base_points = calculate_player_points(stats, p_info['role'])
+        final_points = apply_multipliers(base_points, stats['R'], stats['W'])
+        final_payload.append({
+            "match_id": m_uuid, "player_id": pid, "points": final_points + 4,
+            "runs": stats['R'], "balls": stats['B'], "wickets": stats['W'],
+            "catches": stats['catches'], "stumpings": stats['stumpings']
+        })
+
+    if final_payload:
+        requests.delete(f"{SUPABASE_URL}/rest/v1/match_points?match_id=eq.{m_uuid}", headers=HEADERS)
+        requests.post(f"{SUPABASE_URL}/rest/v1/match_points", headers=HEADERS, json=final_payload)
+        log(f"✅ Aggregate scoring finished. Stored {len(final_payload)} aggregate player records.")
+
 # ──────────────────────────────────────────────
 # Full Scoring Engine
 # ──────────────────────────────────────────────
