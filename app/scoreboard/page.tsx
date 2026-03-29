@@ -1345,12 +1345,33 @@ export default function ScoreboardPage() {
                               </div>
                             </div>
                             
-                            {/* Expanded Views */}
-                             {expandedScorecardId === match.api_match_id && match.scorecard && (
-                               <div className="border-t border-slate-100 bg-slate-50/50 pt-4 pb-8 px-2 sm:px-6">
-                                 <ScorecardViewer scorecard={match.scorecard as any} />
-                               </div>
-                             )}
+                             {/* Scorecard Modal */}
+                             <Dialog open={expandedScorecardId === match.api_match_id} onOpenChange={(open) => setExpandedScorecardId(open ? match.api_match_id : null)}>
+                               <DialogContent className="max-w-4xl bg-[#F8FAFC] border-0 shadow-2xl p-0 rounded-[2rem] overflow-hidden">
+                                 <DialogHeader className="bg-slate-900 p-6 sm:p-8 text-white">
+                                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                                     <div className="flex items-center gap-3">
+                                       <div className="h-10 w-10 bg-white/20 rounded-xl flex items-center justify-center backdrop-blur-md">
+                                         <Shield size={20} className="text-white" />
+                                       </div>
+                                       <div>
+                                          <DialogTitle className="text-xl sm:text-2xl font-black uppercase tracking-tighter leading-none">Complete Scorecard</DialogTitle>
+                                          <DialogDescription className="text-slate-400 font-bold uppercase text-[9px] tracking-widest mt-1 opacity-80">
+                                            {match.title || `${match.team1_short} vs ${match.team2_short}`} • {formatDate(match.match_date)}
+                                          </DialogDescription>
+                                       </div>
+                                     </div>
+                                     <div className="px-3 py-1.5 bg-white/10 rounded-lg text-amber-400 text-[10px] font-black uppercase tracking-widest border border-white/10">
+                                        {match.status}
+                                     </div>
+                                   </div>
+                                 </DialogHeader>
+                                 
+                                 <div className="p-4 sm:p-8 max-h-[75vh] overflow-y-auto no-scrollbar">
+                                   <ScorecardViewer scorecard={match.scorecard as any} />
+                                 </div>
+                               </DialogContent>
+                             </Dialog>
 
                              {/* Match Points Modal */}
                              <Dialog open={expandedPointsId === match.api_match_id} onOpenChange={(open) => setExpandedPointsId(open ? match.api_match_id : null)}>

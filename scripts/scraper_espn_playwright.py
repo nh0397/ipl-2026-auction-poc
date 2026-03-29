@@ -404,6 +404,7 @@ async def parse_batting(table: Locator, innings_no: int) -> Dict[str, Any]:
     log(f"Innings {innings_no} batting row count: {row_count}")
 
     batting = []
+    yet_to_bat = []
     extras = {"text": "", "total": None}
     total = {"score": "", "overs": "", "run_rate": ""}
 
@@ -416,7 +417,11 @@ async def parse_batting(table: Locator, innings_no: int) -> Dict[str, Any]:
         first = vals[0].lower() if vals else ""
 
         if "did not bat" in row_text.lower():
-            log(f"Innings {innings_no}: skipped 'Did not bat' row")
+            # Extract player names from "Did not bat: Player1, Player2..."
+            names_part = row_text.split(":", 1)[1] if ":" in row_text else row_text.replace("Did not bat", "", 1)
+            players = [p.strip() for p in names_part.split(",") if p.strip()]
+            yet_to_bat.extend(players)
+            log(f"Innings {innings_no}: parsed yet_to_bat: {players}")
             continue
 
         if "fall of wickets" in row_text.lower():
@@ -480,6 +485,7 @@ async def parse_batting(table: Locator, innings_no: int) -> Dict[str, Any]:
         "extras": extras,
         "total": total,
         "fall_of_wickets": fow,
+        "yet_to_bat": yet_to_bat,
     }
 
 async def parse_bowling(table: Locator, innings_no: int) -> List[Dict[str, Any]]:
@@ -722,10 +728,11 @@ def calculate_match_points(sc_data, fixture_uuid, api_match_id):
             name = clean_name(bw.get('bowler', ''))
             if name in players_map:
                 pid = players_map[name]['id']
-                if pid not in match_stats: match_stats[pid] = {'R':0,'B':0,'4s':0,'6s':0,'SR':0,'W':0,'M':0,'0s':0,'ECON':0,'O':0,'catches':0,'stumpings':0,'out':False}
+                if pid not in match_stats: match_stats[pid] = {'R':0,'B':0,'4s':0,'6s':0,'SR':0,'W':0,'M':0,'0s':0,'WD':0,'NB':0,'ECON':0,'O':0,'catches':0,'stumpings':0,'out':False}
                 try:
                     match_stats[pid].update({
                         'W': int(bw.get('W', 0)), 'M': int(bw.get('M', 0)), '0s': int(bw.get('0s', 0)),
+                        'WD': int(bw.get('WD', 0)), 'NB': int(bw.get('NB', 0)),
                         'ECON': float(str(bw.get('ECON', 0)).replace('-', '0')), 'O': float(str(bw.get('O', 0)).replace('-', '0'))
                     })
                 except: pass
