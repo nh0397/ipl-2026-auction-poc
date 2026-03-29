@@ -91,6 +91,7 @@ export default function ScoreboardPage() {
   const [standings, setStandings] = useState<any[]>([]);
   const [allMatchPoints, setAllMatchPoints] = useState<any[]>([]);
   const [expandedScorecardId, setExpandedScorecardId] = useState<string | null>(null);
+  const [expandedPointsId, setExpandedPointsId] = useState<string | null>(null);
   const [subLoading, setSubLoading] = useState(false);
   const [tabLoading, setTabLoading] = useState(false);
   const [scorecardMatch, setScorecardMatch] = useState<Fixture | null>(null);
@@ -1298,12 +1299,41 @@ export default function ScoreboardPage() {
                                   )}
                                 </div>
                                 
-
-                                {/* Status Metadata */}
-                                {(() => {
+                                {/* Status Metadata or Actions */}
+                                {match.scorecard ? (
+                                  <div className="flex items-center gap-2">
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => {
+                                        setExpandedScorecardId(expandedScorecardId === match.api_match_id ? null : match.api_match_id);
+                                        setExpandedPointsId(null);
+                                      }}
+                                      className={cn(
+                                        "h-8 text-[9px] font-black uppercase tracking-widest rounded-lg transition-all",
+                                        expandedScorecardId === match.api_match_id ? "bg-slate-900 text-white" : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                                      )}
+                                    >
+                                      {expandedScorecardId === match.api_match_id ? "Hide Scorecard" : "View Scorecard"}
+                                    </Button>
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => {
+                                        setExpandedPointsId(expandedPointsId === match.api_match_id ? null : match.api_match_id);
+                                        setExpandedScorecardId(null);
+                                      }}
+                                      className={cn(
+                                        "h-8 text-[9px] font-black uppercase tracking-widest rounded-lg transition-all",
+                                        expandedPointsId === match.api_match_id ? "bg-amber-600 text-white" : "border-amber-200 text-amber-600 hover:bg-amber-50"
+                                      )}
+                                    >
+                                      {expandedPointsId === match.api_match_id ? "Hide Points" : "View Points"}
+                                    </Button>
+                                  </div>
+                                ) : (() => {
                                   const matchDate = new Date(match.date_time_gmt);
                                   const expectedEndTime = new Date(matchDate.getTime() + 4 * 60 * 60 * 1000); // Start + 4 hours
-                                  const now = new Date();
                                   const expectedTimeStr = expectedEndTime.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "Asia/Kolkata" });
                                   
                                   return (
@@ -1314,9 +1344,56 @@ export default function ScoreboardPage() {
                                 })()}
                               </div>
                             </div>
+                            
+                            {/* Expanded Views */}
                             {expandedScorecardId === match.api_match_id && match.scorecard && (
                               <div className="border-t border-slate-100 bg-slate-50/50 pt-4 pb-8 px-2 sm:px-6">
                                 <ScorecardViewer scorecard={match.scorecard as any} />
+                              </div>
+                            )}
+
+                            {/* Expanded Points Table */}
+                            {expandedPointsId === match.api_match_id && (
+                              <div className="border-t border-slate-100 bg-amber-50/30 pt-4 pb-8 px-4 sm:px-6">
+                                <div className="max-w-xl mx-auto space-y-3">
+                                  <div className="text-[10px] font-black text-amber-600 uppercase tracking-widest mb-2 flex items-center gap-2">
+                                     <Trophy size={14} /> Fantasy Point Breakdown
+                                  </div>
+                                  <div className="overflow-hidden border border-amber-100 rounded-xl bg-white shadow-sm">
+                                     <table className="w-full text-left border-collapse">
+                                        <thead>
+                                           <tr className="bg-amber-50/50 border-b border-amber-100">
+                                              <th className="px-3 py-2 text-[9px] font-black text-amber-900 uppercase">Player</th>
+                                              <th className="px-3 py-2 text-[9px] font-black text-amber-900 uppercase text-center">R</th>
+                                              <th className="px-3 py-2 text-[9px] font-black text-amber-900 uppercase text-center">W</th>
+                                              <th className="px-3 py-2 text-[10px] font-black text-amber-900 uppercase text-right">Points</th>
+                                           </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-amber-50">
+                                           {(() => {
+                                              const matchRec = allMatches.find(m => m.api_match_id === match.api_match_id);
+                                              if (!matchRec) return <tr><td colSpan={4} className="px-3 py-4 text-[10px] text-amber-400 font-bold italic text-center">Point calculation pending...</td></tr>;
+                                              const pts = allMatchPoints.filter(p => p.match_id === matchRec.id).sort((a, b) => b.points - a.points);
+                                              if (pts.length === 0) return <tr><td colSpan={4} className="px-3 py-4 text-[10px] text-amber-400 font-bold italic text-center">No calculations found.</td></tr>;
+                                              return pts.map(p => {
+                                                 const player = allPlayers.find(pl => pl.id === p.player_id);
+                                                 return (
+                                                    <tr key={p.id} className="hover:bg-amber-50/20 transition-colors">
+                                                       <td className="px-3 py-2.5">
+                                                          <div className="text-[10px] font-black text-slate-800 uppercase leading-none">{player?.player_name || "Unknown"}</div>
+                                                          <div className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter mt-0.5">{player?.role}</div>
+                                                       </td>
+                                                       <td className="px-3 py-2.5 text-[10px] font-bold text-slate-600 text-center">{p.runs || 0}</td>
+                                                       <td className="px-3 py-2.5 text-[10px] font-bold text-slate-600 text-center">{p.wickets || 0}</td>
+                                                       <td className="px-3 py-2.5 text-[11px] font-black text-amber-600 text-right">{Math.round(p.points)}</td>
+                                                    </tr>
+                                                 );
+                                              });
+                                           })()}
+                                        </tbody>
+                                     </table>
+                                  </div>
+                                </div>
                               </div>
                             )}
                           </div>
