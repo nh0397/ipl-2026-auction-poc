@@ -191,23 +191,27 @@ export default function FixturesPage() {
           const isPast = date < today;
 
           return (
-            <div key={date} id={`date-${date}`}>
+            <div key={date} id={`date-${date}`} className={cn(
+              "space-y-4 p-1 rounded-3xl transition-all",
+              isToday && "bg-blue-50/30 ring-1 ring-blue-100/50 shadow-inner"
+            )}>
               {/* Date Divider */}
               <div className={cn(
                 "flex items-center gap-3 mb-3 px-1",
               )}>
                 <div className={cn(
-                  "text-xs font-black uppercase tracking-widest px-3 py-1.5 rounded-lg",
+                  "text-[10px] font-black uppercase tracking-widest px-4 py-2 rounded-xl flex items-center gap-2",
                   isToday 
-                    ? "bg-blue-600 text-white shadow-md shadow-blue-200" 
+                    ? "bg-blue-600 text-white shadow-lg shadow-blue-200" 
                     : isPast 
                       ? "bg-slate-200 text-slate-500" 
                       : "bg-slate-100 text-slate-600"
                 )}>
-                  {isToday ? "🏏 Today" : formatDate(date)}
+                  {isToday && <Zap className="h-3 w-3 fill-current animate-pulse" />}
+                  {isToday ? "Today's Matches" : formatDate(date)}
                 </div>
                 {isToday && (
-                  <span className="text-xs font-bold text-blue-600 animate-pulse">
+                  <span className="text-[10px] font-black text-blue-600/60 uppercase tracking-tighter">
                     {formatDate(date)}
                   </span>
                 )}
@@ -368,9 +372,9 @@ export default function FixturesPage() {
                           </div>
                         ) : (isMatchToday || isPast) && (
                           <div className="mt-4 pt-4 border-t border-slate-50">
-                            <div className="flex items-center justify-center gap-2 py-3 bg-amber-50 rounded-xl text-[10px] font-black uppercase tracking-widest text-amber-600">
-                               <Loader2 className="h-3 w-3 animate-spin" />
-                               Score updates pending
+                            <div className="flex items-center justify-center gap-2 py-3 bg-blue-50/50 rounded-xl text-[10px] font-black uppercase tracking-widest text-blue-600 border border-blue-100/50 italic">
+                               <Zap className="h-3 w-3 animate-pulse fill-blue-600" />
+                               Points available 30m after match
                             </div>
                           </div>
                         )}

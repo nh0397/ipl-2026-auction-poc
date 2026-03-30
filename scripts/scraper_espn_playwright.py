@@ -417,11 +417,29 @@ async def parse_batting(table: Locator, innings_no: int) -> Dict[str, Any]:
         first = vals[0].lower() if vals else ""
 
         if "did not bat" in row_text.lower():
-            # Extract player names from "Did not bat: Player1, Player2..."
-            names_part = row_text.split(":", 1)[1] if ":" in row_text else row_text.replace("Did not bat", "", 1)
-            players = [p.strip() for p in names_part.split(",") if p.strip()]
-            yet_to_bat.extend(players)
-            log(f"Innings {innings_no}: parsed yet_to_bat: {players}")
+            # Robust extraction from both string and <a> tags
+            names = []
+            try:
+                # User's template specific extraction
+                a_tags = rows.nth(i).locator(".ds-popper-wrapper a, a")
+                count = await a_tags.count()
+                if count > 0:
+                    for j in range(count):
+                        name = await safe_text(a_tags.nth(j))
+                        # Clean trailing commas and whitespace
+                        name = name.rstrip(", ").strip()
+                        if name:
+                            names.append(name)
+                
+                # Fallback if no <a> tags (sometimes happens on slow loads or different layouts)
+                if not names:
+                    names_part = row_text.split(":", 1)[1] if ":" in row_text else row_text.replace("Did not bat", "", 1)
+                    names = [p.strip().rstrip(",") for p in names_part.split(",") if p.strip()]
+            except Exception as e:
+                log(f"Innings {innings_no}: Error extracting 'Did not bat' names: {e}")
+            
+            yet_to_bat.extend(names)
+            log(f"Innings {innings_no}: parsed yet_to_bat: {names}")
             continue
 
         if "fall of wickets" in row_text.lower():
@@ -560,10 +578,18 @@ async def scrape(page: Page) -> Dict[str, Any]:
             {
                 "team": team,
                 "batting": batting_data["batting"],
+                "did_not_bat": batting_data["yet_to_bat"],
                 "extras": batting_data["extras"],
                 "total": batting_data["total"],
                 "fall_of_wickets": batting_data["fall_of_wickets"],
                 "bowling": bowling_data,
+                "squad": [
+                    name for name in list(set(
+                        [clean_name(b["player"]) for b in batting_data["batting"]] +
+                        [clean_name(bw["bowler"]) for bw in bowling_data] +
+                        [clean_name(p) for p in batting_data["yet_to_bat"]]
+                    )) if name and name not in ["BATTING", "BOWLING"]
+                ]
             }
         )
 
@@ -573,7 +599,13 @@ async def scrape(page: Page) -> Dict[str, Any]:
         if len(parts) >= 2:
             cleaned_title = ", ".join(parts[1:])
 
+    # Collect unique players from all innings for the master squad manifest
+    all_players = []
+    for inn in innings:
+        all_players.extend(inn.get('squad', []))
+    
     return {
+        "playing_squad": sorted(list(set(all_players))),
         "match_info": {
             "title": cleaned_title,
             "teams": teams,
@@ -585,13 +617,8 @@ async def scrape(page: Page) -> Dict[str, Any]:
 async def run(url: str) -> Optional[Dict[str, Any]]:
     log("Launching Chromium")
     async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=False,
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-            ],
+        browser = await p.firefox.launch(
+            headless=True
         )
 
         context = await browser.new_context(
@@ -646,8 +673,9 @@ async def run(url: str) -> Optional[Dict[str, Any]]:
             log("Browser closed")
 
 def clean_name(name):
-    n = name.replace("(c)", "").replace("(vc)", "").replace("†", "").replace("(s/r)", "")
-    return n.strip().lower()
+    # Fixed: Don't use [†(c)] as it removes the letter 'c'
+    n = name.replace("†", "").replace("(c)", "").replace("(vc)", "").replace("(s/r)", "")
+    return n.strip()
 
 def calculate_player_points(stats, role):
     r, b, fours, sixes, sr = stats.get('R', 0), stats.get('B', 0), stats.get('4s', 0), stats.get('6s', 0), stats.get('SR', 0)
@@ -868,6 +896,7 @@ def calculate_match_points(sc_data, fixture_uuid, api_match_id):
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--date", help="Match date (YYYY-MM-DD)", default=None)
+    parser.add_argument("--force", help="Force rescan", action="store_true")
     args = parser.parse_args()
 
     # Target date selection (IST)
@@ -877,7 +906,7 @@ async def main():
         now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
         target_date = now_ist.strftime('%Y-%m-%d')
     
-    log(f"Targeting date: {target_date}")
+    log(f"Targeting date: {target_date} (Force: {args.force})")
     res = requests.get(f"{SUPABASE_URL}/rest/v1/fixtures?match_date=eq.{target_date}", headers=HEADERS)
     fixtures = res.json()
     
@@ -886,8 +915,8 @@ async def main():
         return
 
     for f in fixtures:
-        # Avoid redundant scraping if match is already archived
-        if f.get('scorecard') and "won" in (f.get('status') or "").lower():
+        # Avoid redundant scraping unless --force is used
+        if not args.force and f.get('scorecard') and "won" in (f.get('status') or "").lower():
             log(f"Match {f['api_match_id']} ({f['title']}) already completed and stored. Skipping.")
             continue
 

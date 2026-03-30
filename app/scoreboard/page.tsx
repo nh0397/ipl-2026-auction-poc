@@ -145,9 +145,7 @@ export default function ScoreboardPage() {
     const { data: soldPlayers } = await supabase.from("players").select("id, sold_to_id, team_name, player_name, role").eq("auction_status", "sold");
     setAllPlayers(soldPlayers || []);
     
-    // For standings we need points too, but user wants on-the-fly? 
-    // Usually standings need a persistent points snapshot or we aggregate everything.
-    // For now I'll restore the persistent fetch but comment it if needed.
+    // Restoration of persistent fetch
     const { data: pts } = await supabase.from("match_points").select("*");
     setAllMatchPoints(pts || []);
     
@@ -238,7 +236,7 @@ export default function ScoreboardPage() {
            ))}
         </div>
 
-        {/* ─── TAB: STANDINGS (Charts + Table) ─── */}
+        {/* ─── TAB: STANDINGS ─── */}
         {activeTab === "standings" && (
           <div className="space-y-6 animate-in fade-in duration-500">
              {(() => {
@@ -252,7 +250,6 @@ export default function ScoreboardPage() {
                     if (matchObj) {
                        let sum = 0;
                        teamPlayers.forEach(tp => { sum += allMatchPoints.find(p => p.player_id === tp.id && p.match_id === matchObj.id)?.points || 0; });
-                       const prev = gIdx > 0 ? (gameLabels[gIdx-1] as any) : 0;
                        data[team.team_name] = (gIdx > 0 ? (cumulativeData[gIdx - 1] as any)[team.team_name] : 0) + sum;
                     }
                   });
@@ -276,20 +273,20 @@ export default function ScoreboardPage() {
                         </div>
                         <div className="bg-slate-900 rounded-[2rem] p-6 shadow-xl h-80">
                            <div className="flex justify-between mb-4">
-                              <h3 className="text-sm font-black uppercase italic text-white">{currentAnalyticsTeam?.team_name} Split</h3>
-                            <div className="flex gap-1">
-                               {franchises.slice(0, 3).map(f => (
+                              <h3 className="text-sm font-black uppercase italic text-white text-[10px]">{currentAnalyticsTeam?.team_name} Split</h3>
+                            <div className="flex gap-1 overflow-x-auto no-scrollbar">
+                               {franchises.slice(0, 5).map(f => (
                                  <button 
                                    key={f.id} 
                                    onClick={() => setAnalyticsTeamId(f.id)} 
                                    className={cn(
-                                     "text-[8px] font-black uppercase px-2 py-1 rounded", 
+                                     "text-[7px] font-black uppercase px-1.5 py-1 rounded whitespace-nowrap", 
                                      analyticsTeamId === f.id || (!analyticsTeamId && standings[0]?.id === f.id) 
                                        ? "bg-white text-slate-900" 
                                        : "bg-white/10 text-white/40"
                                    )}
                                  >
-                                   {f.team_name}
+                                   {f.team_name.split(' ')[0]}
                                  </button>
                                ))}
                             </div>
@@ -306,7 +303,7 @@ export default function ScoreboardPage() {
                                   {contributorData?.map((_, i) => <Cell key={i} fill={TEAM_COLORS[i % TEAM_COLORS.length]} />)}
                                 </Pie>
                                 <Tooltip />
-                                <Legend wrapperStyle={{fontSize:9}} />
+                                <Legend wrapperStyle={{fontSize:7}} />
                               </PieChart>
                             </ResponsiveContainer>
                             <ResponsiveContainer width="100%" height="100%">
@@ -320,7 +317,7 @@ export default function ScoreboardPage() {
                                   {roleData?.map((_, i) => <Cell key={i} fill={["#3b82f6", "#ef4444", "#10b981", "#f59e0b"][i]} />)}
                                 </Pie>
                                 <Tooltip />
-                                <Legend wrapperStyle={{fontSize:9}} />
+                                <Legend wrapperStyle={{fontSize:7}} />
                               </PieChart>
                             </ResponsiveContainer>
                            </div>
@@ -360,8 +357,8 @@ export default function ScoreboardPage() {
                             <div className="text-[10px] font-bold text-slate-400 uppercase">{formatTime(match.date_time_gmt)}IST • {match.venue?.split(',')[0]}</div>
                             {match.match_ended ? (
                               <div className="flex gap-2">
-                                 <Button variant="outline" size="sm" onClick={() => setExpandedScorecardId(match.api_match_id)} className="h-8 text-[9px] font-black uppercase">Scorecard</Button>
-                                 <Button variant="outline" size="sm" onClick={() => setExpandedPointsId(match.api_match_id)} className="h-8 text-[9px] font-black uppercase border-amber-200 text-amber-600">Breakdown</Button>
+                                 <Button variant="outline" size="sm" onClick={() => setExpandedScorecardId(match.api_match_id)} className="h-8 text-[9px] font-black uppercase shadow-none border-slate-200">Scorecard</Button>
+                                 <Button variant="outline" size="sm" onClick={() => setExpandedPointsId(match.api_match_id)} className="h-8 text-[9px] font-black uppercase border-amber-200 text-amber-600 bg-amber-50/50 shadow-none">Breakdown</Button>
                               </div>
                             ) : <span className="text-[9px] font-black text-amber-500 bg-amber-50 px-2 py-1 rounded uppercase">Live Soon</span>}
                          </div>
@@ -374,50 +371,201 @@ export default function ScoreboardPage() {
                             </DialogContent>
                          </Dialog>
 
-                         {/* Foolproof Points Modal */}
+                         {/* Points Modal - Team-Aware Calculation */}
                          <Dialog open={expandedPointsId === match.api_match_id} onOpenChange={(o) => { setExpandedPointsId(o ? match.api_match_id : null); setShowBreakdownId(null); }}>
                             <DialogContent className="max-w-[95vw] sm:max-w-3xl bg-white border-0 p-0 rounded-[2rem] overflow-hidden">
-                               <div className="bg-gradient-to-br from-amber-500 to-orange-600 p-8 text-white">
+                               <div className="bg-gradient-to-br from-indigo-600 to-blue-700 p-8 text-white">
                                   <DialogTitle className="text-2xl font-black uppercase tracking-tight leading-none">Scoring Intelligence</DialogTitle>
-                                  <p className="text-[9px] font-black uppercase opacity-90 mt-1.5 leading-none">{match.team1_short} vs {match.team2_short} • Points itemization</p>
+                                  <p className="text-[9px] font-black uppercase opacity-90 mt-1.5 leading-none">{match.team1_short} vs {match.team2_short} • 100% Team-Aware Coverage</p>
                                </div>
-                               <div className="p-2 sm:p-8 max-h-[70vh] overflow-y-auto no-scrollbar">
+                               <div className="p-2 sm:p-8 max-h-[75vh] overflow-y-auto no-scrollbar">
                                   <table className="w-full text-left">
                                      <thead className="bg-slate-50 border-b">
                                         <tr><th className="px-4 py-4 text-[9px] font-black uppercase opacity-30">Selection</th><th className="px-3 py-4 text-[9px] font-black opacity-30 text-center uppercase">Contribution</th><th className="px-4 py-4 text-[11px] font-black text-right uppercase">Final Points</th></tr>
                                      </thead>
-                                     <tbody className="divide-y">
+                                     <tbody className="divide-y divide-slate-100">
                                         {(() => {
-                                           const sc = match.scorecard as any; if (!sc?.innings) return null;
-                                           const stats: Record<string, any> = {};
-                                           sc.innings.forEach((inn: any) => {
-                                              (inn.batting || []).forEach((b: any) => { if (b.player === "BATTING") return; const n = b.player.replace(/[†(c)]/g, "").trim(); if (!stats[n]) stats[n] = { n, r:0, b:0, f:0, s:0, w:0, m:0, o:0, c:0, st:0, role: b.player.includes('†') ? 'WK' : 'Batter' }; stats[n].r += Number(b.R) || 0; stats[n].f += Number(b['4s']) || 0; stats[n].s += Number(b['6s']) || 0; });
-                                              (inn.bowling || []).forEach((bw: any) => { if (bw.bowler === "BOWLING") return; const n = bw.bowler.replace(/[†(c)]/g, "").trim(); if (!stats[n]) stats[n] = { n, r:0, b:0, f:0, s:0, w:0, m:0, o:0, c:0, st:0, role: 'Bowler' }; stats[n].w += Number(bw.W) || 0; stats[n].m += Number(bw.M) || 0; stats[n].o += Number(bw.O) || 0; if (stats[n].role === 'Batter') stats[n].role = 'All-Rounder'; });
-                                              (inn.batting || []).forEach((b: any) => { const d = (b.dismissal || "").toLowerCase(); Object.keys(stats).forEach(nm => { if (d.includes(`c ${nm.toLowerCase()}`)) stats[nm].c++; if (d.includes(`st †${nm.toLowerCase()}`)) stats[nm].st++; }); });
-                                           });
-                                           return Object.values(stats).map((p: any) => {
-                                              let base = 4; base += p.r + (p.f * 4) + (p.s * 6);
-                                              if (p.r >= 100) base += 16; else if (p.r >= 50) base += 8; else if (p.r >= 25) base += 4;
-                                              base += (p.w * 30) + (p.m * 12); if (p.w >= 5) base += 12; else if (p.w >= 3) base += 4;
-                                              base += (p.c * 8) + (p.st * 12);
-                                              let mult = 1.0; 
-                                              if (p.r >= 100) mult = 3.0; else if (p.r >= 75) mult = 1.75; else if (p.r >= 45) mult = 1.5;
-                                              if (p.w >= 5) mult = Math.max(mult, 4.0); else if (p.w >= 3) mult = Math.max(mult, 2.0);
-                                              const total = base * mult;
-                                              return (
-                                                 <React.Fragment key={p.n}>
-                                                    <tr onClick={() => setShowBreakdownId(showBreakdownId === p.n ? null : p.n)} className={cn("hover:bg-amber-50 cursor-pointer", showBreakdownId === p.n ? "bg-amber-50" : "")}>
-                                                       <td className="px-4 py-4"><div className="flex items-center gap-1.5"><span className="text-xs font-black uppercase text-slate-800 leading-none">{p.n}</span><ChevronRight size={10} className={cn("text-amber-500", showBreakdownId === p.n ? "rotate-90" : "")} /></div><p className="text-[7px] font-black uppercase text-slate-400 mt-1">{p.role}</p></td>
-                                                       <td className="px-3 py-4 text-center"><div className="text-[9px] font-black text-slate-900 leading-none">{p.r}R • {p.w}W</div></td>
-                                                       <td className="px-4 py-4 text-right"><div className="text-sm font-black text-amber-600">{Math.round(total)}</div>{mult > 1 && <div className="text-[7px] font-black px-1.5 py-0.5 bg-amber-500 text-white rounded inline-block mt-1">x{mult} BOOST</div>}</td>
-                                                    </tr>
-                                                    {showBreakdownId === p.n && (
-                                                       <tr className="bg-slate-50 border-none"><td colSpan={3} className="px-6 py-6"><div className="grid grid-cols-2 md:grid-cols-4 gap-6 animate-in slide-in-from-top-2"><div className="space-y-1"><p className="text-[7px] font-black uppercase text-amber-600">Batting Base</p><p className="text-[10px] font-bold">Runs pts: {p.r + (p.f*4) + (p.s*6)}</p></div><div className="space-y-1"><p className="text-[7px] font-black uppercase text-rose-600">Bowling Base</p><p className="text-[10px] font-bold">Wicket pts: {(p.w*30) + (p.m*12)}</p></div><div className="space-y-1"><p className="text-[7px] font-black uppercase text-emerald-600">Fielding</p><p className="text-[10px] font-bold">Catch pts: {(p.c*8) + (p.st*12)}</p></div><div className="space-y-1"><p className="text-[7px] font-black uppercase text-slate-400">Boost Multiplier</p><p className="text-[10px] font-bold text-amber-700">x{mult} Logic</p></div></div></td></tr>
-                                                    )}
-                                                 </React.Fragment>
-                                              );
-                                           });
-                                        })()}
+                                            const sc = match.scorecard as any; if (!sc?.innings) return null;
+                                            const stats: Record<string, any> = {};
+                                            const team1 = match.team1_short || "";
+                                            const team2 = match.team2_short || "";
+                                            
+                                            // 1. Master Discovery: Use the top-level 'playing_squad' to initialize the registry
+                                            const masterSquad = (sc.playing_squad || []) as string[];
+                                            masterSquad.forEach(name => {
+                                               const n = name.replace(/[†(c)]/g, "").trim();
+                                               // Find which team they belong to by checking innings squad manifests
+                                               const playerInning = sc.innings.find((inn: any) => (inn.squad || []).includes(name));
+                                               const playerTeam = playerInning?.team || "Unknown";
+                                               const key = `${n}_${playerTeam}`;
+                                               if (!stats[key]) stats[key] = { n, team: playerTeam, r:0, b:0, f:0, s:0, w:0, m:0, o:0, r_conc:0, c:0, st:0, dots:0, lbwB:0, ro:0, isDuck: false, role: 'Fielder' };
+                                            });
+
+                                            // Universal Mapping: Resolve short names against the Master Squad
+                                            const findMappedKey = (name: string, team: string) => {
+                                               const n = name.replace(/[†(c)]/g, "").trim();
+                                               const exact = `${n}_${team}`;
+                                               if (stats[exact]) return exact;
+                                               
+                                               // Fuzzy match within the SAME team first
+                                               const matchedKey = Object.keys(stats).find(k => k.endsWith(`_${team}`) && k.split('_')[0].includes(n));
+                                               if (matchedKey) return matchedKey;
+
+                                               // Search across the WHOLE master squad if team-specific fails (e.g. name only match)
+                                               const wholeMatchKey = Object.keys(stats).find(k => k.split('_')[0].includes(n));
+                                               return wholeMatchKey || exact;
+                                            };
+
+                                            // 2. Data Accumulation
+                                            sc.innings.forEach((inn: any) => {
+                                               const currentTeam = inn.team; 
+                                               const opposingTeam = sc.innings.find((i: any) => i.team !== currentTeam)?.team || "Opponent";
+
+                                               // Process Batting
+                                               (inn.batting || []).forEach((b: any) => { 
+                                                  if (!b.player && !b.batsman) return;
+                                                  const rawN = b.player || b.batsman?.name || "";
+                                                  if (!rawN || rawN === "BATTING") return;
+                                                  const key = findMappedKey(rawN, currentTeam);
+                                                  const dStr = (b.dismissal || b["dismissal-text"] || "").toLowerCase();
+
+                                                  if (!stats[key]) stats[key] = { n: key.split('_')[0], team: currentTeam, r:0, b:0, f:0, s:0, w:0, m:0, o:0, r_conc:0, c:0, st:0, dots:0, lbwB:0, ro:0, isDuck: false, role: 'Batter' }; 
+                                                  stats[key].r += Number(b.R || b.r) || 0; 
+                                                  stats[key].b += Number(b.B || b.b) || 0; 
+                                                  stats[key].f += Number(b['4s']) || 0; 
+                                                  stats[key].s += Number(b['6s']) || 0;
+                                                  if (rawN.includes('†')) stats[key].role = 'WK';
+                                                  else if (stats[key].role === 'Fielder') stats[key].role = 'Batter';
+
+                                                  if (stats[key].r === 0 && dStr !== "not out" && dStr !== "") stats[key].isDuck = true;
+                                               });
+
+                                               // Process Bowling
+                                               (inn.bowling || []).forEach((bw: any) => { 
+                                                  if (!bw.bowler) return;
+                                                  const rawN = typeof bw.bowler === 'string' ? bw.bowler : bw.bowler.name;
+                                                  if (!rawN || rawN === "BOWLING") return;
+                                                  const key = findMappedKey(rawN, currentTeam);
+
+                                                  if (!stats[key]) stats[key] = { n: key.split('_')[0], team: currentTeam, r:0, b:0, f:0, s:0, r_conc:0, w:0, m:0, o:0, c:0, st:0, dots:0, lbwB:0, ro:0, isDuck:false, role: 'Bowler' }; 
+                                                  stats[key].w += Number(bw.W || bw.w) || 0; 
+                                                  stats[key].m += Number(bw.M || bw.m) || 0; 
+                                                  stats[key].r_conc += Number(bw.R || bw.r) || 0;
+                                                  stats[key].o += Number(bw.O || bw.o) || 0;
+                                                  stats[key].dots += Number(bw['0s'] || 0);
+
+                                                  if (stats[key].role === 'Batter' || stats[key].role === 'WK') stats[key].role = stats[key].role === 'WK' ? 'WK/Bowler' : 'All-Rounder';
+                                                  else if (stats[key].role === 'Fielder') stats[key].role = 'Bowler';
+                                               });
+
+                                               // Process Fielding (Catches/Run-outs)
+                                               (inn.catching || []).forEach((c: any) => {
+                                                  const rawN = typeof c.catcher === 'string' ? c.catcher : c.catcher?.name;
+                                                  if (!rawN) return;
+                                                  const key = findMappedKey(rawN, opposingTeam);
+                                                  if (stats[key]) {
+                                                     stats[key].c += Number(c.catch || 0);
+                                                     stats[key].st += Number(c.stumped || 0);
+                                                  }
+                                               });
+
+                                               (inn.batting || []).forEach((b: any) => { 
+                                                  const d = (b.dismissal || b["dismissal-text"] || "").toLowerCase(); 
+                                                  if (d.startsWith("c ") || d.startsWith("st ")) {
+                                                     const parts = d.split(" b ");
+                                                     let nRaw = parts[0].replace(/^(?:c|st)\s+(?:†)?/, "").trim();
+                                                     if (nRaw && !["sub", "batting", "retired"].includes(nRaw)) {
+                                                        const key = findMappedKey(nRaw, opposingTeam);
+                                                        if (stats[key]) {
+                                                           if (d.startsWith("c ")) stats[key].c++;
+                                                           if (d.startsWith("st ")) stats[key].st++;
+                                                        }
+                                                     }
+                                                  }
+                                                  if (d.includes("run out")) {
+                                                     const roMatch = d.match(/\(([^)]+)\)/);
+                                                     if (roMatch?.[1]) {
+                                                        const n = roMatch[1].trim();
+                                                        const key = findMappedKey(n, opposingTeam);
+                                                        if (stats[key]) stats[key].ro++;
+                                                     }
+                                                  }
+                                               });
+                                            });
+
+                                            return Object.values(stats).sort((a: any, b: any) => (b.r + b.w*30) - (a.r + a.w*30)).map((p: any) => {
+                                               let base = 4; // Playing XI
+                                               
+                                               // Batting Logic (Official)
+                                               let b_pts = p.r + (p.f * 1) + (p.s * 2);
+                                               if (p.r >= 100) b_pts += 16; else if (p.r >= 75) b_pts += 12; else if (p.r >= 50) b_pts += 8; else if (p.r >= 25) b_pts += 4;
+                                               if (p.isDuck && p.role !== 'Bowler') b_pts -= 2;
+                                               // Strike Rate (Min 10 balls OR 20 runs)
+                                               let sr_pts = 0;
+                                               if (p.r >= 20 || p.b >= 10) {
+                                                  const sr = (p.r / p.b) * 100;
+                                                  if (sr >= 170) sr_pts = 6; else if (sr >= 150) sr_pts = 4; else if (sr >= 130) sr_pts = 2;
+                                                  else if (sr < 50) sr_pts = -6; else if (sr < 60) sr_pts = -4; else if (sr < 70) sr_pts = -2;
+                                               }
+                                               b_pts += sr_pts;
+                                               
+                                               // Bowling Logic (Official)
+                                               let bw_pts = (p.w * 30) + (p.lbwB * 8) + (p.m * 12) + (p.dots * 1);
+                                               if (p.w >= 5) bw_pts += 12; else if (p.w >= 4) bw_pts += 8; else if (p.w >= 3) bw_pts += 4;
+                                               // Economy Rate (Min 2 overs)
+                                               let eco_pts = 0;
+                                               if (p.o >= 2) {
+                                                  const eco = p.r_conc / p.o;
+                                                  if (eco < 5) eco_pts = 6; else if (eco < 6) eco_pts = 4; else if (eco < 7) eco_pts = 2;
+                                                  else if (eco >= 12) eco_pts = -6; else if (eco >= 11) eco_pts = -4; else if (eco >= 10) eco_pts = -2;
+                                               }
+                                               bw_pts += eco_pts;
+                                               
+                                               // Fielding Logic (Official)
+                                               let f_pts = (p.c * 8) + (p.st * 12) + (p.ro * 12);
+                                               if (p.c >= 3) f_pts += 4;
+                                               
+                                               const total = base + b_pts + bw_pts + f_pts;
+
+                                               return (
+                                                  <React.Fragment key={`${p.n}_${p.team}`}>
+                                                     <tr onClick={() => setShowBreakdownId(showBreakdownId === `${p.n}_${p.team}` ? null : `${p.n}_${p.team}`)} className={cn("hover:bg-slate-50 cursor-pointer transition-all", showBreakdownId === `${p.n}_${p.team}` ? "bg-slate-50" : "")}>
+                                                        <td className="px-4 py-4"><div className="flex items-center gap-1.5"><span className="text-xs font-black uppercase text-slate-800 leading-none">{p.n}</span><ChevronRight size={10} className={cn("text-indigo-500", showBreakdownId === `${p.n}_${p.team}` ? "rotate-90" : "")} /></div><p className="text-[7px] font-black uppercase text-slate-400 mt-1">{p.team} • {p.role}</p></td>
+                                                        <td className="px-3 py-4 text-center"><div className="text-[9px] font-black text-slate-900 leading-none">{p.r}R • {p.w}W • {p.c}C</div></td>
+                                                        <td className="px-4 py-4 text-right"><div className="text-sm font-black text-slate-900">{Math.round(total)}</div></td>
+                                                     </tr>
+                                                     {showBreakdownId === `${p.n}_${p.team}` && (
+                                                        <tr className="bg-slate-50/50 border-none"><td colSpan={3} className="px-4 pb-6 pt-2 border-none">
+                                                           <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-inner grid grid-cols-1 sm:grid-cols-2 gap-6 animate-in slide-in-from-top-2">
+                                                              <div className="space-y-2">
+                                                                 <h4 className="text-[8px] font-black uppercase text-indigo-600 tracking-widest border-b pb-1">Official Breakdown ({p.team})</h4>
+                                                                 <div className="space-y-2.5">
+                                                                    <div className="flex flex-col gap-0.5">
+                                                                       <div className="flex justify-between text-[10px]"><span className="text-slate-400 font-bold uppercase tracking-tight">Playing XI Base</span><span className="font-black text-slate-900">+4.0</span></div>
+                                                                       <p className="text-[7px] font-black text-slate-300 uppercase leading-none">Automatic Entry Bonus</p>
+                                                                    </div>
+                                                                    <div className="flex flex-col gap-0.5">
+                                                                       <div className="flex justify-between text-[10px]"><span className="text-slate-400 font-bold uppercase tracking-tight">Batting (Official)</span><span className="font-black text-slate-900">+{b_pts.toFixed(1)}</span></div>
+                                                                       <p className="text-[7px] font-black text-indigo-400 uppercase leading-none italic">{p.r}R + ({p.f}*1) + ({p.s}*2) + SR({sr_pts}) + MS</p>
+                                                                    </div>
+                                                                    <div className="flex flex-col gap-0.5">
+                                                                       <div className="flex justify-between text-[10px]"><span className="text-slate-400 font-bold uppercase tracking-tight">Bowling (Official)</span><span className="font-black text-slate-900">+{bw_pts.toFixed(1)}</span></div>
+                                                                       <p className="text-[7px] font-black text-indigo-400 uppercase leading-none italic">({p.w}*30) + ({p.lbwB}*8) + ({p.m}*12) + {p.dots}D + ECO({eco_pts}) + MS</p>
+                                                                    </div>
+                                                                    <div className="flex flex-col gap-0.5">
+                                                                       <div className="flex justify-between text-[10px]"><span className="text-slate-400 font-bold uppercase tracking-tight">Fielding (Official)</span><span className="font-black text-slate-900">+{f_pts.toFixed(1)}</span></div>
+                                                                       <p className="text-[7px] font-black text-indigo-400 uppercase leading-none italic">({p.c}*8) + ({p.st}*12) + ({p.ro}*12)</p>
+                                                                    </div>
+                                                                    <div className="border-t pt-1.5 flex justify-between text-[11px] font-black uppercase"><span className="text-slate-900">FINAL TOTAL</span><span className="text-slate-900">{total.toFixed(1)}</span></div>
+                                                                 </div>
+                                                              </div>
+                                                           </div>
+                                                        </td></tr>
+                                                     )}
+                                                  </React.Fragment>
+                                               );
+                                            });
+                                         })()}
                                      </tbody>
                                   </table>
                                </div>
@@ -432,9 +580,97 @@ export default function ScoreboardPage() {
 
         {/* ─── TAB: SCORE SHEETS ─── */}
         {activeTab === "sheets" && (
-           <div className="bg-white rounded-[2rem] border border-slate-200 overflow-hidden shadow-xl relative">
-              {subLoading && <div className="absolute inset-0 bg-white/60 backdrop-blur-md z-50 flex items-center justify-center"><Loader2 className="animate-spin text-slate-900" /></div>}
-              <div className="overflow-x-auto"><table className="w-full text-left min-w-[1200px]"><thead className="bg-slate-50"><tr><th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 sticky left-0 bg-slate-50 z-10">Squad Player</th>{[...Array(17)].map((_, i) => <th key={i} className="px-3 py-5 text-center text-[10px] font-black text-slate-400">G{i+1}</th>)}<th className="px-8 py-5 text-right text-[10px] font-black text-slate-900 sticky right-0 bg-slate-50 z-10">Total</th></tr></thead><tbody>{allPlayers.filter(p => p.player_name.toLowerCase().includes(searchQuery.toLowerCase())).map(p => (<tr key={p.id} className="border-b transition-colors"><td className="px-8 py-4 sticky left-0 bg-white z-10"><span className="font-bold text-slate-900 text-xs">{p.player_name}</span><div className="text-[8px] font-black text-slate-400 uppercase">{p.role}</div></td>{[...Array(17)].map((_, i) => <td key={i} className="px-3 py-4 text-center"><Input type="number" step="0.5" onChange={(e) => updateSeasonPoint(p.id, i+1, e.target.value)} className="h-8 w-14 mx-auto text-[10px] font-black text-center bg-slate-50 border-none rounded-lg" placeholder="0" /></td>)}<td className="px-8 py-4 text-right font-black italic bg-white sticky right-0 z-10">0</td></tr>))}</tbody></table></div>
+           <div className="space-y-6 animate-in fade-in duration-500">
+              {/* Search & Download Header */}
+              <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-center justify-between">
+                 <div className="relative w-full sm:w-80">
+                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={16} />
+                    <Input 
+                      placeholder="Find player..." 
+                      className="pl-11 h-11 bg-white border-slate-200 rounded-xl font-bold text-sm shadow-sm" 
+                      value={searchQuery} 
+                      onChange={(e) => setSearchQuery(e.target.value)} 
+                    />
+                 </div>
+                 <Button 
+                   variant="outline" 
+                   onClick={() => {
+                     const team = franchises.find(t => t.id === selectedTeamId);
+                     if (!team) return;
+                     const teamPlayers = allPlayers.filter(p => p.sold_to_id === team.id || p.sold_to === team.team_name);
+                     let csv = "Player,Team,Role,Price\n";
+                     teamPlayers.forEach(p => { csv += `"${p.player_name}","${p.team}","${p.role}","${p.sold_price || p.price}"\n`; });
+                     const link = document.createElement("a");
+                     link.setAttribute("href", encodeURI("data:text/csv;charset=utf-8," + csv));
+                     link.setAttribute("download", `${team.team_name}_Squad.csv`);
+                     link.click();
+                   }} 
+                   className="h-11 border-slate-200 rounded-xl font-black uppercase tracking-widest flex gap-2 text-slate-600 px-6 shadow-sm text-[10px]"
+                 >
+                    <Download size={16} /> Export CSV
+                 </Button>
+              </div>
+
+              <div className="bg-white rounded-[2rem] border border-slate-200 overflow-hidden shadow-xl relative">
+                {subLoading && <div className="absolute inset-0 bg-white/60 backdrop-blur-md z-50 flex items-center justify-center"><Loader2 className="animate-spin text-slate-900" /></div>}
+                <div className="overflow-x-auto">
+                   <table className="w-full text-left min-w-[1200px]">
+                      <thead className="bg-slate-50">
+                         <tr>
+                            <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 sticky left-0 bg-slate-50 z-10">Squad Player</th>
+                            {[...Array(17)].map((_, i) => <th key={i} className="px-3 py-5 text-center text-[10px] font-black text-slate-400">G{i+1}</th>)}
+                            <th className="px-8 py-5 text-right text-[10px] font-black text-slate-900 sticky right-0 bg-slate-50 z-10">Total</th>
+                         </tr>
+                      </thead>
+                      <tbody>
+                         {allPlayers.filter(p => p.player_name.toLowerCase().includes(searchQuery.toLowerCase())).map(p => {
+                            const pts = Array(17).fill(0);
+                            allMatchPoints.filter(pt => pt.player_id === p.id).forEach(pt => {
+                               const m = allMatches.find(match => match.id === pt.match_id);
+                               if (m?.match_no && m.match_no <= 17) pts[m.match_no-1] = pt.points;
+                            });
+                            const total = pts.reduce((a,b) => a+b, 0);
+
+                            return (
+                               <tr key={p.id} className="border-b transition-colors group hover:bg-slate-50">
+                                  <td className="px-8 py-4 sticky left-0 bg-white group-hover:bg-slate-50 z-10">
+                                     <div className="flex items-center gap-4">
+                                        <div className="h-9 w-9 rounded-xl bg-slate-100 overflow-hidden shrink-0 border border-slate-100 italic flex items-center justify-center">
+                                           {p.image_url ? (
+                                              <img src={getPlayerImage(p.image_url)!} className="w-full h-full object-cover object-top" />
+                                           ) : <User size={16} className="text-slate-200" />}
+                                        </div>
+                                        <div className="min-w-0">
+                                           <div className="font-bold text-slate-900 text-xs">{p.player_name}</div>
+                                           <div className="text-[8px] font-black text-slate-400 uppercase mt-0.5">{p.role}</div>
+                                        </div>
+                                     </div>
+                                  </td>
+                                  {pts.map((score, i) => {
+                                     const mObj = allMatches.find(m => m.match_no === i+1);
+                                     const isDirty = mObj && pendingEdits[`${p.id}_${mObj.id}`] !== undefined;
+                                     return (
+                                        <td key={i} className="px-3 py-4 text-center">
+                                           <Input 
+                                             type="number" step="0.5" 
+                                             defaultValue={score || ""}
+                                             onChange={(e) => updateSeasonPoint(p.id, i+1, e.target.value)} 
+                                             className={cn("h-8 w-14 mx-auto text-[10px] font-black text-center border-none rounded-lg", isDirty ? "bg-amber-100 text-amber-900 ring-1 ring-amber-300" : "bg-slate-50")} 
+                                             placeholder="0" 
+                                           />
+                                        </td>
+                                     );
+                                  })}
+                                  <td className="px-8 py-4 text-right font-black italic bg-white group-hover:bg-slate-50 sticky right-0 z-10 text-sm">
+                                     {String(total % 1 === 0 ? total : total.toFixed(1))}
+                                  </td>
+                                </tr>
+                            );
+                         })}
+                      </tbody>
+                   </table>
+                </div>
+              </div>
            </div>
         )}
 
