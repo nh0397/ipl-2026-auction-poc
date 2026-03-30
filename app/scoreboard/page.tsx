@@ -76,10 +76,19 @@ const TEAM_COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899", "#ef
 
 // ─── Main page ──────────────────────────────────────────────────────
 export default function ScoreboardPage() {
-  const { user, profile: authProfile } = useAuth();
+  const { user, profile: authProfile, isLoading: authLoading } = useAuth();
+  const router = useRouter();
   const [profile, setProfile] = useState<any>(null);
   const [allPlayers, setAllPlayers] = useState<any[]>([]);
   const [franchises, setFranchises] = useState<any[]>([]);
+
+  // Auth Guard
+  useEffect(() => {
+    if (!authLoading && !user) {
+      router.push("/login");
+    }
+  }, [user, authLoading, router]);
+
   const [allMatches, setAllMatches] = useState<any[]>([]);
   const [selectedMatchId, setSelectedMatchId] = useState<string>("");
   const [allNominations, setAllNominations] = useState<any[]>([]);
