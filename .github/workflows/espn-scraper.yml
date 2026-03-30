@@ -21,7 +21,7 @@ jobs:
     - name: Install Dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install playwright playwright-stealth requests
+        pip install playwright playwright-stealth requests python-dotenv
         playwright install-deps firefox
         playwright install firefox
 
