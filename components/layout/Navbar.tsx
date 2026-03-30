@@ -35,8 +35,23 @@ export function Navbar() {
   }, [pathname]);
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
-    window.location.href = "/";
+    try {
+      // 1. Explicitly clear Supabase items from localStorage to prevent stale state
+      if (typeof window !== 'undefined') {
+        Object.keys(localStorage).forEach(key => {
+          if (key.startsWith('sb-')) localStorage.removeItem(key);
+        });
+      }
+
+      // 2. Perform the global sign out
+      await supabase.auth.signOut({ scope: 'global' });
+      
+      // 3. Hard redirect and reload to clear all server/client state
+      window.location.replace("/");
+    } catch (error) {
+       console.error("Logout error:", error);
+       window.location.href = "/";
+    }
   };
 
   if (isLoading) {
