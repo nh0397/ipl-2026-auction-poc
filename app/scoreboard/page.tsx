@@ -25,6 +25,7 @@ import { calculateDream11Points, MatchStats } from "@/lib/scoring";
 import { useAuth } from "@/components/auth/AuthProvider";
 import React from "react";
 import ScorecardViewer from "@/components/scoreboard/ScorecardViewer";
+import { ScoringRulesLegend } from "@/components/rules/ScoringRulesLegend";
 
 // ─── Fixture helpers ────────────────────────────────────────────────
 interface Fixture {
@@ -97,6 +98,7 @@ export default function ScoreboardPage() {
   const [subLoading, setSubLoading] = useState(false);
   const [tabLoading, setTabLoading] = useState(false);
 
+  const [showRules, setShowRules] = useState(false);
   const [fixtures, setFixtures] = useState<Fixture[]>([]);
   const [fixtureFilter, setFixtureFilter] = useState<"all" | "upcoming" | "completed">("all");
   const today = useMemo(() => getTodayIST(), []);
@@ -226,7 +228,29 @@ export default function ScoreboardPage() {
         {/* Header */}
         <div className="flex items-center gap-4 bg-white p-6 rounded-[2rem] border border-slate-200 shadow-xl">
            <div className="h-12 w-12 bg-slate-900 rounded-2xl flex items-center justify-center text-white shadow-lg shrink-0"><Trophy size={20} /></div>
-           <div><h1 className="text-2xl font-black italic uppercase tracking-tighter leading-none">Scoreboard</h1><p className="text-slate-400 font-bold uppercase text-[9px] tracking-widest mt-1">Analytics Intelligence</p></div>
+           <div>
+              <h1 className="text-2xl font-black italic uppercase tracking-tighter leading-none">Scoreboard</h1>
+              <p className="text-slate-400 font-bold uppercase text-[9px] tracking-widest mt-1">Analytics Intelligence</p>
+           </div>
+        </div>
+
+        {/* Rules Accordion */}
+        <div className="space-y-4">
+          <button 
+            onClick={() => setShowRules(!showRules)} 
+            className="w-full flex items-center justify-between bg-white/40 hover:bg-white/60 p-5 rounded-[1.5rem] border border-slate-200/50 backdrop-blur-md transition-all group"
+          >
+            <div className="flex items-center gap-4">
+               <div className="h-8 w-8 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-indigo-100"><Calculator size={14} /></div>
+               <div>
+                  <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-900 text-left leading-none">Scoring Rules & Points Guide</h3>
+                  <p className="text-[8px] font-black uppercase text-slate-400 mt-1 leading-none">Standard Dream11 • IPL 2025 Protocol</p>
+               </div>
+            </div>
+            <ChevronRight size={16} className={cn("text-slate-400 transition-transform duration-300", showRules ? "rotate-90" : "rotate-0")} />
+          </button>
+
+          {showRules && <ScoringRulesLegend />}
         </div>
 
         {/* Tabs */}
@@ -340,8 +364,10 @@ export default function ScoreboardPage() {
              {groupedFixtures.map(([date, matches]) => (
                 <div key={date} className="space-y-3">
                    <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-2">{formatDate(date)}</div>
-                   {matches.map(match => (
-                      <div key={match.id} className="bg-white rounded-[2rem] border border-slate-100 p-6 shadow-sm">
+                   {matches.map(match => {
+                      const isToday = match.match_date === today;
+                      return (
+                      <div key={match.id} className={cn("bg-white rounded-[2rem] border p-6 shadow-sm transition-all", isToday ? "border-indigo-500 ring-2 ring-indigo-50/50" : "border-slate-100")}>
                          <div className="flex items-center justify-between gap-6">
                             <div className="flex items-center gap-4 flex-1">
                                <img src={getPlayerImage(match.team1_img) || ""} className="h-10 w-10 object-contain rounded-xl bg-slate-50 border p-1" />
@@ -572,7 +598,7 @@ export default function ScoreboardPage() {
                             </DialogContent>
                          </Dialog>
                       </div>
-                   ))}
+                   )})}
                 </div>
              ))}
           </div>
