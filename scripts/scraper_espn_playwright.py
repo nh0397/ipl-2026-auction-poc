@@ -946,10 +946,13 @@ async def main():
             
             # Populate Points
             calculate_match_points(data, f['id'], f['api_match_id'])
-
 if __name__ == "__main__":
     try:
         asyncio.run(main())
+        with open("summary.txt", "w") as f:
+            f.write("Success: Match points and scorecards updated successfully.")
     except Exception as exc:
         log(f"Script failed: {exc}")
+        with open("summary.txt", "w") as f:
+            f.write(f"Failure: {str(exc)}")
         sys.exit(1)

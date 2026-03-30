@@ -2,7 +2,9 @@ name: ESPNcricinfo Scraper
 
 on:
   schedule:
-    - cron: '0 0 * * *' # Runs daily at midnight UTC
+    - cron: '30 18 * * *'    # 12 AM IST (18:30 UTC) - Run daily
+    - cron: '0 14 * * 6,0'   # 7.30 PM IST (14:00 UTC) - Sat & Sun Weekend early match
+    - cron: '30 18 * * 6,0'  # 12 AM IST (18:30 UTC) - Sat & Sun Weekend late match
   workflow_dispatch:      # Allows manual trigger from the Actions tab
 
 jobs:
@@ -26,7 +28,57 @@ jobs:
         playwright install firefox
 
     - name: Run Scraper
+      id: scraper
       env:
         NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
         NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+        SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       run: python scripts/scraper_espn_playwright.py
+
+    - name: Read Summary
+      id: summary
+      if: always()
+      run: |
+        if [ -f summary.txt ]; then
+          echo "SUMMARY=$(cat summary.txt)" >> $GITHUB_ENV
+        fi
+
+    - name: Notify Success
+      if: success()
+      uses: dawidd6/action-send-mail@v4
+      with:
+        server_address: smtp.gmail.com
+        server_port: 587
+        username: ${{ secrets.MAIL_USERNAME || secrets.SMTP_USER }}
+        password: ${{ secrets.MAIL_PASSWORD || secrets.SMTP_PASS }}
+        subject: '✅ IPL Sync Success - ${{ env.SUMMARY }}'
+        to: harshshah661992@gmail.com, tradingwithparthshah@gmail.com, jalan.me4u@gmail.com, naisicric97@gmail.com
+        from: "IPL Auction System"
+        body: |
+          Hello Admins,
+          
+          The ESPN Scraper has successfully updated the match scores.
+          
+          Details: ${{ env.SUMMARY }}
+          
+          View Live Scoreboard: http://localhost:3000/scoreboard
+
+    - name: Notify Failure
+      if: failure()
+      uses: dawidd6/action-send-mail@v4
+      with:
+        server_address: smtp.gmail.com
+        server_port: 587
+        username: ${{ secrets.MAIL_USERNAME || secrets.SMTP_USER }}
+        password: ${{ secrets.MAIL_PASSWORD || secrets.SMTP_PASS }}
+        subject: '❌ IPL Sync FAILED'
+        to: naisicric97@gmail.com
+        from: "IPL Auction System"
+        body: |
+          Hello Naisarg,
+          
+          The automated ESPN Scraper failed to complete its latest run.
+          
+          Error: ${{ env.SUMMARY || 'Unknown failure' }}
+          
+          Please check the GitHub Actions logs.
