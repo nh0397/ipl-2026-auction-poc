@@ -85,7 +85,7 @@ export default function ScoreboardPage() {
   // Auth Guard
   useEffect(() => {
     if (!authLoading && !user) {
-      router.push("/login");
+      router.push("/");
     }
   }, [user, authLoading, router]);
 
