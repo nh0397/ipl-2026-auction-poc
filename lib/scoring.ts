@@ -1,102 +1,199 @@
-/**
- * Dream11 T20 Scoring Rules (2024-2025 Standard)
- */
-
 export interface MatchStats {
   runs: number;
   balls: number;
   fours: number;
   sixes: number;
   wickets: number;
-  lbwBowled: number;
   maidens: number;
+  dotBalls: number;
+  economyRate?: number;
+  lbwBowled: number;
   catches: number;
   stumpings: number;
   runOutDirect: number;
   runOutIndirect: number;
-  dotBalls: number;
-  economyRate?: number;
+  oversMoved: number;
+  isAnnounced: boolean;
   strikeRate?: number;
-  oversMoved?: number; // Needed for economy rate check (min 2 overs)
   isDuck: boolean;
-  isAnnounced?: boolean; // NEW: +4 pts for being in the playing 11
-  role: 'Batter' | 'Bowler' | 'All-Rounder' | 'WK';
+  role: string;
 }
 
-export function calculateDream11Points(stats: MatchStats): number {
-  let points = 0;
+export interface ScoringBreakdown {
+  total: number;
+  multiplier: number;
+  categories: {
+    batting: { total: number; details: string[] };
+    bowling: { total: number; details: string[] };
+    fielding: { total: number; details: string[] };
+    others: { total: number; details: string[] };
+  };
+}
 
-  // 1. Batting Points
-  points += stats.runs; // 1 pt per run
-  points += stats.fours * 4; // UPDATED: +4 per four
-  points += stats.sixes * 6; // UPDATED: +6 per six
+export const calculateDetailedPoints = (
+  stats: MatchStats,
+  multiplier: number = 1.0
+): ScoringBreakdown => {
+  let battingTotal = 0;
+  const battingDetails: string[] = [];
 
-  // Batting Milestone Bonuses (Highest achieved only)
-  if (stats.runs >= 100) points += 16;
-  else if (stats.runs >= 75) points += 12;
-  else if (stats.runs >= 50) points += 8;
-  else if (stats.runs >= 25) points += 4;
+  let bowlingTotal = 0;
+  const bowlingDetails: string[] = [];
 
-  // Duck Penalty
+  let fieldingTotal = 0;
+  const fieldingDetails: string[] = [];
+
+  let othersTotal = 0;
+  const othersDetails: string[] = [];
+
+  // 1. OTHERS (Announced Logic)
+  if (stats.isAnnounced) {
+    othersTotal += 4;
+    othersDetails.push("Playing XI (+4.0)");
+  }
+
+  // 2. BATTING (IPL Fantasy Rules)
+  if (stats.runs > 0) {
+    battingTotal += stats.runs;
+    battingDetails.push(`${stats.runs} Runs (+${stats.runs.toFixed(1)})`);
+  }
+
+  if (stats.fours > 0) {
+    battingTotal += stats.fours * 1;
+    battingDetails.push(`${stats.fours} Fours (+${(stats.fours * 1).toFixed(1)})`);
+  }
+  if (stats.sixes > 0) {
+    battingTotal += stats.sixes * 2;
+    battingDetails.push(`${stats.sixes} Sixes (+${(stats.sixes * 2).toFixed(1)})`);
+  }
+
+  if (stats.runs >= 100) {
+    battingTotal += 16;
+    battingDetails.push("Century Bonus (+16.0)");
+  } else if (stats.runs >= 50) {
+    battingTotal += 8;
+    battingDetails.push("Half-Century Bonus (+8.0)");
+  }
+  
+  if (stats.runs >= 30) {
+    battingTotal += 4;
+    battingDetails.push("30-Runs Bonus (+4.0)");
+  }
+
   if (stats.isDuck && stats.role !== 'Bowler') {
-    points -= 2;
+    battingTotal -= 2;
+    battingDetails.push("Duck Penalty (-2.0)");
   }
 
-  // 2. Bowling Points
-  points += stats.wickets * 30; // UPDATED: 30 pts per wicket
-  points += stats.lbwBowled * 8; // +8 per LBW or Bowled
-  points += stats.maidens * 12; // +12 per maiden
-  points += stats.dotBalls * 1; // NEW: +1 per dot ball
+  // Strike Rate (Excluding Bowlers) - Min 10 balls or 20 runs
+  if (stats.role !== 'Bowler' && (stats.balls >= 10 || stats.runs >= 20)) {
+    const sr = (stats.runs / (stats.balls || 1)) * 100;
+    let srPoints = 0;
+    if (sr >= 170) srPoints = 6;
+    else if (sr >= 150) srPoints = 4;
+    else if (sr >= 130) srPoints = 2;
+    else if (sr < 50) srPoints = -6;
+    else if (sr < 60) srPoints = -4;
+    else if (sr < 70) srPoints = -2;
 
-  // Bowling Milestone Bonuses
-  if (stats.wickets >= 5) points += 12; // UPDATED: +12 for 5W
-  else if (stats.wickets >= 4) points += 8;
-  else if (stats.wickets >= 3) points += 4;
-
-  // 3. Fielding Points
-  points += stats.catches * 8;
-  if (stats.catches >= 3) points += 4; // 3 catch bonus
-  points += stats.stumpings * 12;
-  points += stats.runOutDirect * 12;
-  points += stats.runOutIndirect * 6;
-
-  // 4. Efficiency Points (Economy Rate - Min 2 Overs)
-  if (stats.oversMoved && stats.oversMoved >= 2 && stats.economyRate !== undefined) {
-    if (stats.economyRate < 5) points += 6;
-    else if (stats.economyRate < 6) points += 4;
-    else if (stats.economyRate < 7) points += 2;
-    else if (stats.economyRate >= 12) points -= 6;
-    else if (stats.economyRate >= 11) points -= 4;
-    else if (stats.economyRate >= 10) points -= 2;
+    if (srPoints !== 0) {
+      battingTotal += srPoints;
+      battingDetails.push(`SR ${srPoints > 0 ? 'Bonus' : 'Penalty'} (${sr.toFixed(1)}) (${srPoints > 0 ? '+' : ''}${srPoints.toFixed(1)})`);
+    }
   }
 
-  // 5. Strike Rate Points (Except Bowler - Min 10 Balls faced OR 20 runs scored)
-  if ((stats.balls >= 10 || stats.runs >= 20) && stats.strikeRate !== undefined && stats.role !== 'Bowler') {
-    if (stats.strikeRate >= 170) points += 6;
-    else if (stats.strikeRate >= 150) points += 4;
-    else if (stats.strikeRate >= 130) points += 2;
-    else if (stats.strikeRate < 50) points -= 6;
-    else if (stats.strikeRate < 60) points -= 4;
-    else if (stats.strikeRate < 70) points -= 2;
+  // 3. BOWLING (IPL Fantasy Rules)
+  if (stats.wickets > 0) {
+    const wPoints = stats.wickets * 25;
+    bowlingTotal += wPoints;
+    bowlingDetails.push(`${stats.wickets} Wicket(s) (+${wPoints.toFixed(1)})`);
+    
+    // Hauls
+    if (stats.wickets >= 5) {
+      bowlingTotal += 16;
+      bowlingDetails.push("5-Wicket Haul (+16.0)");
+    } else if (stats.wickets >= 4) {
+      bowlingTotal += 8;
+      bowlingDetails.push("4-Wicket Haul (+8.0)");
+    } else if (stats.wickets >= 3) {
+      bowlingTotal += 4;
+      bowlingDetails.push("3-Wicket Haul (+4.0)");
+    }
   }
-  
-  // 6. Others
-  if (stats.isAnnounced) points += 4; // +4 for playing 11
-  
-  // 7. Multipliers (Custom Rules)
-  let multiplier = 1.0;
-  
-  // Batting Multiplier
-  if (stats.runs >= 150) multiplier = Math.max(multiplier, 4.0);
-  else if (stats.runs >= 100) multiplier = Math.max(multiplier, 3.0);
-  else if (stats.runs >= 75) multiplier = Math.max(multiplier, 1.75);
-  else if (stats.runs >= 45) multiplier = Math.max(multiplier, 1.5);
-  else if (stats.runs >= 25) multiplier = Math.max(multiplier, 1.25);
-  
-  // Bowling Multiplier
-  if (stats.wickets >= 5) multiplier = Math.max(multiplier, 4.0);
-  else if (stats.wickets >= 3) multiplier = Math.max(multiplier, 2.0);
-  else if (stats.wickets === 2) multiplier = Math.max(multiplier, 1.5);
-  
-  return points * multiplier;
-}
+
+  if (stats.lbwBowled > 0) {
+    const bonus = stats.lbwBowled * 8;
+    bowlingTotal += bonus;
+    bowlingDetails.push(`LBW/Bowled Bonus (+${bonus.toFixed(1)})`);
+  }
+
+  if (stats.maidens > 0) {
+    const mPoints = stats.maidens * 12;
+    bowlingTotal += mPoints;
+    bowlingDetails.push(`${stats.maidens} Maiden(s) (+${mPoints.toFixed(1)})`);
+  }
+
+  // Economy Rate - Min 2 overs
+  if (stats.oversMoved >= 2) {
+    const eco = stats.economyRate !== undefined ? stats.economyRate : 0;
+    let ecoPoints = 0;
+    if (eco < 5) ecoPoints = 6;
+    else if (eco < 6) ecoPoints = 4;
+    else if (eco < 7) ecoPoints = 2;
+    else if (eco >= 12) ecoPoints = -6;
+    else if (eco >= 11) ecoPoints = -4;
+    else if (eco >= 10) ecoPoints = -2;
+
+    if (ecoPoints !== 0) {
+      bowlingTotal += ecoPoints;
+      bowlingDetails.push(`Eco ${ecoPoints > 0 ? 'Bonus' : 'Penalty'} (${eco.toFixed(1)}) (${ecoPoints > 0 ? '+' : ''}${ecoPoints.toFixed(1)})`);
+    }
+  }
+
+  // 4. FIELDING (IPL Fantasy Rules)
+  if (stats.catches > 0) {
+    const cPoints = stats.catches * 8;
+    fieldingTotal += cPoints;
+    fieldingDetails.push(`${stats.catches} Catch(es) (+${cPoints.toFixed(1)})`);
+    
+    if (stats.catches >= 3) {
+      fieldingTotal += 4;
+      fieldingDetails.push("3-Catch Bonus (+4.0)");
+    }
+  }
+
+  if (stats.stumpings > 0) {
+    const sPoints = stats.stumpings * 12;
+    fieldingTotal += sPoints;
+    fieldingDetails.push(`${stats.stumpings} Stumping(s) (+${sPoints.toFixed(1)})`);
+  }
+
+  if (stats.runOutDirect > 0) {
+    const roPoints = stats.runOutDirect * 12;
+    fieldingTotal += roPoints;
+    fieldingDetails.push(`${stats.runOutDirect} Direct Run-out (+${roPoints.toFixed(1)})`);
+  }
+
+  if (stats.runOutIndirect > 0) {
+    const roiPoints = stats.runOutIndirect * 6;
+    fieldingTotal += roiPoints;
+    fieldingDetails.push(`${stats.runOutIndirect} Indirect Run-out (+${roiPoints.toFixed(1)})`);
+  }
+
+  const finalScore = (othersTotal + battingTotal + bowlingTotal + fieldingTotal) * multiplier;
+
+  return {
+    total: finalScore,
+    multiplier,
+    categories: {
+      batting: { total: battingTotal, details: battingDetails },
+      bowling: { total: bowlingTotal, details: bowlingDetails },
+      fielding: { total: fieldingTotal, details: fieldingDetails },
+      others: { total: othersTotal, details: othersDetails }
+    }
+  };
+};
+
+export const calculateDream11Points = (stats: MatchStats): number => {
+  return calculateDetailedPoints(stats).total;
+};
