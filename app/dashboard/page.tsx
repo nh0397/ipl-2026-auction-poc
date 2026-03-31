@@ -84,10 +84,67 @@ export default function Dashboard() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
-           <div className="h-10 w-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
-           <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Synchronizing Portfolio...</p>
+      <div className="min-h-screen bg-slate-50 font-sans text-slate-900 leading-normal pt-8 min-h-[calc(100vh-64px)] pb-12">
+        <div className="w-full border-b border-slate-100 bg-white/50 px-6 md:px-12 py-4 flex flex-col md:flex-row justify-between items-center gap-4">
+          <div className="flex items-center gap-4 w-full md:w-auto">
+            <div className="h-2 w-2 bg-slate-200 rounded-full animate-pulse" />
+            <div className="h-4 w-64 bg-slate-200 rounded-lg animate-pulse" />
+          </div>
+          <div className="h-6 w-40 bg-slate-200 rounded-xl animate-pulse" />
+        </div>
+
+        <div className="w-full px-6 md:px-12 py-8 space-y-8">
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-8 items-stretch">
+            <div className="md:col-span-12 lg:col-span-4 space-y-8">
+              <div className="bg-white rounded-[2.5rem] border border-slate-100 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.03)] p-10 space-y-6">
+                <div className="h-5 w-40 bg-slate-200 rounded-lg animate-pulse" />
+                <div className="h-14 w-56 bg-slate-200 rounded-2xl animate-pulse" />
+                <div className="h-3 w-3/4 bg-slate-200 rounded-md animate-pulse" />
+                <div className="h-3 w-2/3 bg-slate-200 rounded-md animate-pulse" />
+              </div>
+            </div>
+
+            <div className="md:col-span-12 lg:col-span-8 space-y-8">
+              <div className="bg-white rounded-[2.5rem] border border-slate-100 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.03)] p-10 space-y-6">
+                <div className="h-5 w-56 bg-slate-200 rounded-lg animate-pulse" />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="h-24 bg-slate-200 rounded-2xl animate-pulse" />
+                  <div className="h-24 bg-slate-200 rounded-2xl animate-pulse" />
+                </div>
+                <div className="h-64 bg-slate-200 rounded-3xl animate-pulse" />
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <div className="bg-white rounded-[2.5rem] border border-slate-100 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.03)] p-10 space-y-5">
+              <div className="h-5 w-44 bg-slate-200 rounded-lg animate-pulse" />
+              {[1, 2, 3, 4].map((i) => (
+                <div key={i} className="flex items-center gap-4">
+                  <div className="h-10 w-10 bg-slate-200 rounded-2xl animate-pulse" />
+                  <div className="flex-1 space-y-2">
+                    <div className="h-3 w-2/3 bg-slate-200 rounded-md animate-pulse" />
+                    <div className="h-3 w-1/3 bg-slate-200 rounded-md animate-pulse" />
+                  </div>
+                  <div className="h-6 w-16 bg-slate-200 rounded-xl animate-pulse" />
+                </div>
+              ))}
+            </div>
+
+            <div className="bg-white rounded-[2.5rem] border border-slate-100 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.03)] p-10 space-y-5">
+              <div className="h-5 w-44 bg-slate-200 rounded-lg animate-pulse" />
+              {[1, 2, 3, 4].map((i) => (
+                <div key={i} className="flex items-center gap-4">
+                  <div className="h-10 w-10 bg-slate-200 rounded-2xl animate-pulse" />
+                  <div className="flex-1 space-y-2">
+                    <div className="h-3 w-2/3 bg-slate-200 rounded-md animate-pulse" />
+                    <div className="h-3 w-1/3 bg-slate-200 rounded-md animate-pulse" />
+                  </div>
+                  <div className="h-6 w-16 bg-slate-200 rounded-xl animate-pulse" />
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
     );

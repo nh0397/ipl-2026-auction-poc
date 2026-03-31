@@ -42,12 +42,14 @@ jobs:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
+          # Always run headless in CI for stability
+          export ESPN_HEADLESS=1
           python scripts/sync_scorecards_espn.py \
             ${{ github.event.inputs.date_ist != '' && format('--date {0}', github.event.inputs.date_ist) || '' }}
 
           echo "SUMMARY=ESPN scorecard sync completed." >> $GITHUB_OUTPUT
 
-      - name: Send Success Email (All Admins)
+      - name: Send Success Email (All Participants)
         if: success()
         uses: dawidd6/action-send-mail@v4
         with:
@@ -56,7 +58,7 @@ jobs:
           username: ${{ secrets.SMTP_USER }}
           password: ${{ secrets.SMTP_PASS }}
           subject: "IPL 2026: Match Sync Success"
-          to: "naisicric97@gmail.com,admin2@example.com,admin3@example.com,admin4@example.com"
+          to: "harshshah661992@gmail.com,tradingwithparthshah@gmail.com,jalan.me4u@gmail.com,naisicric97@gmail.com"
           from: "Scraper Intelligence <${{ secrets.SMTP_USER }}>"
           body: |
             Match synchronization was successful!

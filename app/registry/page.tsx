@@ -364,9 +364,21 @@ export default function RegistryPage() {
         <div className="bg-white rounded-[3rem] border border-slate-100 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.03)] overflow-hidden min-h-[400px]">
            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-px bg-slate-50">
               {loading ? (
-                 <div className="col-span-full py-40 text-center flex flex-col items-center justify-center">
-                    <Loader2 className="animate-spin text-blue-600" />
-                    <p className="mt-4 text-[10px] font-black text-slate-300 uppercase tracking-widest">Accessing Council Database...</p>
+                 <div className="col-span-full p-6">
+                   <div className="h-4 w-56 bg-slate-200 rounded-lg animate-pulse mb-6" />
+                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                     {[1, 2, 3, 4, 5, 6].map((i) => (
+                       <div key={i} className="bg-white rounded-2xl border border-slate-100 p-6 h-32 flex items-start gap-5">
+                         <div className="h-5 w-5 bg-slate-200 rounded-md animate-pulse mt-1" />
+                         <div className="h-16 w-16 bg-slate-200 rounded-2xl animate-pulse shrink-0" />
+                         <div className="flex-1 space-y-3">
+                           <div className="h-3 w-20 bg-slate-200 rounded-md animate-pulse" />
+                           <div className="h-4 w-3/4 bg-slate-200 rounded-lg animate-pulse" />
+                           <div className="h-3 w-1/2 bg-slate-200 rounded-md animate-pulse" />
+                         </div>
+                       </div>
+                     ))}
+                   </div>
                  </div>
               ) : filteredRegistry.length > 0 ? (
                  filteredRegistry.map((player, index) => {

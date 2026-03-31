@@ -161,6 +161,286 @@ export default function ScoreboardPage() {
   const [espnScorecardByMatchNo, setEspnScorecardByMatchNo] = useState<Record<number, any | null>>({});
   const [espnScorecardLoadingByMatchNo, setEspnScorecardLoadingByMatchNo] = useState<Record<number, boolean>>({});
 
+  const [fixtures, setFixtures] = useState<Fixture[]>([]);
+  const [fixtureFilter, setFixtureFilter] = useState<"all" | "upcoming" | "completed">("all");
+
+  type BreakdownRow = {
+    n: string;
+    team: string;
+    role: string;
+    r: number;
+    b: number;
+    f: number;
+    s: number;
+    w: number;
+    m: number;
+    o: number;
+    r_conc: number;
+    c: number;
+    st: number;
+    dots: number;
+    lbwB: number;
+    ro: number;
+    dismissal?: string;
+    base: number;
+    b_pts: number;
+    bw_pts: number;
+    f_pts: number;
+    sr_pts: number | null;
+    eco_pts: number | null;
+    total: number;
+    breakdownHint?: string;
+    _variant: "pjRules" | "my11circle" | "iplFantasy";
+  };
+
+  const [breakdownCache, setBreakdownCache] = useState<Record<string, BreakdownRow[]>>({});
+  const [breakdownLoadingKey, setBreakdownLoadingKey] = useState<string | null>(null);
+
+  const computeBreakdownRows = useCallback(
+    (sc: any, match: any, variant: "pjRules" | "my11circle" | "iplFantasy"): BreakdownRow[] => {
+      if (!sc?.innings) return [];
+
+      const stats: Record<string, any> = {};
+
+      const normalizePlayerName = (raw: string) =>
+        String(raw || "")
+          .replace(/†/g, "")
+          .replace(/\(c\)/gi, "")
+          .replace(/\s+/g, " ")
+          .trim();
+
+      // Initialize registry from batting/bowling names
+      sc.innings.forEach((inn: any) => {
+        const battingTeam = inn.team;
+        const bowlingTeam = sc.innings.find((i: any) => i.team !== battingTeam)?.team || "Opponent";
+        (inn.batting || []).forEach((b: any) => {
+          const raw = b.player || "";
+          if (!raw || raw === "BATTING") return;
+          const n = normalizePlayerName(raw);
+          const key = `${n}_${battingTeam}`;
+          if (!stats[key])
+            stats[key] = { n, team: battingTeam, r: 0, b: 0, f: 0, s: 0, w: 0, m: 0, o: 0, r_conc: 0, c: 0, st: 0, dots: 0, lbwB: 0, ro: 0, isDuck: false, role: "Batter" };
+        });
+        (inn.bowling || []).forEach((bw: any) => {
+          const raw = bw.bowler || "";
+          if (!raw || raw === "BOWLING") return;
+          const n = normalizePlayerName(raw);
+          // bowling is done by opposition
+          const key = `${n}_${bowlingTeam}`;
+          if (!stats[key])
+            stats[key] = { n, team: bowlingTeam, r: 0, b: 0, f: 0, s: 0, w: 0, m: 0, o: 0, r_conc: 0, c: 0, st: 0, dots: 0, lbwB: 0, ro: 0, isDuck: false, role: "Bowler" };
+        });
+      });
+
+      const findMappedKey = (name: string, team: string) => {
+        const n = normalizePlayerName(name);
+        const exact = `${n}_${team}`;
+        if (stats[exact]) return exact;
+        const matchedKey = Object.keys(stats).find((k) => k.endsWith(`_${team}`) && k.split("_")[0].includes(n));
+        if (matchedKey) return matchedKey;
+        const wholeMatchKey = Object.keys(stats).find((k) => k.split("_")[0].includes(n));
+        return wholeMatchKey || exact;
+      };
+
+      // Accumulate
+      sc.innings.forEach((inn: any) => {
+        const currentTeam = inn.team;
+        const opposingTeam = sc.innings.find((i: any) => i.team !== currentTeam)?.team || "Opponent";
+
+        (inn.batting || []).forEach((b: any) => {
+          const rawN = b.player || "";
+          if (!rawN || rawN === "BATTING") return;
+          const key = findMappedKey(rawN, currentTeam);
+          const dStr = (b.dismissal || b["dismissal-text"] || "").toLowerCase();
+
+          if (!stats[key]) stats[key] = { n: key.split("_")[0], team: currentTeam, r: 0, b: 0, f: 0, s: 0, w: 0, m: 0, o: 0, r_conc: 0, c: 0, st: 0, dots: 0, lbwB: 0, ro: 0, isDuck: false, role: "Batter", dismissal: "" };
+          stats[key].r += Number(b.R || b.r) || 0;
+          stats[key].b += Number(b.B || b.b) || 0;
+          stats[key].f += Number(b["4s"]) || 0;
+          stats[key].s += Number(b["6s"]) || 0;
+          if (dStr) stats[key].dismissal = dStr;
+          if (rawN.includes("†")) stats[key].role = "WK";
+          else if (stats[key].role === "Fielder") stats[key].role = "Batter";
+
+          if (stats[key].r === 0 && dStr !== "not out" && dStr !== "") stats[key].isDuck = true;
+          if (dStr.includes("lbw") || dStr.includes("bowled")) stats[key].lbwB += 1;
+        });
+
+        (inn.bowling || []).forEach((bw: any) => {
+          const rawN = bw.bowler;
+          if (!rawN || rawN === "BOWLING") return;
+          const key = findMappedKey(rawN, opposingTeam);
+
+          if (!stats[key]) stats[key] = { n: key.split("_")[0], team: opposingTeam, r: 0, b: 0, f: 0, s: 0, r_conc: 0, w: 0, m: 0, o: 0, c: 0, st: 0, dots: 0, lbwB: 0, ro: 0, isDuck: false, role: "Bowler" };
+          stats[key].w += Number(bw.W || bw.w) || 0;
+          stats[key].m += Number(bw.M || bw.m) || 0;
+          stats[key].r_conc += Number(bw.R || bw.r) || 0;
+          stats[key].o += Number(bw.O || bw.o) || 0;
+          stats[key].dots += Number(bw["0s"] || 0);
+
+          if (stats[key].role === "Batter" || stats[key].role === "WK") stats[key].role = stats[key].role === "WK" ? "WK/Bowler" : "All-Rounder";
+          else if (stats[key].role === "Fielder") stats[key].role = "Bowler";
+        });
+
+        (inn.catching || []).forEach((c: any) => {
+          const rawN = typeof c.catcher === "string" ? c.catcher : c.catcher?.name;
+          if (!rawN) return;
+          const key = findMappedKey(rawN, opposingTeam);
+          if (stats[key]) {
+            stats[key].c += Number(c.catch || 0);
+            stats[key].st += Number(c.stumped || 0);
+          }
+        });
+
+        (inn.batting || []).forEach((b: any) => {
+          const d = (b.dismissal || b["dismissal-text"] || "").toLowerCase();
+          if (d.startsWith("c ") || d.startsWith("st ")) {
+            const parts = d.split(" b ");
+            let nRaw = parts[0].replace(/^(?:c|st)\s+(?:†)?/, "").trim();
+            if (nRaw && !["sub", "batting", "retired"].includes(nRaw)) {
+              const key = findMappedKey(nRaw, opposingTeam);
+              if (stats[key]) {
+                if (d.startsWith("c ")) stats[key].c++;
+                if (d.startsWith("st ")) stats[key].st++;
+              }
+            }
+          }
+          if (d.includes("run out")) {
+            const roMatch = d.match(/\(([^)]+)\)/);
+            if (roMatch?.[1]) {
+              const n = roMatch[1].trim();
+              const key = findMappedKey(n, opposingTeam);
+              if (stats[key]) stats[key].ro++;
+            }
+          }
+        });
+      });
+
+      const base = 4;
+
+      const rows: BreakdownRow[] = Object.values(stats).map((p: any) => {
+        if (variant === "pjRules") {
+          const scored = scorePjRulesPlayer({
+            batting: { runs: p.r, balls: p.b, fours: p.f, sixes: p.s, dismissal: p.dismissal || "not out" },
+            bowling: { overs: p.o, maidens: p.m, runs_conceded: p.r_conc, wickets: p.w, lbw_bowled_wickets: p.lbwB, dot_balls: p.dots },
+            fielding: { catches: p.c, stumpings: p.st, runout_direct: p.ro, runout_indirect: 0 },
+            in_announced_lineup: true,
+          });
+          return {
+            ...p,
+            _variant: "pjRules",
+            base,
+            b_pts: scored.batting_pts,
+            bw_pts: scored.bowling_pts,
+            f_pts: scored.fielding_pts,
+            sr_pts: null,
+            eco_pts: null,
+            total: base + scored.total_pts - 4,
+            breakdownHint: "PJ Rules (Python)",
+          };
+        }
+
+        if (variant === "my11circle") {
+          const isBowlerType = /bowler/i.test(String(p.role || "")) || (Number(p.o) || 0) >= 2 || (Number(p.w) || 0) > 0;
+          const scored = scoreMy11CirclePlayer(
+            {
+              batting: { runs: p.r, balls: p.b, fours: p.f, sixes: p.s, dismissal: p.dismissal || "not out" },
+              bowling: { overs: p.o, maidens: p.m, runs_conceded: p.r_conc, wickets: p.w, lbw_bowled_wickets: p.lbwB, dot_balls: p.dots },
+              fielding: { catches: p.c, stumpings: p.st, runout_direct: p.ro, runout_indirect: 0 },
+              in_announced_lineup: true,
+            },
+            { excludeDuckForBowlers: true, isBowler: isBowlerType }
+          );
+          return {
+            ...p,
+            _variant: "my11circle",
+            base,
+            b_pts: scored.batting_pts,
+            bw_pts: scored.bowling_pts,
+            f_pts: scored.fielding_pts,
+            sr_pts: scored.sr_pts,
+            eco_pts: scored.eco_pts,
+            total: scored.total_pts,
+            breakdownHint: "My11Circle rules",
+          };
+        }
+
+        const ipl = scoreIplFantasyPlayer(
+          {
+            batting: { runs: p.r, balls: p.b, fours: p.f, sixes: p.s, dismissal: p.dismissal || "not out" },
+            bowling: { overs: p.o, maidens: p.m, runs_conceded: p.r_conc, wickets: p.w, lbw_bowled_wickets: p.lbwB, dot_balls: p.dots },
+            fielding: { catches: p.c, stumpings: p.st, runout_direct: p.ro, runout_indirect: 0 },
+            in_announced_lineup: true,
+          },
+          { excludeDuckForBowlers: true, isBowler: p.role === "Bowler", applyStrikeRateForBowlers: false }
+        );
+
+        return {
+          ...p,
+          _variant: "iplFantasy",
+          base,
+          b_pts: ipl.batting_pts,
+          bw_pts: ipl.bowling_pts,
+          f_pts: ipl.fielding_pts,
+          sr_pts: ipl.sr_pts,
+          eco_pts: ipl.eco_pts,
+          total: ipl.total_pts,
+          breakdownHint: "IPL Fantasy rules",
+        };
+      });
+
+      return rows.sort((a: any, b: any) => (b.total || 0) - (a.total || 0));
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (!expandedPointsId) return;
+    const match = fixtures.find((m) => m.api_match_id === expandedPointsId);
+    if (!match) return;
+
+    const matchNo = deriveMatchNo(match) || 0;
+    const cric = adaptCricApiToScorecardViewer(match.scorecard) as any;
+    const espn = matchNo ? espnScorecardByMatchNo[matchNo] : null;
+    const espnLoading = matchNo ? !!espnScorecardLoadingByMatchNo[matchNo] : false;
+
+    const sc = breakdownSource === "cricapi" ? cric : espn;
+    const key = `${expandedPointsId}|${breakdownSource}|${pointsVariant}`;
+
+    if (breakdownSource === "espn" && (espnLoading || !sc)) {
+      setBreakdownLoadingKey(null);
+      return;
+    }
+
+    if (breakdownCache[key]) {
+      setBreakdownLoadingKey(null);
+      return;
+    }
+
+    if (!sc?.innings) return;
+
+    setBreakdownLoadingKey(key);
+    const t = setTimeout(() => {
+      try {
+        const rows = computeBreakdownRows(sc, match, pointsVariant);
+        setBreakdownCache((prev) => ({ ...prev, [key]: rows }));
+      } finally {
+        setBreakdownLoadingKey((cur) => (cur === key ? null : cur));
+      }
+    }, 0);
+
+    return () => clearTimeout(t);
+  }, [
+    expandedPointsId,
+    fixtures,
+    breakdownSource,
+    pointsVariant,
+    breakdownCache,
+    espnScorecardByMatchNo,
+    espnScorecardLoadingByMatchNo,
+    computeBreakdownRows,
+  ]);
+
   const fetchEspnScorecardForMatchNo = useCallback(async (matchNo: number) => {
     if (!matchNo || matchNo <= 0) return;
     if (espnScorecardLoadingByMatchNo[matchNo]) return;
@@ -188,9 +468,6 @@ export default function ScoreboardPage() {
   }, [espnScorecardByMatchNo, espnScorecardLoadingByMatchNo]);
   const [subLoading, setSubLoading] = useState(false);
   const [tabLoading, setTabLoading] = useState(false);
-
-  const [fixtures, setFixtures] = useState<Fixture[]>([]);
-  const [fixtureFilter, setFixtureFilter] = useState<"all" | "upcoming" | "completed">("all");
   /** Which auction franchise’s score sheet is shown (sub-tabs under Sheets). */
   const [sheetFranchiseId, setSheetFranchiseId] = useState<string | null>(null);
   const today = useMemo(() => getTodayIST(), []);
@@ -248,8 +525,13 @@ export default function ScoreboardPage() {
 
   const fetchFixtures = async () => {
     // Old source (ESPN-driven): supabase.from("fixtures")
-    const { data } = await supabase.from("fixtures_cricapi").select("*").order("date_time_gmt", { ascending: true });
-    if (data) setFixtures(data);
+    setTabLoading(true);
+    try {
+      const { data } = await supabase.from("fixtures_cricapi").select("*").order("date_time_gmt", { ascending: true });
+      if (data) setFixtures(data);
+    } finally {
+      setTabLoading(false);
+    }
   };
 
   const fetchInitialData = async () => {
@@ -560,6 +842,42 @@ export default function ScoreboardPage() {
         {/* ─── TAB: FIXTURES ─── */}
         {activeTab === "fixtures" && (
           <div className="space-y-6 animate-in fade-in duration-500">
+            {tabLoading ? (
+              <div className="space-y-5">
+                <div className="h-4 w-40 rounded-lg bg-slate-200 animate-pulse" />
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="space-y-2">
+                    <div className="h-3 w-28 rounded-md bg-slate-200 animate-pulse ml-2" />
+                    <div className="bg-white rounded-[2rem] border border-slate-100 p-6 shadow-sm">
+                      <div className="flex items-center justify-between gap-6">
+                        <div className="flex items-center gap-4 flex-1">
+                          <div className="h-10 w-10 rounded-xl bg-slate-200 animate-pulse" />
+                          <div className="h-4 w-24 rounded-lg bg-slate-200 animate-pulse" />
+                        </div>
+                        <div className="h-6 w-12 rounded-lg bg-slate-200 animate-pulse" />
+                        <div className="flex items-center gap-4 flex-1 justify-end">
+                          <div className="h-4 w-24 rounded-lg bg-slate-200 animate-pulse" />
+                          <div className="h-10 w-10 rounded-xl bg-slate-200 animate-pulse" />
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between mt-4 pt-4 border-t border-slate-50">
+                        <div className="h-3 w-2/3 rounded-md bg-slate-200 animate-pulse" />
+                        <div className="flex gap-2">
+                          <div className="h-8 w-24 rounded-lg bg-slate-200 animate-pulse" />
+                          <div className="h-8 w-24 rounded-lg bg-slate-200 animate-pulse" />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {!tabLoading && groupedFixtures.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-24 bg-white rounded-[2rem] border border-slate-200 shadow-sm">
+                <Calendar className="h-10 w-10 text-slate-200 mb-3" />
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">No fixtures found</p>
+              </div>
+            ) : null}
              {groupedFixtures.map(([date, matches]) => (
                 <div key={date} className="space-y-3">
                    <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-2">{formatDate(date)}</div>
@@ -630,7 +948,7 @@ export default function ScoreboardPage() {
                                    </button>
                                  </div>
                                </div>
-                               <div className="p-4 sm:p-8 max-h-[75vh] overflow-y-auto no-scrollbar">
+                               <div className="p-4 sm:p-8 max-h-[75vh] min-h-[60vh] overflow-y-auto no-scrollbar">
                                  {expandedScorecardId === match.api_match_id ? (() => {
                                    const matchNo = deriveMatchNo(match) || 0;
                                    const cric = adaptCricApiToScorecardViewer(match.scorecard);
@@ -718,326 +1036,140 @@ export default function ScoreboardPage() {
                                     </div>
                                   </div>
                                </div>
-                               <div className="p-2 sm:p-8 max-h-[75vh] overflow-y-auto no-scrollbar">
+                               <div className="p-2 sm:p-8 max-h-[75vh] min-h-[60vh] overflow-y-auto no-scrollbar">
                                   <table className="w-full text-left">
                                      <thead className="bg-slate-50 border-b">
                                         <tr><th className="px-4 py-4 text-[9px] font-black uppercase opacity-30">Selection</th><th className="px-3 py-4 text-[9px] font-black opacity-30 text-center uppercase">Contribution</th><th className="px-4 py-4 text-[11px] font-black text-right uppercase">Final Points</th></tr>
                                      </thead>
                                      <tbody className="divide-y divide-slate-100">
                                         {expandedPointsId === match.api_match_id ? (() => {
-                                            const matchNo = deriveMatchNo(match) || 0;
-                                            const cric = adaptCricApiToScorecardViewer(match.scorecard) as any;
-                                            const espn = matchNo ? espnScorecardByMatchNo[matchNo] : null;
-                                            const espnLoading = matchNo ? !!espnScorecardLoadingByMatchNo[matchNo] : false;
+                                          const matchNo = deriveMatchNo(match) || 0;
+                                          const key = `${match.api_match_id}|${breakdownSource}|${pointsVariant}`;
+                                          const rows = breakdownCache[key];
+                                          const isLoading = breakdownLoadingKey === key;
 
-                                            const sc = breakdownSource === "cricapi" ? cric : espn;
-                                            if (breakdownSource === "espn") {
-                                              if (!matchNo) {
-                                                return (
-                                                  <tr>
-                                                    <td colSpan={3} className="px-6 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
-                                                      No match number found for ESPN lookup.
-                                                    </td>
-                                                  </tr>
-                                                );
-                                              }
-                                              if (espnLoading) {
-                                                return (
-                                                  <tr>
-                                                    <td colSpan={3} className="px-6 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
-                                                      Loading ESPN scorecard…
-                                                    </td>
-                                                  </tr>
-                                                );
-                                              }
-                                              if (!sc) {
-                                                return (
-                                                  <tr>
-                                                    <td colSpan={3} className="px-6 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
-                                                      ESPN scorecard not available yet for Match {matchNo}.
-                                                    </td>
-                                                  </tr>
-                                                );
-                                              }
-                                            }
-                                            if (!sc?.innings) return null;
-                                            const stats: Record<string, any> = {};
-                                            const team1 = match.team1_short || "";
-                                            const team2 = match.team2_short || "";
+                                          if (breakdownSource === "espn" && !matchNo) {
+                                            return (
+                                              <tr>
+                                                <td colSpan={3} className="px-6 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
+                                                  No match number found for ESPN lookup.
+                                                </td>
+                                              </tr>
+                                            );
+                                          }
 
-                                            const normalizePlayerName = (raw: string) =>
-                                              String(raw || "")
-                                                .replace(/†/g, "")
-                                                .replace(/\(c\)/gi, "")
-                                                .replace(/\s+/g, " ")
-                                                .trim();
-                                            
-                                            // Initialize registry from batting/bowling names (CricAPI doesn't provide playing_squad here).
-                                            sc.innings.forEach((inn: any) => {
-                                              const battingTeam = inn.team;
-                                              const bowlingTeam = sc.innings.find((i: any) => i.team !== battingTeam)?.team || "Opponent";
-                                              (inn.batting || []).forEach((b: any) => {
-                                                const raw = b.player || "";
-                                                if (!raw || raw === "BATTING") return;
-                                                const n = normalizePlayerName(raw);
-                                                const key = `${n}_${battingTeam}`;
-                                                if (!stats[key]) stats[key] = { n, team: battingTeam, r:0, b:0, f:0, s:0, w:0, m:0, o:0, r_conc:0, c:0, st:0, dots:0, lbwB:0, ro:0, isDuck: false, role: 'Batter' };
-                                              });
-                                              (inn.bowling || []).forEach((bw: any) => {
-                                                const raw = bw.bowler || "";
-                                                if (!raw || raw === "BOWLING") return;
-                                                const n = normalizePlayerName(raw);
-                                                // Bowling listed under an innings is performed by the opposition team.
-                                                const key = `${n}_${bowlingTeam}`;
-                                                if (!stats[key]) stats[key] = { n, team: bowlingTeam, r:0, b:0, f:0, s:0, w:0, m:0, o:0, r_conc:0, c:0, st:0, dots:0, lbwB:0, ro:0, isDuck: false, role: 'Bowler' };
-                                              });
-                                            });
+                                          if (isLoading) {
+                                            return (
+                                              <tr>
+                                                <td colSpan={3} className="px-6 py-10 text-center">
+                                                  <div className="inline-flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400">
+                                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                                    Computing scores…
+                                                  </div>
+                                                </td>
+                                              </tr>
+                                            );
+                                          }
 
-                                            // Universal Mapping: Resolve short names against the Master Squad
-                                            const findMappedKey = (name: string, team: string) => {
-                                               const n = normalizePlayerName(name);
-                                               const exact = `${n}_${team}`;
-                                               if (stats[exact]) return exact;
-                                               
-                                               // Fuzzy match within the SAME team first
-                                               const matchedKey = Object.keys(stats).find(k => k.endsWith(`_${team}`) && k.split('_')[0].includes(n));
-                                               if (matchedKey) return matchedKey;
+                                          if (!rows) {
+                                            return (
+                                              <tr>
+                                                <td colSpan={3} className="px-6 py-10 text-center">
+                                                  <div className="inline-flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400">
+                                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                                    Computing scores…
+                                                  </div>
+                                                </td>
+                                              </tr>
+                                            );
+                                          }
 
-                                               // Search across the WHOLE master squad if team-specific fails (e.g. name only match)
-                                               const wholeMatchKey = Object.keys(stats).find(k => k.split('_')[0].includes(n));
-                                               return wholeMatchKey || exact;
-                                            };
-
-                                            // 2. Data Accumulation
-                                            sc.innings.forEach((inn: any) => {
-                                               const currentTeam = inn.team; 
-                                               const opposingTeam = sc.innings.find((i: any) => i.team !== currentTeam)?.team || "Opponent";
-
-                                               // Process Batting
-                                               (inn.batting || []).forEach((b: any) => { 
-                                                  if (!b.player) return;
-                                                  const rawN = b.player || "";
-                                                  if (!rawN || rawN === "BATTING") return;
-                                                  const key = findMappedKey(rawN, currentTeam);
-                                                  const dStr = (b.dismissal || b["dismissal-text"] || "").toLowerCase();
-
-                                                  if (!stats[key]) stats[key] = { n: key.split('_')[0], team: currentTeam, r:0, b:0, f:0, s:0, w:0, m:0, o:0, r_conc:0, c:0, st:0, dots:0, lbwB:0, ro:0, isDuck: false, role: 'Batter', dismissal: "" }; 
-                                                  stats[key].r += Number(b.R || b.r) || 0; 
-                                                  stats[key].b += Number(b.B || b.b) || 0; 
-                                                  stats[key].f += Number(b['4s']) || 0; 
-                                                  stats[key].s += Number(b['6s']) || 0;
-                                                  if (dStr) stats[key].dismissal = dStr;
-                                                  if (rawN.includes('†')) stats[key].role = 'WK';
-                                                  else if (stats[key].role === 'Fielder') stats[key].role = 'Batter';
-
-                                                  if (stats[key].r === 0 && dStr !== "not out" && dStr !== "") stats[key].isDuck = true;
-                                                  // LBW/Bowled wickets credit (only when a dismissal string exists)
-                                                  if (dStr.includes("lbw") || dStr.includes("bowled")) stats[key].lbwB += 1;
-                                               });
-
-                                               // Process Bowling
-                                               (inn.bowling || []).forEach((bw: any) => { 
-                                                  if (!bw.bowler) return;
-                                                  const rawN = bw.bowler;
-                                                  if (!rawN || rawN === "BOWLING") return;
-                                                  // Bowlers belong to the opposition (they bowl to this batting innings).
-                                                  const key = findMappedKey(rawN, opposingTeam);
-
-                                                  if (!stats[key]) stats[key] = { n: key.split('_')[0], team: opposingTeam, r:0, b:0, f:0, s:0, r_conc:0, w:0, m:0, o:0, c:0, st:0, dots:0, lbwB:0, ro:0, isDuck:false, role: 'Bowler' }; 
-                                                  stats[key].w += Number(bw.W || bw.w) || 0; 
-                                                  stats[key].m += Number(bw.M || bw.m) || 0; 
-                                                  stats[key].r_conc += Number(bw.R || bw.r) || 0;
-                                                  stats[key].o += Number(bw.O || bw.o) || 0;
-                                                  stats[key].dots += Number(bw['0s'] || 0);
-
-                                                  if (stats[key].role === 'Batter' || stats[key].role === 'WK') stats[key].role = stats[key].role === 'WK' ? 'WK/Bowler' : 'All-Rounder';
-                                                  else if (stats[key].role === 'Fielder') stats[key].role = 'Bowler';
-                                               });
-
-                                               // Process Fielding (Catches/Run-outs)
-                                               (inn.catching || []).forEach((c: any) => {
-                                                  const rawN = typeof c.catcher === 'string' ? c.catcher : c.catcher?.name;
-                                                  if (!rawN) return;
-                                                  const key = findMappedKey(rawN, opposingTeam);
-                                                  if (stats[key]) {
-                                                     stats[key].c += Number(c.catch || 0);
-                                                     stats[key].st += Number(c.stumped || 0);
-                                                  }
-                                               });
-
-                                               (inn.batting || []).forEach((b: any) => { 
-                                                  const d = (b.dismissal || b["dismissal-text"] || "").toLowerCase(); 
-                                                  if (d.startsWith("c ") || d.startsWith("st ")) {
-                                                     const parts = d.split(" b ");
-                                                     let nRaw = parts[0].replace(/^(?:c|st)\s+(?:†)?/, "").trim();
-                                                     if (nRaw && !["sub", "batting", "retired"].includes(nRaw)) {
-                                                        const key = findMappedKey(nRaw, opposingTeam);
-                                                        if (stats[key]) {
-                                                           if (d.startsWith("c ")) stats[key].c++;
-                                                           if (d.startsWith("st ")) stats[key].st++;
-                                                        }
-                                                     }
-                                                  }
-                                                  if (d.includes("run out")) {
-                                                     const roMatch = d.match(/\(([^)]+)\)/);
-                                                     if (roMatch?.[1]) {
-                                                        const n = roMatch[1].trim();
-                                                        const key = findMappedKey(n, opposingTeam);
-                                                        if (stats[key]) stats[key].ro++;
-                                                     }
-                                                  }
-                                               });
-                                            });
-
-                                            console.log("[breakdown] derived players", Object.keys(stats).length);
-
-                                            const rows = Object.values(stats).map((p: any) => {
-                                              // Shared stat line (derived from adapted CricAPI scorecard)
-                                              const base = 4; // Playing XI
-
-                                              if (pointsVariant === "pjRules") {
-                                                const scored = scorePjRulesPlayer({
-                                                  batting: { runs: p.r, balls: p.b, fours: p.f, sixes: p.s, dismissal: p.dismissal || "not out" },
-                                                  bowling: {
-                                                    overs: p.o,
-                                                    maidens: p.m,
-                                                    runs_conceded: p.r_conc,
-                                                    wickets: p.w,
-                                                    lbw_bowled_wickets: p.lbwB,
-                                                    dot_balls: p.dots,
-                                                  },
-                                                  fielding: { catches: p.c, stumpings: p.st, runout_direct: p.ro, runout_indirect: 0 },
-                                                  in_announced_lineup: true,
-                                                });
-
-                                                return {
-                                                  ...p,
-                                                  _variant: "pjRules",
-                                                  base,
-                                                  b_pts: scored.batting_pts,
-                                                  bw_pts: scored.bowling_pts,
-                                                  f_pts: scored.fielding_pts,
-                                                  sr_pts: null,
-                                                  eco_pts: null,
-                                                  total: base + scored.total_pts - 4, // scored.total_pts already includes lineup=+4; keep display consistent
-                                                  breakdownHint: "PJ Rules (Python)",
-                                                };
-                                              }
-
-                                              if (pointsVariant === "my11circle") {
-                                                const isBowlerType = /bowler/i.test(String(p.role || "")) || (Number(p.o) || 0) >= 2 || (Number(p.w) || 0) > 0;
-                                                const scored = scoreMy11CirclePlayer(
-                                                  {
-                                                    batting: { runs: p.r, balls: p.b, fours: p.f, sixes: p.s, dismissal: p.dismissal || "not out" },
-                                                    bowling: {
-                                                      overs: p.o,
-                                                      maidens: p.m,
-                                                      runs_conceded: p.r_conc,
-                                                      wickets: p.w,
-                                                      lbw_bowled_wickets: p.lbwB,
-                                                      dot_balls: p.dots,
-                                                    },
-                                                    fielding: { catches: p.c, stumpings: p.st, runout_direct: p.ro, runout_indirect: 0 },
-                                                    in_announced_lineup: true,
-                                                  },
-                                                  { excludeDuckForBowlers: true, isBowler: isBowlerType }
-                                                );
-
-                                                return {
-                                                  ...p,
-                                                  _variant: "my11circle",
-                                                  base,
-                                                  b_pts: scored.batting_pts,
-                                                  bw_pts: scored.bowling_pts,
-                                                  f_pts: scored.fielding_pts,
-                                                  sr_pts: scored.sr_pts,
-                                                  eco_pts: scored.eco_pts,
-                                                  total: scored.total_pts,
-                                                  breakdownHint: "My11Circle rules",
-                                                };
-                                              }
-
-                                              // IPL Fantasy (per screenshots)
-                                              const ipl = scoreIplFantasyPlayer(
-                                                {
-                                                  batting: { runs: p.r, balls: p.b, fours: p.f, sixes: p.s, dismissal: p.dismissal || "not out" },
-                                                  bowling: {
-                                                    overs: p.o,
-                                                    maidens: p.m,
-                                                    runs_conceded: p.r_conc,
-                                                    wickets: p.w,
-                                                    lbw_bowled_wickets: p.lbwB,
-                                                    dot_balls: p.dots,
-                                                  },
-                                                  fielding: { catches: p.c, stumpings: p.st, runout_direct: p.ro, runout_indirect: 0 },
-                                                  in_announced_lineup: true,
-                                                },
-                                                { excludeDuckForBowlers: true, isBowler: p.role === "Bowler", applyStrikeRateForBowlers: false }
-                                              );
-
-                                              return {
-                                                ...p,
-                                                _variant: "iplFantasy",
-                                                base,
-                                                b_pts: ipl.batting_pts,
-                                                bw_pts: ipl.bowling_pts,
-                                                f_pts: ipl.fielding_pts,
-                                                sr_pts: ipl.sr_pts,
-                                                eco_pts: ipl.eco_pts,
-                                                total: ipl.total_pts,
-                                                breakdownHint: "IPL Fantasy rules",
-                                              };
-                                            });
-
-                                            return rows
-                                              .sort((a: any, b: any) => (b.total || 0) - (a.total || 0))
-                                              .map((p: any) => {
-                                               return (
-                                                  <React.Fragment key={`${p.n}_${p.team}`}>
-                                                     <tr onClick={() => setShowBreakdownId(showBreakdownId === `${p.n}_${p.team}` ? null : `${p.n}_${p.team}`)} className={cn("hover:bg-slate-50 cursor-pointer transition-all", showBreakdownId === `${p.n}_${p.team}` ? "bg-slate-50" : "")}>
-                                                        <td className="px-4 py-4"><div className="flex items-center gap-1.5"><span className="text-xs font-black uppercase text-slate-800 leading-none">{p.n}</span><ChevronRight size={10} className={cn("text-indigo-500", showBreakdownId === `${p.n}_${p.team}` ? "rotate-90" : "")} /></div><p className="text-[7px] font-black uppercase text-slate-400 mt-1">{p.team} • {p.role}</p></td>
-                                                        <td className="px-3 py-4 text-center"><div className="text-[9px] font-black text-slate-900 leading-none">{p.r}R • {p.w}W • {p.c}C</div></td>
-                                                        <td className="px-4 py-4 text-right"><div className="text-sm font-black text-slate-900">{Math.round(p.total)}</div></td>
-                                                     </tr>
-                                                     {showBreakdownId === `${p.n}_${p.team}` && (
-                                                        <tr className="bg-slate-50/50 border-none"><td colSpan={3} className="px-4 pb-6 pt-2 border-none">
-                                                           <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-inner grid grid-cols-1 sm:grid-cols-2 gap-6 animate-in slide-in-from-top-2">
-                                                              <div className="space-y-2">
-                                                                 <h4 className="text-[8px] font-black uppercase text-indigo-600 tracking-widest border-b pb-1">
-                                                                   {pointsVariant === "pjRules" ? "PJ Rules Breakdown" : pointsVariant === "my11circle" ? "My11Circle Breakdown" : "IPL Fantasy Breakdown"} ({p.team})
-                                                                 </h4>
-                                                                 <div className="space-y-2.5">
-                                                                    <div className="flex flex-col gap-0.5">
-                                                                       <div className="flex justify-between text-[10px]"><span className="text-slate-400 font-bold uppercase tracking-tight">Playing XI Base</span><span className="font-black text-slate-900">+4.0</span></div>
-                                                                       <p className="text-[7px] font-black text-slate-300 uppercase leading-none">Automatic Entry Bonus</p>
-                                                                    </div>
-                                                                    <div className="flex flex-col gap-0.5">
-                                                                       <div className="flex justify-between text-[10px]"><span className="text-slate-400 font-bold uppercase tracking-tight">Batting</span><span className="font-black text-slate-900">+{Number(p.b_pts || 0).toFixed(1)}</span></div>
-                                                                       {pointsVariant === "pjRules" ? (
-                                                                         <p className="text-[7px] font-black text-indigo-400 uppercase leading-none italic">{p.r}R + ({p.f}*1) + ({p.s}*2) + SR({p.sr_pts}) + MS</p>
-                                                                       ) : (
-                                                                         <p className="text-[7px] font-black text-slate-300 uppercase leading-none">{p.breakdownHint || ""}</p>
-                                                                       )}
-                                                                    </div>
-                                                                    <div className="flex flex-col gap-0.5">
-                                                                       <div className="flex justify-between text-[10px]"><span className="text-slate-400 font-bold uppercase tracking-tight">Bowling</span><span className="font-black text-slate-900">+{Number(p.bw_pts || 0).toFixed(1)}</span></div>
-                                                                       {pointsVariant === "pjRules" ? (
-                                                                         <p className="text-[7px] font-black text-indigo-400 uppercase leading-none italic">({p.w}*30) + ({p.lbwB}*8) + ({p.m}*12) + {p.dots}D + ECO({p.eco_pts}) + MS</p>
-                                                                       ) : (
-                                                                         <p className="text-[7px] font-black text-slate-300 uppercase leading-none">{p.breakdownHint || ""}</p>
-                                                                       )}
-                                                                    </div>
-                                                                    <div className="flex flex-col gap-0.5">
-                                                                       <div className="flex justify-between text-[10px]"><span className="text-slate-400 font-bold uppercase tracking-tight">Fielding</span><span className="font-black text-slate-900">+{Number(p.f_pts || 0).toFixed(1)}</span></div>
-                                                                       {pointsVariant === "pjRules" ? (
-                                                                         <p className="text-[7px] font-black text-indigo-400 uppercase leading-none italic">({p.c}*8) + ({p.st}*12) + ({p.ro}*12)</p>
-                                                                       ) : (
-                                                                         <p className="text-[7px] font-black text-slate-300 uppercase leading-none">{p.breakdownHint || ""}</p>
-                                                                       )}
-                                                                    </div>
-                                                                    <div className="border-t pt-1.5 flex justify-between text-[11px] font-black uppercase"><span className="text-slate-900">FINAL TOTAL</span><span className="text-slate-900">{Number(p.total || 0).toFixed(1)}</span></div>
-                                                                 </div>
+                                          return rows.map((p: any) => {
+                                            return (
+                                              <React.Fragment key={`${p.n}_${p.team}`}>
+                                                <tr
+                                                  onClick={() => setShowBreakdownId(showBreakdownId === `${p.n}_${p.team}` ? null : `${p.n}_${p.team}`)}
+                                                  className={cn("hover:bg-slate-50 cursor-pointer transition-all", showBreakdownId === `${p.n}_${p.team}` ? "bg-slate-50" : "")}
+                                                >
+                                                  <td className="px-4 py-4">
+                                                    <div className="flex items-center gap-1.5">
+                                                      <span className="text-xs font-black uppercase text-slate-800 leading-none">{p.n}</span>
+                                                      <ChevronRight size={10} className={cn("text-indigo-500", showBreakdownId === `${p.n}_${p.team}` ? "rotate-90" : "")} />
+                                                    </div>
+                                                    <p className="text-[7px] font-black uppercase text-slate-400 mt-1">
+                                                      {p.team} • {p.role}
+                                                    </p>
+                                                  </td>
+                                                  <td className="px-3 py-4 text-center">
+                                                    <div className="text-[9px] font-black text-slate-900 leading-none">
+                                                      {p.r}R • {p.w}W • {p.c}C
+                                                    </div>
+                                                  </td>
+                                                  <td className="px-4 py-4 text-right">
+                                                    <div className="text-sm font-black text-slate-900">{Math.round(p.total)}</div>
+                                                  </td>
+                                                </tr>
+                                                {showBreakdownId === `${p.n}_${p.team}` && (
+                                                  <tr className="bg-slate-50/50 border-none">
+                                                    <td colSpan={3} className="px-4 pb-6 pt-2 border-none">
+                                                      <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-inner grid grid-cols-1 sm:grid-cols-2 gap-6 animate-in slide-in-from-top-2">
+                                                        <div className="space-y-2">
+                                                          <h4 className="text-[8px] font-black uppercase text-indigo-600 tracking-widest border-b pb-1">
+                                                            {pointsVariant === "pjRules" ? "PJ Rules Breakdown" : pointsVariant === "my11circle" ? "My11Circle Breakdown" : "IPL Fantasy Breakdown"} ({p.team})
+                                                          </h4>
+                                                          <div className="space-y-2.5">
+                                                            <div className="flex flex-col gap-0.5">
+                                                              <div className="flex justify-between text-[10px]">
+                                                                <span className="text-slate-400 font-bold uppercase tracking-tight">Playing XI Base</span>
+                                                                <span className="font-black text-slate-900">+4.0</span>
                                                               </div>
+                                                              <p className="text-[7px] font-black text-slate-300 uppercase leading-none">Automatic Entry Bonus</p>
+                                                            </div>
+                                                            <div className="flex flex-col gap-0.5">
+                                                              <div className="flex justify-between text-[10px]">
+                                                                <span className="text-slate-400 font-bold uppercase tracking-tight">Batting</span>
+                                                                <span className="font-black text-slate-900">+{Number(p.b_pts || 0).toFixed(1)}</span>
+                                                              </div>
+                                                              {pointsVariant === "pjRules" ? (
+                                                                <p className="text-[7px] font-black text-indigo-400 uppercase leading-none italic">
+                                                                  {p.r}R + ({p.f}*1) + ({p.s}*2) + SR({p.sr_pts}) + MS
+                                                                </p>
+                                                              ) : (
+                                                                <p className="text-[7px] font-black text-slate-300 uppercase leading-none">{p.breakdownHint || ""}</p>
+                                                              )}
+                                                            </div>
+                                                            <div className="flex flex-col gap-0.5">
+                                                              <div className="flex justify-between text-[10px]">
+                                                                <span className="text-slate-400 font-bold uppercase tracking-tight">Bowling</span>
+                                                                <span className="font-black text-slate-900">+{Number(p.bw_pts || 0).toFixed(1)}</span>
+                                                              </div>
+                                                              {pointsVariant === "pjRules" ? (
+                                                                <p className="text-[7px] font-black text-indigo-400 uppercase leading-none italic">
+                                                                  ({p.w}*30) + ({p.lbwB}*8) + ({p.m}*12) + {p.dots}D + ECO({p.eco_pts}) + MS
+                                                                </p>
+                                                              ) : (
+                                                                <p className="text-[7px] font-black text-slate-300 uppercase leading-none">{p.breakdownHint || ""}</p>
+                                                              )}
+                                                            </div>
+                                                            <div className="flex flex-col gap-0.5">
+                                                              <div className="flex justify-between text-[10px]">
+                                                                <span className="text-slate-400 font-bold uppercase tracking-tight">Fielding</span>
+                                                                <span className="font-black text-slate-900">+{Number(p.f_pts || 0).toFixed(1)}</span>
+                                                              </div>
+                                                              {pointsVariant === "pjRules" ? (
+                                                                <p className="text-[7px] font-black text-indigo-400 uppercase leading-none italic">
+                                                                  ({p.c}*8) + ({p.st}*12) + ({p.ro}*12)
+                                                                </p>
+                                                              ) : (
+                                                                <p className="text-[7px] font-black text-slate-300 uppercase leading-none">{p.breakdownHint || ""}</p>
+                                                              )}
+                                                            </div>
+                                                            <div className="border-t pt-1.5 flex justify-between text-[11px] font-black uppercase">
+                                                              <span className="text-slate-900">FINAL TOTAL</span>
+                                                              <span className="text-slate-900">{Number(p.total || 0).toFixed(1)}</span>
+                                                            </div>
+                                                          </div>
+                                                        </div>
                                                            </div>
                                                         </td></tr>
                                                      )}
