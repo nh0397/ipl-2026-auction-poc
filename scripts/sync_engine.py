@@ -430,16 +430,20 @@ async def main():
             res = requests.get(f"{SUPABASE_URL}/rest/v1/fixtures?api_match_id=eq.{args.match_id}", headers=HEADERS)
             fixtures = res.json()
         else:
-            now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
-            target_date = args.date or now_ist.strftime('%Y-%m-%d')
-            fixtures = await fetch_and_upsert_fixtures(page, target_date)
+            # ESPN fixture discovery (schedule scraping) is temporarily disabled.
+            # Run `scripts/populate_fixtures_cricapi.py` to populate `fixtures_cricapi`.
+            fixtures = []
 
-        for f in fixtures:
-            t1 = f.get('team1_name', '').replace(' ', '-').lower()
-            t2 = f.get('team2_name', '').replace(' ', '-').lower()
-            sc_data = await scrape_scorecard(page, f['api_match_id'], f"{t1}-vs-{t2}")
-            if sc_data:
-                calculate_and_store_points(sc_data, f)
+        # ESPN scorecard scraping is temporarily disabled.
+        # We keep the code intact so we can re-enable it once the CricAPI-driven
+        # fixtures + scoring pipeline is ready.
+        #
+        # for f in fixtures:
+        #     t1 = f.get('team1_name', '').replace(' ', '-').lower()
+        #     t2 = f.get('team2_name', '').replace(' ', '-').lower()
+        #     sc_data = await scrape_scorecard(page, f['api_match_id'], f"{t1}-vs-{t2}")
+        #     if sc_data:
+        #         calculate_and_store_points(sc_data, f)
 
         await browser.close()
 

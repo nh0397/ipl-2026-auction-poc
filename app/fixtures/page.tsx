@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 interface Fixture {
   id: string;
   api_match_id: string;
-  match_no: number;
+  match_no?: number;
   title: string;
   venue: string | null;
   match_date: string;
@@ -22,6 +22,7 @@ interface Fixture {
   status: string;
   match_started: boolean;
   match_ended: boolean;
+  points_synced?: boolean;
   scorecard: any;
 }
 
@@ -42,9 +43,29 @@ function formatTime(dateTimeGMT: string): string {
   return d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "Asia/Kolkata" });
 }
 
+function formatLocalTime(dateTimeGMT: string): { time: string; tz: string } {
+  const d = new Date(dateTimeGMT);
+  const time = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: true });
+  const tzPart = new Intl.DateTimeFormat(undefined, { timeZoneName: "short" })
+    .formatToParts(d)
+    .find((p) => p.type === "timeZoneName")?.value;
+  return { time, tz: tzPart || "Local" };
+}
+
 function cleanShort(short: string | null): string {
   if (!short) return "";
   return short.endsWith("W") && short.length > 2 ? short.slice(0, -1) : short;
+}
+
+function deriveMatchNo(f: any): number | null {
+  const n = Number(f?.match_no);
+  if (Number.isFinite(n) && n > 0) return n;
+  const s = String(f?.title || f?.match_name || f?.name || "");
+  const m = s.match(/(\d+)(st|nd|rd|th)\s+Match/i);
+  if (m?.[1]) return Number(m[1]);
+  const m2 = s.match(/\bMatch\s+(\d+)\b/i);
+  if (m2?.[1]) return Number(m2[1]);
+  return null;
 }
 
 export default function FixturesPage() {
@@ -59,10 +80,12 @@ export default function FixturesPage() {
 
   useEffect(() => {
     const fetchFixtures = async () => {
+      // Old source (ESPN-driven): .from("fixtures")
       const { data, error } = await supabase
-        .from("fixtures")
+        .from("fixtures_cricapi")
         .select("*")
-        .order("match_no", { ascending: true });
+        // `match_no` might not exist yet; date_time_gmt is always present in CricAPI payload.
+        .order("date_time_gmt", { ascending: true });
 
       if (error) console.error("Error fetching fixtures:", error);
       if (data) setFixtures(data);
@@ -261,7 +284,7 @@ export default function FixturesPage() {
                       <div className="p-4 sm:p-5">
                         {/* Match number */}
                         <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">
-                          Match {match.match_no}
+                          Match {deriveMatchNo(match) ?? "—"}
                         </div>
 
                         {/* Teams */}
@@ -338,6 +361,18 @@ export default function FixturesPage() {
 
                         {/* Meta info */}
                         <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[10px] sm:text-xs font-bold text-slate-400">
+                          {match.date_time_gmt && (
+                            <div className="flex items-center gap-1.5 truncate">
+                              <Clock className="h-3 w-3 flex-shrink-0" />
+                              <span className="truncate">
+                                {formatTime(match.date_time_gmt)} IST
+                                {(() => {
+                                  const local = formatLocalTime(match.date_time_gmt);
+                                  return local.tz !== "IST" ? ` • ${local.time} ${local.tz}` : "";
+                                })()}
+                              </span>
+                            </div>
+                          )}
                           {match.venue && (
                             <div className="flex items-center gap-1.5 truncate">
                               <MapPin className="h-3 w-3 flex-shrink-0" />
@@ -347,7 +382,7 @@ export default function FixturesPage() {
                         </div>
 
                         {/* View Scorecard Button / Pending Status */}
-                        {match.match_ended && match.scorecard?.innings?.length > 0 ? (
+                        {match.match_ended && match.points_synced ? (
                           <div className="mt-4 pt-4 border-t border-slate-50">
                             <button
                                onClick={async () => {
@@ -369,6 +404,13 @@ export default function FixturesPage() {
                               View Full Scorecard
                               <ChevronRight className="h-3.5 w-3.5 ml-1 opacity-50 group-hover:opacity-100 transition-opacity" />
                             </button>
+                          </div>
+                        ) : match.match_ended && !match.points_synced ? (
+                          <div className="mt-4 pt-4 border-t border-slate-50">
+                            <div className="flex items-center justify-center gap-2 py-3 bg-blue-50/50 rounded-xl text-[10px] font-black uppercase tracking-widest text-blue-600 border border-blue-100/50 italic">
+                               <Loader2 className="h-3 w-3 animate-spin" />
+                               Processing points
+                            </div>
                           </div>
                         ) : (isMatchToday || isPast) && (
                           <div className="mt-4 pt-4 border-t border-slate-50">

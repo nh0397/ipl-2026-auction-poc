@@ -30,7 +30,7 @@ import { ScoringRulesLegend } from "@/components/rules/ScoringRulesLegend";
 interface Fixture {
   id: string;
   api_match_id: string;
-  match_no: number;
+  match_no?: number;
   title: string;
   venue: string | null;
   match_date: string;
@@ -44,6 +44,7 @@ interface Fixture {
   status: string;
   match_started: boolean;
   match_ended: boolean;
+  points_synced?: boolean;
   scorecard: any | null;
 }
 
@@ -65,9 +66,30 @@ function formatTime(dateTimeGMT: string): string {
   return d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "Asia/Kolkata" });
 }
 
+function formatLocalTime(dateTimeGMT: string): { time: string; tz: string } {
+  if (!dateTimeGMT) return { time: "", tz: "Local" };
+  const d = new Date(dateTimeGMT);
+  const time = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: true });
+  const tzPart = new Intl.DateTimeFormat(undefined, { timeZoneName: "short" })
+    .formatToParts(d)
+    .find((p) => p.type === "timeZoneName")?.value;
+  return { time, tz: tzPart || "Local" };
+}
+
 function cleanShort(short: string | null): string {
   if (!short) return "";
   return short.endsWith("W") && short.length > 2 ? short.slice(0, -1) : short;
+}
+
+function deriveMatchNo(f: any): number | null {
+  const n = Number(f?.match_no);
+  if (Number.isFinite(n) && n > 0) return n;
+  const s = String(f?.title || f?.match_name || f?.name || "");
+  const m = s.match(/(\d+)(st|nd|rd|th)\s+Match/i);
+  if (m?.[1]) return Number(m[1]);
+  const m2 = s.match(/\bMatch\s+(\d+)\b/i);
+  if (m2?.[1]) return Number(m2[1]);
+  return null;
 }
 
 function getIplTeamStyle(team: string | null | undefined) {
@@ -152,7 +174,8 @@ export default function ScoreboardPage() {
   useEffect(() => { if (activeTab === "fixtures") fetchFixtures(); }, [activeTab]);
 
   const fetchFixtures = async () => {
-    const { data } = await supabase.from("fixtures").select("*").order("match_no", { ascending: true });
+    // Old source (ESPN-driven): supabase.from("fixtures")
+    const { data } = await supabase.from("fixtures_cricapi").select("*").order("date_time_gmt", { ascending: true });
     if (data) setFixtures(data);
   };
 
@@ -418,7 +441,13 @@ export default function ScoreboardPage() {
                    {matches.map(match => {
                       const isToday = match.match_date === today;
                       return (
-                      <div key={match.id} className={cn("bg-white rounded-[2rem] border p-6 shadow-sm transition-all", isToday ? "border-indigo-500 ring-2 ring-indigo-50/50" : "border-slate-100")}>
+                      <div key={match.id} className="space-y-2">
+                        {isToday && (
+                          <div className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-600 px-2">
+                            Today
+                          </div>
+                        )}
+                      <div className={cn("bg-white rounded-[2rem] border p-6 shadow-sm transition-all", isToday ? "border-indigo-500 ring-2 ring-indigo-50/50" : "border-slate-100")}>
                          <div className="flex items-center justify-between gap-6">
                             <div className="flex items-center gap-4 flex-1">
                                <img src={getPlayerImage(match.team1_img) || ""} className="h-10 w-10 object-contain rounded-xl bg-slate-50 border p-1" />
@@ -431,13 +460,25 @@ export default function ScoreboardPage() {
                             </div>
                          </div>
                          <div className="flex items-center justify-between mt-4 pt-4 border-t border-slate-50">
-                            <div className="text-[10px] font-bold text-slate-400 uppercase">{formatTime(match.date_time_gmt)}IST • {match.venue?.split(',')[0]}</div>
-                            {match.match_ended ? (
+                            <div className="text-[10px] font-bold text-slate-400 uppercase">
+                              {(() => {
+                                const ist = `${formatTime(match.date_time_gmt)} IST`;
+                                const local = formatLocalTime(match.date_time_gmt);
+                                const localPart = local.tz !== "IST" ? ` • ${local.time} ${local.tz}` : "";
+                                const venue = match.venue?.split(",")[0] ? ` • ${match.venue.split(",")[0]}` : "";
+                                return `${ist}${localPart}${venue}`;
+                              })()}
+                            </div>
+                            {match.match_ended && match.points_synced ? (
                               <div className="flex gap-2">
                                  <Button variant="outline" size="sm" onClick={() => setExpandedScorecardId(match.api_match_id)} className="h-8 text-[9px] font-black uppercase shadow-none border-slate-200">Scorecard</Button>
                                  <Button variant="outline" size="sm" onClick={() => setExpandedPointsId(match.api_match_id)} className="h-8 text-[9px] font-black uppercase border-amber-200 text-amber-600 bg-amber-50/50 shadow-none">Breakdown</Button>
                               </div>
-                            ) : <span className="text-[9px] font-black text-amber-500 bg-amber-50 px-2 py-1 rounded uppercase">Live Soon</span>}
+                            ) : match.match_ended && !match.points_synced ? (
+                              <span className="text-[9px] font-black text-blue-600 bg-blue-50 px-2 py-1 rounded uppercase">Processing points</span>
+                            ) : (
+                              <span className="text-[9px] font-black text-amber-500 bg-amber-50 px-2 py-1 rounded uppercase">Live Soon</span>
+                            )}
                          </div>
 
                          {/* Scorecard Modal */}
@@ -648,6 +689,7 @@ export default function ScoreboardPage() {
                                </div>
                             </DialogContent>
                          </Dialog>
+                      </div>
                       </div>
                    )})}
                 </div>
