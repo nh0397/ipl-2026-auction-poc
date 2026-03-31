@@ -55,7 +55,8 @@ export default function ScorecardAuditPage() {
       
       console.log("💾 Checking Local Database Cache...");
       const { data: fixture } = await supabase
-        .from("fixtures")
+        // Old source (ESPN-driven): .from("fixtures")
+        .from("fixtures_cricapi")
         .select("scorecard, status")
         .eq("api_match_id", id)
         .maybeSingle();
@@ -103,7 +104,8 @@ export default function ScorecardAuditPage() {
     try {
       setSyncing(true);
       const { error: syncError } = await supabase
-        .from("fixtures")
+        // Old source (ESPN-driven): .from("fixtures")
+        .from("fixtures_cricapi")
         .update({ 
             scorecard: { data }, 
             status: data.status || "Match Ended",

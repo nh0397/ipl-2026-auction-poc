@@ -4,11 +4,13 @@ import { useEffect, useState, useMemo } from "react";
 import { supabase } from "@/lib/supabase";
 import { Calendar, MapPin, Clock, ChevronDown, Trophy, Loader2, XCircle, User, Zap, ChevronRight, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
+import ScorecardViewer from "@/components/scoreboard/ScorecardViewer";
+import { adaptCricApiToScorecardViewer } from "@/lib/adapters/cricapiScorecard";
 
 interface Fixture {
   id: string;
   api_match_id: string;
-  match_no: number;
+  match_no?: number;
   title: string;
   venue: string | null;
   match_date: string;
@@ -22,6 +24,7 @@ interface Fixture {
   status: string;
   match_started: boolean;
   match_ended: boolean;
+  points_synced?: boolean;
   scorecard: any;
 }
 
@@ -42,9 +45,29 @@ function formatTime(dateTimeGMT: string): string {
   return d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "Asia/Kolkata" });
 }
 
+function formatLocalTime(dateTimeGMT: string): { time: string; tz: string } {
+  const d = new Date(dateTimeGMT);
+  const time = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: true });
+  const tzPart = new Intl.DateTimeFormat(undefined, { timeZoneName: "short" })
+    .formatToParts(d)
+    .find((p) => p.type === "timeZoneName")?.value;
+  return { time, tz: tzPart || "Local" };
+}
+
 function cleanShort(short: string | null): string {
   if (!short) return "";
   return short.endsWith("W") && short.length > 2 ? short.slice(0, -1) : short;
+}
+
+function deriveMatchNo(f: any): number | null {
+  const n = Number(f?.match_no);
+  if (Number.isFinite(n) && n > 0) return n;
+  const s = String(f?.title || f?.match_name || f?.name || "");
+  const m = s.match(/(\d+)(st|nd|rd|th)\s+Match/i);
+  if (m?.[1]) return Number(m[1]);
+  const m2 = s.match(/\bMatch\s+(\d+)\b/i);
+  if (m2?.[1]) return Number(m2[1]);
+  return null;
 }
 
 export default function FixturesPage() {
@@ -59,10 +82,12 @@ export default function FixturesPage() {
 
   useEffect(() => {
     const fetchFixtures = async () => {
+      // Old source (ESPN-driven): .from("fixtures")
       const { data, error } = await supabase
-        .from("fixtures")
+        .from("fixtures_cricapi")
         .select("*")
-        .order("match_no", { ascending: true });
+        // `match_no` might not exist yet; date_time_gmt is always present in CricAPI payload.
+        .order("date_time_gmt", { ascending: true });
 
       if (error) console.error("Error fetching fixtures:", error);
       if (data) setFixtures(data);
@@ -261,7 +286,7 @@ export default function FixturesPage() {
                       <div className="p-4 sm:p-5">
                         {/* Match number */}
                         <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">
-                          Match {match.match_no}
+                          Match {deriveMatchNo(match) ?? "—"}
                         </div>
 
                         {/* Teams */}
@@ -338,6 +363,18 @@ export default function FixturesPage() {
 
                         {/* Meta info */}
                         <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[10px] sm:text-xs font-bold text-slate-400">
+                          {match.date_time_gmt && (
+                            <div className="flex items-center gap-1.5 truncate">
+                              <Clock className="h-3 w-3 flex-shrink-0" />
+                              <span className="truncate">
+                                {formatTime(match.date_time_gmt)} IST
+                                {(() => {
+                                  const local = formatLocalTime(match.date_time_gmt);
+                                  return local.tz !== "IST" ? ` • ${local.time} ${local.tz}` : "";
+                                })()}
+                              </span>
+                            </div>
+                          )}
                           {match.venue && (
                             <div className="flex items-center gap-1.5 truncate">
                               <MapPin className="h-3 w-3 flex-shrink-0" />
@@ -347,21 +384,13 @@ export default function FixturesPage() {
                         </div>
 
                         {/* View Scorecard Button / Pending Status */}
-                        {match.match_ended && match.scorecard?.innings?.length > 0 ? (
+                        {match.match_ended && match.points_synced ? (
                           <div className="mt-4 pt-4 border-t border-slate-50">
                             <button
-                               onClick={async () => {
+                               onClick={() => {
                                  setSelectedMatchId(match.api_match_id);
-                                 setScorecardLoading(true);
-                                 try {
-                                   const res = await fetch(`http://127.0.0.1:5000/scorecard?id=${match.api_match_id}`);
-                                   const data = await res.json();
-                                   setScorecardData(data);
-                                 } catch (e) {
-                                   console.error(e);
-                                 } finally {
-                                   setScorecardLoading(false);
-                                 }
+                                 setScorecardLoading(false);
+                                 setScorecardData(adaptCricApiToScorecardViewer(match.scorecard));
                                }}
                                className="w-full flex items-center justify-center gap-2 py-3 bg-slate-900 hover:bg-black text-white rounded-xl text-xs font-black uppercase tracking-widest transition-all shadow-md shadow-slate-200 group"
                             >
@@ -369,6 +398,13 @@ export default function FixturesPage() {
                               View Full Scorecard
                               <ChevronRight className="h-3.5 w-3.5 ml-1 opacity-50 group-hover:opacity-100 transition-opacity" />
                             </button>
+                          </div>
+                        ) : match.match_ended && !match.points_synced ? (
+                          <div className="mt-4 pt-4 border-t border-slate-50">
+                            <div className="flex items-center justify-center gap-2 py-3 bg-blue-50/50 rounded-xl text-[10px] font-black uppercase tracking-widest text-blue-600 border border-blue-100/50 italic">
+                               <Loader2 className="h-3 w-3 animate-spin" />
+                               Processing points
+                            </div>
                           </div>
                         ) : (isMatchToday || isPast) && (
                           <div className="mt-4 pt-4 border-t border-slate-50">
@@ -409,10 +445,10 @@ export default function FixturesPage() {
                 </div>
                 <div>
                   <h2 className="text-sm sm:text-lg font-black uppercase tracking-tight text-slate-900">
-                    {scorecardData?.match_title || "Full Scorecard"}
+                    {scorecardData?.match_info?.title || "Full Scorecard"}
                   </h2>
                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                    Live from Cricbuzz Scraper
+                    CricAPI scorecard
                   </p>
                 </div>
               </div>
@@ -431,73 +467,7 @@ export default function FixturesPage() {
                    <p className="text-xs font-black text-slate-400 uppercase tracking-widest animate-pulse">Syncing Stats...</p>
                 </div>
               ) : scorecardData?.innings ? (
-                scorecardData.innings.map((inning: any, idx: number) => (
-                  <div key={idx} className="space-y-6">
-                    <div className="flex items-center gap-3 border-b-2 border-slate-900 pb-3">
-                       <Zap className="h-4 w-4 text-blue-600 fill-blue-600" />
-                       <h3 className="text-sm sm:text-base font-black uppercase tracking-wider text-slate-900">
-                         {inning.inning}
-                       </h3>
-                    </div>
-
-                    {/* Batting Table */}
-                    <div className="space-y-3">
-                      <div className="rounded-2xl border border-slate-100 overflow-hidden shadow-sm">
-                        <div className="bg-slate-50 px-4 py-3 flex items-center text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                          <div className="flex-1">Batsman</div>
-                          <div className="w-10 text-right">R</div>
-                          <div className="w-10 text-right">B</div>
-                          <div className="w-12 text-right">SR</div>
-                        </div>
-                        <div className="divide-y divide-slate-100 bg-white">
-                          {inning.batsmen.map((b: any, bidx: number) => (
-                            <div key={bidx} className="px-4 py-4 flex items-center hover:bg-slate-50 transition-colors">
-                              <div className="flex-1 min-w-0 pr-2">
-                                <div className="text-xs font-black text-slate-900 uppercase truncate">
-                                  {b.name}
-                                </div>
-                                <div className="text-[10px] text-slate-400 font-bold truncate">
-                                  {b.out_by}
-                                </div>
-                              </div>
-                              <div className="w-10 text-right text-xs font-black text-slate-900">{b.runs}</div>
-                              <div className="w-10 text-right text-[10px] font-bold text-slate-400">{b.balls}</div>
-                              <div className="w-12 text-right text-[10px] font-black text-blue-600">{b.sr}</div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Bowling Table */}
-                    <div className="space-y-3">
-                      <div className="rounded-2xl border border-slate-100 overflow-hidden shadow-sm">
-                        <div className="bg-slate-50 px-4 py-3 flex items-center text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                          <div className="flex-1">Bowler</div>
-                          <div className="w-10 text-right">O</div>
-                          <div className="w-10 text-right">R</div>
-                          <div className="w-10 text-right">W</div>
-                          <div className="w-12 text-right">Eco</div>
-                        </div>
-                        <div className="divide-y divide-slate-100 bg-white">
-                          {inning.bowlers.map((bo: any, boidx: number) => (
-                            <div key={boidx} className="px-4 py-4 flex items-center hover:bg-slate-50 transition-colors">
-                              <div className="flex-1 min-w-0 pr-2">
-                                <div className="text-xs font-black text-slate-900 uppercase truncate">
-                                  {bo.name}
-                                </div>
-                              </div>
-                              <div className="w-10 text-right text-xs font-black text-slate-900">{bo.overs}</div>
-                              <div className="w-10 text-right text-[10px] font-bold text-slate-400">{bo.runs}</div>
-                              <div className="w-10 text-right text-xs font-black text-blue-600">{bo.wickets}</div>
-                              <div className="w-12 text-right text-[10px] font-black text-slate-400">{bo.economy || (bo.runs/(parseFloat(bo.overs)||1)).toFixed(2)}</div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ))
+                <ScorecardViewer scorecard={scorecardData} />
               ) : null}
             </div>
             

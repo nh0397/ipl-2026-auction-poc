@@ -60,3 +60,4 @@ for i in range(0, len(fixtures), 50):
         print(f"Error inserting batch: {res.text}")
 
 print("Done populating fixtures.")
+
