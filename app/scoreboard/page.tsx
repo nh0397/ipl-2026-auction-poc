@@ -26,6 +26,7 @@ import React from "react";
 import ScorecardViewer from "@/components/scoreboard/ScorecardViewer";
 import { ScoringRulesLegend } from "@/components/rules/ScoringRulesLegend";
 import { adaptCricApiToScorecardViewer } from "@/lib/adapters/cricapiScorecard";
+import { scorePjRulesPlayer, scoreMy11CirclePlayer, scoreIplFantasyPlayer } from "@/lib/scoring";
 
 // ─── Fixture helpers ────────────────────────────────────────────────
 interface Fixture {
@@ -142,6 +143,12 @@ export default function ScoreboardPage() {
   const [expandedScorecardId, setExpandedScorecardId] = useState<string | null>(null);
   const [expandedPointsId, setExpandedPointsId] = useState<string | null>(null);
   const [showBreakdownId, setShowBreakdownId] = useState<string | null>(null);
+  const [pointsVariant, setPointsVariant] = useState<"pjRules" | "my11circle" | "iplFantasy">("pjRules");
+
+  useEffect(() => {
+    // Prevent "stuck open" breakdown when switching scoring variants.
+    setShowBreakdownId(null);
+  }, [pointsVariant]);
   const [subLoading, setSubLoading] = useState(false);
   const [tabLoading, setTabLoading] = useState(false);
 
@@ -330,9 +337,18 @@ export default function ScoreboardPage() {
 
         {/* Tabs */}
         <div className="flex bg-white/50 backdrop-blur-md p-1.5 rounded-[1.5rem] border border-slate-200 overflow-x-auto no-scrollbar">
-           {["sheets", "standings", "fixtures"].map(tab => (
-             <button key={tab} onClick={() => setActiveTab(tab as any)} className={cn("px-8 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap flex-1", activeTab === tab ? "bg-slate-900 text-white shadow-lg" : "text-slate-400")}>{tab}</button>
-           ))}
+           {(["sheets", "standings", "fixtures"] as const).map(tab => {
+             const label = tab === "fixtures" ? "fixtures/results" : tab;
+             return (
+               <button
+                 key={tab}
+                 onClick={() => setActiveTab(tab as any)}
+                 className={cn("px-8 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap flex-1", activeTab === tab ? "bg-slate-900 text-white shadow-lg" : "text-slate-400")}
+               >
+                 {label}
+               </button>
+             );
+           })}
         </div>
 
         {/* ─── TAB: STANDINGS ─── */}
@@ -500,6 +516,26 @@ export default function ScoreboardPage() {
                                <div className="bg-gradient-to-br from-indigo-600 to-blue-700 p-8 text-white">
                                   <DialogTitle className="text-2xl font-black uppercase tracking-tight leading-none">Scoring Intelligence</DialogTitle>
                                   <p className="text-[9px] font-black uppercase opacity-90 mt-1.5 leading-none">{match.team1_short} vs {match.team2_short} • 100% Team-Aware Coverage</p>
+                                  <div className="mt-5 inline-flex rounded-xl bg-white/10 p-1 text-[10px] font-black uppercase tracking-widest">
+                                    <button
+                                      onClick={() => setPointsVariant("pjRules")}
+                                      className={cn("px-3 py-1.5 rounded-lg transition-all", pointsVariant === "pjRules" ? "bg-white text-indigo-700 shadow-sm" : "text-white/80 hover:text-white")}
+                                    >
+                                      PJ Rules
+                                    </button>
+                                    <button
+                                      onClick={() => setPointsVariant("my11circle")}
+                                      className={cn("px-3 py-1.5 rounded-lg transition-all", pointsVariant === "my11circle" ? "bg-white text-indigo-700 shadow-sm" : "text-white/80 hover:text-white")}
+                                    >
+                                      My11Circle
+                                    </button>
+                                    <button
+                                      onClick={() => setPointsVariant("iplFantasy")}
+                                      className={cn("px-3 py-1.5 rounded-lg transition-all", pointsVariant === "iplFantasy" ? "bg-white text-indigo-700 shadow-sm" : "text-white/80 hover:text-white")}
+                                    >
+                                      IPL Fantasy
+                                    </button>
+                                  </div>
                                </div>
                                <div className="p-2 sm:p-8 max-h-[75vh] overflow-y-auto no-scrollbar">
                                   <table className="w-full text-left">
@@ -508,7 +544,16 @@ export default function ScoreboardPage() {
                                      </thead>
                                      <tbody className="divide-y divide-slate-100">
                                         {expandedPointsId === match.api_match_id ? (() => {
-                                            const sc = adaptCricApiToScorecardViewer(match.scorecard) as any; if (!sc?.innings) return null;
+                                            console.log("[breakdown] match", {
+                                              api_match_id: match.api_match_id,
+                                              points_synced: match.points_synced,
+                                              has_scorecard: !!match.scorecard,
+                                            });
+                                            console.log("[breakdown] raw scorecard keys", Object.keys(match.scorecard || {}));
+
+                                            const sc = adaptCricApiToScorecardViewer(match.scorecard) as any;
+                                            console.log("[breakdown] adapted innings length", sc?.innings?.length ?? null);
+                                            if (!sc?.innings) return null;
                                             const stats: Record<string, any> = {};
                                             const team1 = match.team1_short || "";
                                             const team2 = match.team2_short || "";
@@ -569,15 +614,18 @@ export default function ScoreboardPage() {
                                                   const key = findMappedKey(rawN, currentTeam);
                                                   const dStr = (b.dismissal || b["dismissal-text"] || "").toLowerCase();
 
-                                                  if (!stats[key]) stats[key] = { n: key.split('_')[0], team: currentTeam, r:0, b:0, f:0, s:0, w:0, m:0, o:0, r_conc:0, c:0, st:0, dots:0, lbwB:0, ro:0, isDuck: false, role: 'Batter' }; 
+                                                  if (!stats[key]) stats[key] = { n: key.split('_')[0], team: currentTeam, r:0, b:0, f:0, s:0, w:0, m:0, o:0, r_conc:0, c:0, st:0, dots:0, lbwB:0, ro:0, isDuck: false, role: 'Batter', dismissal: "" }; 
                                                   stats[key].r += Number(b.R || b.r) || 0; 
                                                   stats[key].b += Number(b.B || b.b) || 0; 
                                                   stats[key].f += Number(b['4s']) || 0; 
                                                   stats[key].s += Number(b['6s']) || 0;
+                                                  if (dStr) stats[key].dismissal = dStr;
                                                   if (rawN.includes('†')) stats[key].role = 'WK';
                                                   else if (stats[key].role === 'Fielder') stats[key].role = 'Batter';
 
                                                   if (stats[key].r === 0 && dStr !== "not out" && dStr !== "") stats[key].isDuck = true;
+                                                  // LBW/Bowled wickets credit (only when a dismissal string exists)
+                                                  if (dStr.includes("lbw") || dStr.includes("bowled")) stats[key].lbwB += 1;
                                                });
 
                                                // Process Bowling
@@ -634,70 +682,153 @@ export default function ScoreboardPage() {
                                                });
                                             });
 
-                                            return Object.values(stats).sort((a: any, b: any) => (b.r + b.w*30) - (a.r + a.w*30)).map((p: any) => {
-                                               let base = 4; // Playing XI
-                                               
-                                               // Batting Logic (Official)
-                                               let b_pts = p.r + (p.f * 1) + (p.s * 2);
-                                               if (p.r >= 100) b_pts += 16; else if (p.r >= 75) b_pts += 12; else if (p.r >= 50) b_pts += 8; else if (p.r >= 25) b_pts += 4;
-                                               if (p.isDuck && p.role !== 'Bowler') b_pts -= 2;
-                                               // Strike Rate (Min 10 balls OR 20 runs)
-                                               let sr_pts = 0;
-                                               if (p.r >= 20 || p.b >= 10) {
-                                                  const sr = (p.r / p.b) * 100;
-                                                  if (sr >= 170) sr_pts = 6; else if (sr >= 150) sr_pts = 4; else if (sr >= 130) sr_pts = 2;
-                                                  else if (sr < 50) sr_pts = -6; else if (sr < 60) sr_pts = -4; else if (sr < 70) sr_pts = -2;
-                                               }
-                                               b_pts += sr_pts;
-                                               
-                                               // Bowling Logic (Official)
-                                               let bw_pts = (p.w * 30) + (p.lbwB * 8) + (p.m * 12) + (p.dots * 1);
-                                               if (p.w >= 5) bw_pts += 12; else if (p.w >= 4) bw_pts += 8; else if (p.w >= 3) bw_pts += 4;
-                                               // Economy Rate (Min 2 overs)
-                                               let eco_pts = 0;
-                                               if (p.o >= 2) {
-                                                  const eco = p.r_conc / p.o;
-                                                  if (eco < 5) eco_pts = 6; else if (eco < 6) eco_pts = 4; else if (eco < 7) eco_pts = 2;
-                                                  else if (eco >= 12) eco_pts = -6; else if (eco >= 11) eco_pts = -4; else if (eco >= 10) eco_pts = -2;
-                                               }
-                                               bw_pts += eco_pts;
-                                               
-                                               // Fielding Logic (Official)
-                                               let f_pts = (p.c * 8) + (p.st * 12) + (p.ro * 12);
-                                               if (p.c >= 3) f_pts += 4;
-                                               
-                                               const total = base + b_pts + bw_pts + f_pts;
+                                            console.log("[breakdown] derived players", Object.keys(stats).length);
 
+                                            const rows = Object.values(stats).map((p: any) => {
+                                              // Shared stat line (derived from adapted CricAPI scorecard)
+                                              const base = 4; // Playing XI
+
+                                              if (pointsVariant === "pjRules") {
+                                                const scored = scorePjRulesPlayer({
+                                                  batting: { runs: p.r, balls: p.b, fours: p.f, sixes: p.s, dismissal: p.dismissal || "not out" },
+                                                  bowling: {
+                                                    overs: p.o,
+                                                    maidens: p.m,
+                                                    runs_conceded: p.r_conc,
+                                                    wickets: p.w,
+                                                    lbw_bowled_wickets: p.lbwB,
+                                                    dot_balls: p.dots,
+                                                  },
+                                                  fielding: { catches: p.c, stumpings: p.st, runout_direct: p.ro, runout_indirect: 0 },
+                                                  in_announced_lineup: true,
+                                                });
+
+                                                return {
+                                                  ...p,
+                                                  _variant: "pjRules",
+                                                  base,
+                                                  b_pts: scored.batting_pts,
+                                                  bw_pts: scored.bowling_pts,
+                                                  f_pts: scored.fielding_pts,
+                                                  sr_pts: null,
+                                                  eco_pts: null,
+                                                  total: base + scored.total_pts - 4, // scored.total_pts already includes lineup=+4; keep display consistent
+                                                  breakdownHint: "PJ Rules (Python)",
+                                                };
+                                              }
+
+                                              if (pointsVariant === "my11circle") {
+                                                const isBowlerType = /bowler/i.test(String(p.role || "")) || (Number(p.o) || 0) >= 2 || (Number(p.w) || 0) > 0;
+                                                const scored = scoreMy11CirclePlayer(
+                                                  {
+                                                    batting: { runs: p.r, balls: p.b, fours: p.f, sixes: p.s, dismissal: p.dismissal || "not out" },
+                                                    bowling: {
+                                                      overs: p.o,
+                                                      maidens: p.m,
+                                                      runs_conceded: p.r_conc,
+                                                      wickets: p.w,
+                                                      lbw_bowled_wickets: p.lbwB,
+                                                      dot_balls: p.dots,
+                                                    },
+                                                    fielding: { catches: p.c, stumpings: p.st, runout_direct: p.ro, runout_indirect: 0 },
+                                                    in_announced_lineup: true,
+                                                  },
+                                                  { excludeDuckForBowlers: true, isBowler: isBowlerType }
+                                                );
+
+                                                return {
+                                                  ...p,
+                                                  _variant: "my11circle",
+                                                  base,
+                                                  b_pts: scored.batting_pts,
+                                                  bw_pts: scored.bowling_pts,
+                                                  f_pts: scored.fielding_pts,
+                                                  sr_pts: scored.sr_pts,
+                                                  eco_pts: scored.eco_pts,
+                                                  total: scored.total_pts,
+                                                  breakdownHint: "My11Circle rules",
+                                                };
+                                              }
+
+                                              // IPL Fantasy (per screenshots)
+                                              const ipl = scoreIplFantasyPlayer(
+                                                {
+                                                  batting: { runs: p.r, balls: p.b, fours: p.f, sixes: p.s, dismissal: p.dismissal || "not out" },
+                                                  bowling: {
+                                                    overs: p.o,
+                                                    maidens: p.m,
+                                                    runs_conceded: p.r_conc,
+                                                    wickets: p.w,
+                                                    lbw_bowled_wickets: p.lbwB,
+                                                    dot_balls: p.dots,
+                                                  },
+                                                  fielding: { catches: p.c, stumpings: p.st, runout_direct: p.ro, runout_indirect: 0 },
+                                                  in_announced_lineup: true,
+                                                },
+                                                { excludeDuckForBowlers: true, isBowler: p.role === "Bowler", applyStrikeRateForBowlers: false }
+                                              );
+
+                                              return {
+                                                ...p,
+                                                _variant: "iplFantasy",
+                                                base,
+                                                b_pts: ipl.batting_pts,
+                                                bw_pts: ipl.bowling_pts,
+                                                f_pts: ipl.fielding_pts,
+                                                sr_pts: ipl.sr_pts,
+                                                eco_pts: ipl.eco_pts,
+                                                total: ipl.total_pts,
+                                                breakdownHint: "IPL Fantasy rules",
+                                              };
+                                            });
+
+                                            return rows
+                                              .sort((a: any, b: any) => (b.total || 0) - (a.total || 0))
+                                              .map((p: any) => {
                                                return (
                                                   <React.Fragment key={`${p.n}_${p.team}`}>
                                                      <tr onClick={() => setShowBreakdownId(showBreakdownId === `${p.n}_${p.team}` ? null : `${p.n}_${p.team}`)} className={cn("hover:bg-slate-50 cursor-pointer transition-all", showBreakdownId === `${p.n}_${p.team}` ? "bg-slate-50" : "")}>
                                                         <td className="px-4 py-4"><div className="flex items-center gap-1.5"><span className="text-xs font-black uppercase text-slate-800 leading-none">{p.n}</span><ChevronRight size={10} className={cn("text-indigo-500", showBreakdownId === `${p.n}_${p.team}` ? "rotate-90" : "")} /></div><p className="text-[7px] font-black uppercase text-slate-400 mt-1">{p.team} • {p.role}</p></td>
                                                         <td className="px-3 py-4 text-center"><div className="text-[9px] font-black text-slate-900 leading-none">{p.r}R • {p.w}W • {p.c}C</div></td>
-                                                        <td className="px-4 py-4 text-right"><div className="text-sm font-black text-slate-900">{Math.round(total)}</div></td>
+                                                        <td className="px-4 py-4 text-right"><div className="text-sm font-black text-slate-900">{Math.round(p.total)}</div></td>
                                                      </tr>
                                                      {showBreakdownId === `${p.n}_${p.team}` && (
                                                         <tr className="bg-slate-50/50 border-none"><td colSpan={3} className="px-4 pb-6 pt-2 border-none">
                                                            <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-inner grid grid-cols-1 sm:grid-cols-2 gap-6 animate-in slide-in-from-top-2">
                                                               <div className="space-y-2">
-                                                                 <h4 className="text-[8px] font-black uppercase text-indigo-600 tracking-widest border-b pb-1">Official Breakdown ({p.team})</h4>
+                                                                 <h4 className="text-[8px] font-black uppercase text-indigo-600 tracking-widest border-b pb-1">
+                                                                   {pointsVariant === "pjRules" ? "PJ Rules Breakdown" : pointsVariant === "my11circle" ? "My11Circle Breakdown" : "IPL Fantasy Breakdown"} ({p.team})
+                                                                 </h4>
                                                                  <div className="space-y-2.5">
                                                                     <div className="flex flex-col gap-0.5">
                                                                        <div className="flex justify-between text-[10px]"><span className="text-slate-400 font-bold uppercase tracking-tight">Playing XI Base</span><span className="font-black text-slate-900">+4.0</span></div>
                                                                        <p className="text-[7px] font-black text-slate-300 uppercase leading-none">Automatic Entry Bonus</p>
                                                                     </div>
                                                                     <div className="flex flex-col gap-0.5">
-                                                                       <div className="flex justify-between text-[10px]"><span className="text-slate-400 font-bold uppercase tracking-tight">Batting (Official)</span><span className="font-black text-slate-900">+{b_pts.toFixed(1)}</span></div>
-                                                                       <p className="text-[7px] font-black text-indigo-400 uppercase leading-none italic">{p.r}R + ({p.f}*1) + ({p.s}*2) + SR({sr_pts}) + MS</p>
+                                                                       <div className="flex justify-between text-[10px]"><span className="text-slate-400 font-bold uppercase tracking-tight">Batting</span><span className="font-black text-slate-900">+{Number(p.b_pts || 0).toFixed(1)}</span></div>
+                                                                       {pointsVariant === "pjRules" ? (
+                                                                         <p className="text-[7px] font-black text-indigo-400 uppercase leading-none italic">{p.r}R + ({p.f}*1) + ({p.s}*2) + SR({p.sr_pts}) + MS</p>
+                                                                       ) : (
+                                                                         <p className="text-[7px] font-black text-slate-300 uppercase leading-none">{p.breakdownHint || ""}</p>
+                                                                       )}
                                                                     </div>
                                                                     <div className="flex flex-col gap-0.5">
-                                                                       <div className="flex justify-between text-[10px]"><span className="text-slate-400 font-bold uppercase tracking-tight">Bowling (Official)</span><span className="font-black text-slate-900">+{bw_pts.toFixed(1)}</span></div>
-                                                                       <p className="text-[7px] font-black text-indigo-400 uppercase leading-none italic">({p.w}*30) + ({p.lbwB}*8) + ({p.m}*12) + {p.dots}D + ECO({eco_pts}) + MS</p>
+                                                                       <div className="flex justify-between text-[10px]"><span className="text-slate-400 font-bold uppercase tracking-tight">Bowling</span><span className="font-black text-slate-900">+{Number(p.bw_pts || 0).toFixed(1)}</span></div>
+                                                                       {pointsVariant === "pjRules" ? (
+                                                                         <p className="text-[7px] font-black text-indigo-400 uppercase leading-none italic">({p.w}*30) + ({p.lbwB}*8) + ({p.m}*12) + {p.dots}D + ECO({p.eco_pts}) + MS</p>
+                                                                       ) : (
+                                                                         <p className="text-[7px] font-black text-slate-300 uppercase leading-none">{p.breakdownHint || ""}</p>
+                                                                       )}
                                                                     </div>
                                                                     <div className="flex flex-col gap-0.5">
-                                                                       <div className="flex justify-between text-[10px]"><span className="text-slate-400 font-bold uppercase tracking-tight">Fielding (Official)</span><span className="font-black text-slate-900">+{f_pts.toFixed(1)}</span></div>
-                                                                       <p className="text-[7px] font-black text-indigo-400 uppercase leading-none italic">({p.c}*8) + ({p.st}*12) + ({p.ro}*12)</p>
+                                                                       <div className="flex justify-between text-[10px]"><span className="text-slate-400 font-bold uppercase tracking-tight">Fielding</span><span className="font-black text-slate-900">+{Number(p.f_pts || 0).toFixed(1)}</span></div>
+                                                                       {pointsVariant === "pjRules" ? (
+                                                                         <p className="text-[7px] font-black text-indigo-400 uppercase leading-none italic">({p.c}*8) + ({p.st}*12) + ({p.ro}*12)</p>
+                                                                       ) : (
+                                                                         <p className="text-[7px] font-black text-slate-300 uppercase leading-none">{p.breakdownHint || ""}</p>
+                                                                       )}
                                                                     </div>
-                                                                    <div className="border-t pt-1.5 flex justify-between text-[11px] font-black uppercase"><span className="text-slate-900">FINAL TOTAL</span><span className="text-slate-900">{total.toFixed(1)}</span></div>
+                                                                    <div className="border-t pt-1.5 flex justify-between text-[11px] font-black uppercase"><span className="text-slate-900">FINAL TOTAL</span><span className="text-slate-900">{Number(p.total || 0).toFixed(1)}</span></div>
                                                                  </div>
                                                               </div>
                                                            </div>

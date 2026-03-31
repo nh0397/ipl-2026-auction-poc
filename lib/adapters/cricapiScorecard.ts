@@ -14,6 +14,12 @@ function parseTeamFromInningLabel(label: string | null | undefined): string {
  * { match_info: any, innings: [{ team, batting[], bowling[], extras, total, fall_of_wickets }] }
  */
 export function adaptCricApiToScorecardViewer(scorecard: CricApiScorecard) {
+  // Idempotency: if the DB already contains an adapted scorecard,
+  // don't try to adapt it again (would produce empty innings).
+  if (scorecard?.innings && Array.isArray(scorecard.innings)) {
+    return scorecard;
+  }
+
   const innings = ((scorecard?.scorecard || []) as any[]).map((inn) => {
     const team = parseTeamFromInningLabel(inn?.inning);
 

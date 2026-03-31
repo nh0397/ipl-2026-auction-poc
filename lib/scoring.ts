@@ -214,7 +214,8 @@ export function iplFantasyFieldingPoints(fld: Partial<IplFantasyFielding> | unde
   return pts;
 }
 
-export function scoreIplFantasyPlayer(p: IplFantasyPlayerForScoring) {
+// PJ Rules (Python) scorer (name kept distinct from IPL Fantasy app rules).
+export function scorePjRulesPlayer(p: IplFantasyPlayerForScoring) {
   const b = iplFantasyBattingPoints(p.batting);
   const bw = iplFantasyBowlingPoints(p.bowling);
   const f = iplFantasyFieldingPoints(p.fielding);
@@ -227,4 +228,228 @@ export function scoreIplFantasyPlayer(p: IplFantasyPlayerForScoring) {
   const total = Math.round(base * mult * 100) / 100;
 
   return { batting_pts: b, bowling_pts: bw, fielding_pts: f, extra_pts: extra, multiplier: mult, total_pts: total };
+}
+
+// ============================================================================
+// My11Circle (rules per screenshots)
+// ============================================================================
+
+export function my11CircleBattingPoints(bat: Partial<IplFantasyBatting> | undefined): { points: number; srPoints: number } {
+  const runs = Number(bat?.runs ?? 0) || 0;
+  const balls = Number(bat?.balls ?? 0) || 0;
+  const fours = Number(bat?.fours ?? 0) || 0;
+  const sixes = Number(bat?.sixes ?? 0) || 0;
+  const d = String(bat?.dismissal ?? "").toLowerCase();
+
+  const isDismissed = !["", "not out", "retired hurt"].includes(d);
+
+  let pts = 0;
+  pts += runs + fours * 4 + sixes * 6;
+
+  if (runs >= 100) pts += 16;
+  else if (runs >= 75) pts += 12;
+  else if (runs >= 50) pts += 8;
+  else if (runs >= 25) pts += 4;
+
+  if (runs === 0 && isDismissed) pts -= 2; // excluding bowlers is handled at callsite if needed
+
+  let srPts = 0;
+  // Screenshot: "Minimum 20 runs OR 10 balls"
+  if (runs >= 20 || balls >= 10) {
+    const sr = balls > 0 ? (runs / balls) * 100 : 0;
+    if (sr >= 170) srPts = 6;
+    else if (sr >= 150) srPts = 4;
+    else if (sr >= 130) srPts = 2;
+    else if (sr < 50) srPts = -6;
+    else if (sr < 60) srPts = -4;
+    else if (sr < 70) srPts = -2;
+  }
+  pts += srPts;
+
+  return { points: pts, srPoints: srPts };
+}
+
+export function my11CircleBowlingPoints(bwl: Partial<IplFantasyBowling> | undefined): { points: number; ecoPoints: number } {
+  const overs = Number(bwl?.overs ?? 0) || 0;
+  const maidens = Number(bwl?.maidens ?? 0) || 0;
+  const runsC = Number(bwl?.runs_conceded ?? 0) || 0;
+  const wickets = Number(bwl?.wickets ?? 0) || 0;
+  const lbwB = Number(bwl?.lbw_bowled_wickets ?? 0) || 0;
+  const dots = Number(bwl?.dot_balls ?? 0) || 0;
+
+  let pts = 0;
+  pts += dots + wickets * 30 + lbwB * 8 + maidens * 12;
+
+  if (wickets >= 5) pts += 12;
+  else if (wickets === 4) pts += 8;
+  else if (wickets === 3) pts += 4;
+
+  let ecoPts = 0;
+  // Screenshot: min 2 overs
+  if (overs >= 2) {
+    const eco = runsC / overs;
+    if (eco < 5) ecoPts = 6;
+    else if (eco <= 5.99) ecoPts = 4;
+    else if (eco <= 6.99) ecoPts = 2;
+    else if (eco <= 9.99) ecoPts = 0;
+    else if (eco <= 10.99) ecoPts = -2;
+    else if (eco <= 11.99) ecoPts = -4;
+    else ecoPts = -6;
+  }
+  pts += ecoPts;
+
+  return { points: pts, ecoPoints: ecoPts };
+}
+
+export function my11CircleFieldingPoints(fld: Partial<IplFantasyFielding> | undefined): number {
+  const catches = Number(fld?.catches ?? 0) || 0;
+  let pts = catches * 8;
+  if (catches >= 3) pts += 4;
+  pts += (Number(fld?.stumpings ?? 0) || 0) * 12;
+  pts += (Number(fld?.runout_direct ?? 0) || 0) * 12;
+  pts += (Number(fld?.runout_indirect ?? 0) || 0) * 6;
+  return pts;
+}
+
+export function scoreMy11CirclePlayer(p: IplFantasyPlayerForScoring, opts?: { excludeDuckForBowlers?: boolean; isBowler?: boolean }) {
+  const batting = my11CircleBattingPoints(p.batting);
+  let battingPts = batting.points;
+  if (opts?.excludeDuckForBowlers && opts?.isBowler) {
+    // Undo duck penalty if applied for bowlers (screenshot: duck excluding bowlers)
+    const runs = Number(p.batting?.runs ?? 0) || 0;
+    const d = String(p.batting?.dismissal ?? "").toLowerCase();
+    const isDismissed = !["", "not out", "retired hurt"].includes(d);
+    if (runs === 0 && isDismissed) battingPts += 2;
+  }
+
+  const bowling = my11CircleBowlingPoints(p.bowling);
+  const fieldingPts = my11CircleFieldingPoints(p.fielding);
+
+  const extra = p.in_announced_lineup ? 4 : 0; // user explicitly: Playing 11 Bonus 4
+  const total = battingPts + bowling.points + fieldingPts + extra;
+
+  return {
+    batting_pts: battingPts,
+    bowling_pts: bowling.points,
+    fielding_pts: fieldingPts,
+    extra_pts: extra,
+    sr_pts: batting.srPoints,
+    eco_pts: bowling.ecoPoints,
+    total_pts: total,
+  };
+}
+
+// ============================================================================
+// IPL Fantasy (rules per screenshots)
+// ============================================================================
+
+export function iplFantasyAppBattingPoints(
+  bat: Partial<IplFantasyBatting> | undefined,
+  opts?: { excludeDuckForBowlers?: boolean; isBowler?: boolean }
+): { points: number; srPoints: number } {
+  const runs = Number(bat?.runs ?? 0) || 0;
+  const balls = Number(bat?.balls ?? 0) || 0;
+  const fours = Number(bat?.fours ?? 0) || 0;
+  const sixes = Number(bat?.sixes ?? 0) || 0;
+  const d = String(bat?.dismissal ?? "").toLowerCase();
+
+  const isDismissed = !["", "not out", "retired hurt"].includes(d);
+
+  let pts = 0;
+
+  // Batting base
+  pts += runs * 1;
+  pts += fours * 1; // Every Four Bonus = 1
+  pts += sixes * 2; // Every Six Bonus = 2
+
+  // Milestones:
+  // - 30 runs bonus: +4
+  // - Half century: +8
+  // - Century: +16 (and does NOT also get half-century bonus)
+  if (runs >= 100) pts += 16;
+  else if (runs >= 50) pts += 8;
+  else if (runs >= 30) pts += 4;
+
+  // Duck: -2 (excluding bowlers)
+  if (runs === 0 && isDismissed) {
+    const exclude = !!opts?.excludeDuckForBowlers && !!opts?.isBowler;
+    if (!exclude) pts -= 2;
+  }
+
+  // Strike rate (except bowlers): min 10 balls OR 20 runs
+  let srPts = 0;
+  if (runs >= 20 || balls >= 10) {
+    const sr = balls > 0 ? (runs / balls) * 100 : 0;
+    if (sr >= 170) srPts = 6;
+    else if (sr >= 150) srPts = 4;
+    else if (sr >= 130) srPts = 2;
+    else if (sr < 50) srPts = -6;
+    else if (sr < 60) srPts = -4;
+    else if (sr < 70) srPts = -2;
+  }
+  pts += srPts;
+
+  return { points: pts, srPoints: srPts };
+}
+
+export function iplFantasyAppBowlingPoints(bwl: Partial<IplFantasyBowling> | undefined): { points: number; ecoPoints: number } {
+  const overs = Number(bwl?.overs ?? 0) || 0;
+  const maidens = Number(bwl?.maidens ?? 0) || 0;
+  const runsC = Number(bwl?.runs_conceded ?? 0) || 0;
+  const wickets = Number(bwl?.wickets ?? 0) || 0;
+  const lbwB = Number(bwl?.lbw_bowled_wickets ?? 0) || 0;
+
+  let pts = 0;
+  pts += wickets * 25; // Wicket (except run-out) = 25
+  pts += maidens * 12; // Maiden over bonus = 12
+  pts += lbwB * 8; // LBW/Bowled bonus = 8
+
+  // Wicket haul bonuses
+  if (wickets >= 5) pts += 16;
+  else if (wickets === 4) pts += 8;
+  else if (wickets === 3) pts += 4;
+
+  // Economy rate: min 2 overs
+  let ecoPts = 0;
+  if (overs >= 2) {
+    const eco = runsC / overs;
+    if (eco < 5) ecoPts = 6;
+    else if (eco <= 5.99) ecoPts = 4;
+    else if (eco <= 6.99) ecoPts = 2;
+    else if (eco <= 9.99) ecoPts = 0;
+    else if (eco <= 10.99) ecoPts = -2;
+    else if (eco <= 11.99) ecoPts = -4;
+    else ecoPts = -6;
+  }
+  pts += ecoPts;
+
+  return { points: pts, ecoPoints: ecoPts };
+}
+
+export function scoreIplFantasyPlayer(
+  p: IplFantasyPlayerForScoring,
+  opts?: { excludeDuckForBowlers?: boolean; isBowler?: boolean; applyStrikeRateForBowlers?: boolean }
+) {
+  const batting = iplFantasyAppBattingPoints(p.batting, { excludeDuckForBowlers: opts?.excludeDuckForBowlers, isBowler: opts?.isBowler });
+  const bowling = iplFantasyAppBowlingPoints(p.bowling);
+  const fieldingPts = my11CircleFieldingPoints(p.fielding); // identical per screenshots
+
+  // If the player is a bowler and we should exclude SR penalties/bonuses (except bowlers), remove SR part.
+  let battingPts = batting.points;
+  if (opts?.isBowler && opts?.applyStrikeRateForBowlers === false) {
+    battingPts -= batting.srPoints;
+  }
+
+  const extra = p.in_announced_lineup ? 4 : 0; // Playing 11 bonus = 4
+  const total = battingPts + bowling.points + fieldingPts + extra;
+
+  return {
+    batting_pts: battingPts,
+    bowling_pts: bowling.points,
+    fielding_pts: fieldingPts,
+    extra_pts: extra,
+    sr_pts: opts?.isBowler && opts?.applyStrikeRateForBowlers === false ? 0 : batting.srPoints,
+    eco_pts: bowling.ecoPoints,
+    total_pts: total,
+  };
 }
