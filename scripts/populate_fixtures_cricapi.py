@@ -8,7 +8,13 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "../.env"))
 
 SUPABASE_URL = os.getenv("NEXT_PUBLIC_SUPABASE_URL")
 SUPABASE_KEY = os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY")
-SB_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or SUPABASE_KEY
+# Service role key may be provided as either `SUPABASE_SERVICE_ROLE_KEY`
+# or `SUPABASE_ACCESS_TOKEN` depending on how you stored secrets in GitHub.
+SB_SERVICE_KEY = (
+    os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    or os.getenv("SUPABASE_ACCESS_TOKEN")
+    or SUPABASE_KEY
+)
 
 # Your env var may be named either `CRICAPI_KEY` or `NEXT_PUBLIC_CRICAPI_KEY`.
 CRICAPI_KEY = os.getenv("CRICAPI_KEY") or os.getenv("NEXT_PUBLIC_CRICAPI_KEY")

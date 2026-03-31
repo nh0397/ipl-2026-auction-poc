@@ -33,7 +33,7 @@ jobs:
       - name: Populate fixtures_cricapi
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_ACCESS_TOKEN }}
           NEXT_PUBLIC_CRICAPI_KEY: ${{ secrets.NEXT_PUBLIC_CRICAPI_KEY }}
         run: |
           python scripts/populate_fixtures_cricapi.py
@@ -42,7 +42,7 @@ jobs:
         id: sync_scorecards
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_ACCESS_TOKEN }}
           NEXT_PUBLIC_CRICAPI_KEY: ${{ secrets.NEXT_PUBLIC_CRICAPI_KEY }}
         run: |
           python scripts/sync_scorecards_cricapi.py \

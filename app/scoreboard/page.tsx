@@ -159,6 +159,35 @@ export default function ScoreboardPage() {
   const [sheetFranchiseId, setSheetFranchiseId] = useState<string | null>(null);
   const today = useMemo(() => getTodayIST(), []);
 
+  const matchByNo = useMemo(() => {
+    const map = new Map<number, any>();
+    (allMatches || []).forEach((m) => {
+      const n = Number(m?.match_no);
+      if (Number.isFinite(n)) map.set(n, m);
+    });
+    return map;
+  }, [allMatches]);
+
+  const effectivePointsByPlayerMatch = useMemo(() => {
+    const map = new Map<string, number>();
+    (allMatchPoints || []).forEach((pt: any) => {
+      if (!pt?.player_id || !pt?.match_id) return;
+      map.set(`${pt.player_id}_${pt.match_id}`, Number(pt.points) || 0);
+    });
+    Object.values(pendingEdits || {}).forEach((ed: any) => {
+      if (!ed?.player_id || !ed?.match_id) return;
+      map.set(`${ed.player_id}_${ed.match_id}`, Number(ed.points) || 0);
+    });
+    return map;
+  }, [allMatchPoints, pendingEdits]);
+
+  const getEffectivePointsForPlayerMatchNo = (playerId: string, matchNo: number) => {
+    const m = matchByNo.get(matchNo);
+    if (!m?.id) return 0;
+    const key = `${playerId}_${m.id}`;
+    return effectivePointsByPlayerMatch.get(key) ?? 0;
+  };
+
   useEffect(() => { if (authProfile) setProfile(authProfile); }, [authProfile]);
 
   useEffect(() => {
@@ -221,45 +250,96 @@ export default function ScoreboardPage() {
 
   const fetchStandingsData = async () => {
     setTabLoading(true);
-    const { data: soldPlayers } = await supabase.from("players").select("id, sold_to_id, team_name, player_name, role").eq("auction_status", "sold");
-    setAllPlayers(soldPlayers || []);
-    
-    // Restoration of persistent fetch
-    const { data: pts } = await supabase.from("match_points").select("*");
-    setAllMatchPoints(pts || []);
-    
-    calculateStandings(soldPlayers || [], pts || []);
-    setTabLoading(false);
+    try {
+      // NOTE: players table doesn't have `team_name`; ownership is stored as `sold_to`/`sold_to_id`.
+      const { data: soldPlayers } = await supabase
+        .from("players")
+        .select("id, sold_to_id, sold_to, player_name, role")
+        .eq("auction_status", "sold");
+      const { data: pts } = await supabase.from("match_points").select("*");
+      setAllPlayers(soldPlayers || []);
+      setAllMatchPoints(pts || []);
+      // Do NOT call calculateStandings here: setState is async; effectivePoints / derived maps
+      // would still be stale. Recompute in useEffect after state commits.
+    } finally {
+      setTabLoading(false);
+    }
   };
 
-  const calculateStandings = (players: any[], points: any[]) => {
-    const standingsData = franchises.map(team => {
-      let totalPoints = 0;
-      let matchesPlayed = 0;
-      let bestMatch = 0;
-      let worstMatch = Infinity;
-      const matchScores: number[] = [];
-      const teamPlayers = players.filter(p => p.sold_to_id === team.id || p.sold_to === team.team_name);
-      
-      allMatches.forEach(m => {
-        let matchTotal = 0; let matchHasPoints = false;
-        teamPlayers.forEach(player => {
-          const ptRecord = points?.find(p => p.player_id === player.id && p.match_id === m.id);
-          if (ptRecord) { matchHasPoints = true; matchTotal += ptRecord.points; }
+  /** Build the same key map as effectivePointsByPlayerMatch but from explicit rows (avoids stale closure). */
+  const buildPointsMap = useCallback((points: any[]) => {
+    const map = new Map<string, number>();
+    (points || []).forEach((pt: any) => {
+      if (!pt?.player_id || !pt?.match_id) return;
+      map.set(`${pt.player_id}_${pt.match_id}`, Number(pt.points) || 0);
+    });
+    Object.values(pendingEdits || {}).forEach((ed: any) => {
+      if (!ed?.player_id || !ed?.match_id) return;
+      map.set(`${ed.player_id}_${ed.match_id}`, Number(ed.points) || 0);
+    });
+    return map;
+  }, [pendingEdits]);
+
+  const playerBelongsToTeam = useCallback((p: any, team: any) => {
+    if (p.sold_to_id && team.id && p.sold_to_id === team.id) return true;
+    const a = String(p.sold_to || "").trim().toLowerCase();
+    const b = String(team.team_name || "").trim().toLowerCase();
+    if (a && b && a === b) return true;
+    const c = String(team.full_name || "").trim().toLowerCase();
+    if (a && c && a === c) return true;
+    return false;
+  }, []);
+
+  const calculateStandings = useCallback(
+    (players: any[], points: any[]) => {
+      if (!franchises.length) return;
+      const pointsMap = buildPointsMap(points || []);
+      const standingsData = franchises.map((team) => {
+        let totalPoints = 0;
+        let matchesPlayed = 0;
+        let bestMatch = 0;
+        let worstMatch = Infinity;
+        const matchScores: number[] = [];
+        const teamPlayers = (players || []).filter((p) => playerBelongsToTeam(p, team));
+
+        (allMatches || []).forEach((m) => {
+          let matchTotal = 0;
+          let matchHasPoints = false;
+          teamPlayers.forEach((player) => {
+            const key = `${player.id}_${m.id}`;
+            if (pointsMap.has(key)) {
+              matchHasPoints = true;
+              matchTotal += pointsMap.get(key) || 0;
+            }
+          });
+          if (matchHasPoints) {
+            matchesPlayed++;
+            totalPoints += matchTotal;
+            matchScores.push(matchTotal);
+            if (matchTotal > bestMatch) bestMatch = matchTotal;
+            if (matchTotal < worstMatch) worstMatch = matchTotal;
+          }
         });
-        if (matchHasPoints) {
-          matchesPlayed++; totalPoints += matchTotal; matchScores.push(matchTotal);
-          if (matchTotal > bestMatch) bestMatch = matchTotal; if (matchTotal < worstMatch) worstMatch = matchTotal;
-        }
-      });
-      return {
-        ...team, totalPoints, matchesPlayed: Math.min(matchesPlayed, 17),
-        bestMatch: matchesPlayed > 0 ? bestMatch : 0, worstMatch: worstMatch === Infinity ? 0 : worstMatch,
-        avgPerMatch: matchesPlayed > 0 ? Math.round((totalPoints / matchesPlayed) * 10) / 10 : 0, squadSize: teamPlayers.length,
-      };
-    }).sort((a,b) => b.totalPoints - a.totalPoints);
-    setStandings(standingsData);
-  };
+        return {
+          ...team,
+          totalPoints,
+          matchesPlayed: Math.min(matchesPlayed, 17),
+          bestMatch: matchesPlayed > 0 ? bestMatch : 0,
+          worstMatch: worstMatch === Infinity ? 0 : worstMatch,
+          avgPerMatch: matchesPlayed > 0 ? Math.round((totalPoints / matchesPlayed) * 10) / 10 : 0,
+          squadSize: teamPlayers.length,
+        };
+      }).sort((a, b) => b.totalPoints - a.totalPoints);
+      setStandings(standingsData);
+    },
+    [franchises, allMatches, buildPointsMap, playerBelongsToTeam]
+  );
+
+  useEffect(() => {
+    if (activeTab !== "standings") return;
+    if (!franchises.length || !allMatches.length) return;
+    calculateStandings(allPlayers, allMatchPoints);
+  }, [activeTab, allMatchPoints, allPlayers, allMatches, franchises, calculateStandings]);
 
   const fetchMatchSpecificData = async (matchId: string) => {
     const { data } = await supabase.from("nominations").select("*").eq("match_id", matchId);
@@ -282,6 +362,12 @@ export default function ScoreboardPage() {
     setSaving(true);
     const { error } = await supabase.from("match_points").upsert(Object.values(pendingEdits), { onConflict: "player_id,match_id" });
     if (!error) setPendingEdits({});
+    // Keep Sheets + Standings consistent immediately after saving.
+    // Without this, the grid keeps showing stale values until a refresh/refetch.
+    if (!error) {
+      const { data: pts } = await supabase.from("match_points").select("*");
+      setAllMatchPoints(pts || []);
+    }
     setSaving(false);
   };
 
@@ -364,7 +450,10 @@ export default function ScoreboardPage() {
                     const matchObj = allMatches.find(m => m.match_no === gIdx + 1);
                     if (matchObj) {
                        let sum = 0;
-                       teamPlayers.forEach(tp => { sum += allMatchPoints.find(p => p.player_id === tp.id && p.match_id === matchObj.id)?.points || 0; });
+                       teamPlayers.forEach(tp => {
+                         const key = `${tp.id}_${matchObj.id}`;
+                         sum += effectivePointsByPlayerMatch.get(key) || 0;
+                       });
                        data[team.team_name] = (gIdx > 0 ? (cumulativeData[gIdx - 1] as any)[team.team_name] : 0) + sum;
                     }
                   });
@@ -373,7 +462,9 @@ export default function ScoreboardPage() {
 
                 const currentAnalyticsTeam = analyticsTeamId ? franchises.find(f => f.id === analyticsTeamId) : standings[0];
                 const playerPointsList = allPlayers.filter(p => p.sold_to_id === currentAnalyticsTeam?.id || p.sold_to === currentAnalyticsTeam?.team_name).map(p => ({
-                   name: p.player_name, points: allMatchPoints.filter(pt => pt.player_id === p.id).reduce((a, b) => a + b.points, 0), role: p.role
+                   name: p.player_name,
+                   points: allMatches.reduce((acc, m) => acc + (effectivePointsByPlayerMatch.get(`${p.id}_${m.id}`) || 0), 0),
+                   role: p.role
                 })).sort((a,b) => b.points - a.points);
 
                 const contributorData = playerPointsList.slice(0, 5).map(p => ({ name: p.name.split(' ')[0], value: Math.round(p.points) }));
@@ -969,7 +1060,17 @@ export default function ScoreboardPage() {
                             <Lock className="h-3 w-3" /> View only
                           </span>
                         )}
-                        <div className="h-10 w-10 rounded-xl bg-white/10 flex items-center justify-center font-black text-lg">{squad.length}</div>
+                        <div className="h-10 px-4 rounded-xl bg-white/10 flex items-center justify-center font-black text-xs uppercase tracking-widest">
+                          Grand&nbsp;Total:&nbsp;
+                          {(() => {
+                            const teamTotal = squad.reduce((sum, sp) => {
+                              let t = 0;
+                              for (let i = 1; i <= 17; i++) t += getEffectivePointsForPlayerMatchNo(sp.id, i);
+                              return sum + t;
+                            }, 0);
+                            return String(teamTotal % 1 === 0 ? teamTotal : teamTotal.toFixed(1));
+                          })()}
+                        </div>
                       </div>
                     </div>
                     {showEmptySquad ? (
@@ -995,11 +1096,7 @@ export default function ScoreboardPage() {
                         <tbody>
                           {visible.map((p) => {
                             const teamStyle = getIplTeamStyle(p.team);
-                            const pts = Array(17).fill(0);
-                            allMatchPoints.filter((pt) => pt.player_id === p.id).forEach((pt) => {
-                              const m = allMatches.find((match) => match.id === pt.match_id);
-                              if (m?.match_no && m.match_no <= 17) pts[m.match_no - 1] = pt.points;
-                            });
+                            const pts = Array.from({ length: 17 }, (_, idx) => getEffectivePointsForPlayerMatchNo(p.id, idx + 1));
                             const total = pts.reduce((a, b) => a + b, 0);
 
                             return (
@@ -1040,7 +1137,7 @@ export default function ScoreboardPage() {
                                       <Input
                                         type="number"
                                         step="0.5"
-                                        defaultValue={score || ""}
+                                        value={score ? String(score) : ""}
                                         readOnly={!canEdit}
                                         onChange={(e) => {
                                           if (!canEdit) return;
@@ -1067,6 +1164,28 @@ export default function ScoreboardPage() {
                               </tr>
                             );
                           })}
+                          {(() => {
+                            const teamGameTotals = Array(17).fill(0);
+                            squad.forEach((sp) => {
+                              for (let i = 1; i <= 17; i++) teamGameTotals[i - 1] += getEffectivePointsForPlayerMatchNo(sp.id, i);
+                            });
+                            const teamGrandTotal = teamGameTotals.reduce((a, b) => a + b, 0);
+                            return (
+                              <tr className="bg-slate-900 text-white">
+                                <td className="px-8 py-5 sticky left-0 z-10 bg-slate-900 font-black uppercase tracking-widest text-[10px] shadow-[4px_0_8px_-4px_rgba(0,0,0,0.3)]">
+                                  Grand Total
+                                </td>
+                                {teamGameTotals.map((v, idx) => (
+                                  <td key={idx} className="px-3 py-5 text-center text-[10px] font-black tabular-nums">
+                                    {v ? (v % 1 === 0 ? v : v.toFixed(1)) : ""}
+                                  </td>
+                                ))}
+                                <td className="px-8 py-5 text-right sticky right-0 z-10 bg-slate-900 font-black italic text-sm shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.3)]">
+                                  {teamGrandTotal % 1 === 0 ? teamGrandTotal : teamGrandTotal.toFixed(1)}
+                                </td>
+                              </tr>
+                            );
+                          })()}
                         </tbody>
                       </table>
                     </div>
