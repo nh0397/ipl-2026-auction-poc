@@ -726,7 +726,9 @@ async def main():
 
     # Target date selection (IST)
     if args.date:
-        target_date = args.date
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(args.date).strip()):
+            raise RuntimeError(f"Invalid --date value (expected YYYY-MM-DD): {args.date!r}")
+        target_date = str(args.date).strip()
     else:
         now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
         target_date = now_ist.strftime("%Y-%m-%d")
@@ -741,6 +743,7 @@ async def main():
         return
 
     now_utc = datetime.now(timezone.utc)
+    updated: List[Dict[str, Any]] = []
     for f in fixtures:
         # Skip future-starting matches for today's run (keep old behavior for backfills: still respects cutoff)
         dt = parse_utc_dt(f.get("date_time_gmt"))
@@ -770,6 +773,49 @@ async def main():
         status = data.get("match_info", {}).get("result", "") or (f.get("status") or "")
         update_fixture_scorecard_and_mark_synced(f["id"], data, status)
         log("Fixture scorecard updated in Supabase (scorecard + points_synced=true).")
+        updated.append(
+            {
+                "api_match_id": str(match_id),
+                "match_date": f.get("match_date") or "",
+                "title": f.get("title") or "",
+                "team1_short": f.get("team1_short") or "",
+                "team2_short": f.get("team2_short") or "",
+                "status": status or "",
+            }
+        )
+
+    # Expose outputs for GitHub Actions (for match-detail emails)
+    gh_out = os.getenv("GITHUB_OUTPUT")
+    if gh_out:
+        try:
+            with open(gh_out, "a", encoding="utf-8") as fh:
+                fh.write(f"target_date={target_date}\n")
+                fh.write(f"updated_count={len(updated)}\n")
+                details_lines = []
+                for u in updated:
+                    md = u.get("match_date") or ""
+                    teams = ""
+                    if u.get("team1_short") or u.get("team2_short"):
+                        teams = f"{u.get('team1_short','')} vs {u.get('team2_short','')}".strip()
+                    title = u.get("title") or ""
+                    status = u.get("status") or ""
+                    core = title or teams or (u.get("api_match_id") or "")
+                    date_prefix = f"{md} — " if md else ""
+                    team_suffix = f" — {teams}" if teams and teams not in core else ""
+                    status_suffix = f" — {status}" if status else ""
+                    details_lines.append(f"- {date_prefix}{core}{team_suffix}{status_suffix} ({u.get('api_match_id')})")
+                fh.write("updated_details<<EOF\n")
+                fh.write("\n".join(details_lines) + ("\n" if details_lines else ""))
+                fh.write("EOF\n")
+                # Keep SUMMARY for backward compatibility
+                fh.write("SUMMARY<<EOF\n")
+                fh.write(f"Target date (IST): {target_date}\n")
+                fh.write(f"Updated matches: {len(updated)}\n")
+                if details_lines:
+                    fh.write("\n".join(details_lines) + "\n")
+                fh.write("EOF\n")
+        except Exception as e:
+            log(f"WARNING: failed writing GITHUB_OUTPUT: {e}")
 
 
 if __name__ == "__main__":

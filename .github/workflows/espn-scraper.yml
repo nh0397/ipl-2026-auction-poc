@@ -48,38 +48,39 @@ jobs:
           python scripts/sync_scorecards_espn.py \
             ${{ github.event.inputs.date_ist != '' && format('--date {0}', github.event.inputs.date_ist) || '' }}
 
-          echo "SUMMARY=ESPN scorecard sync completed." >> $GITHUB_OUTPUT
-
       - name: Send Success Email (All Participants)
-        if: success()
+        if: success() && steps.run_scraper.outputs.updated_count != '0'
         uses: dawidd6/action-send-mail@v4
         with:
-          server_address: ${{ secrets.SMTP_SERVER }}
-          server_port: ${{ secrets.SMTP_PORT }}
-          username: ${{ secrets.SMTP_USER }}
-          password: ${{ secrets.SMTP_PASS }}
-          subject: "IPL 2026: Match Sync Success"
+          server_address: smtp.gmail.com
+          server_port: 587
+          username: ${{ secrets.MAIL_USERNAME || secrets.SMTP_USER }}
+          password: ${{ secrets.MAIL_PASSWORD || secrets.SMTP_PASS }}
+          subject: "Points updated for match — ${{ steps.run_scraper.outputs.target_date }} (${{ steps.run_scraper.outputs.updated_count }} updated)"
           to: "harshshah661992@gmail.com,tradingwithparthshah@gmail.com,jalan.me4u@gmail.com,naisicric97@gmail.com"
-          from: "Scraper Intelligence <${{ secrets.SMTP_USER }}>"
+          from: "IPL Auction System <${{ secrets.MAIL_USERNAME || secrets.SMTP_USER || 'noreply@ipl2026.com' }}>"
           body: |
-            Match synchronization was successful!
-            
-            Details:
-            ${{ steps.run_scraper.outputs.SUMMARY }}
-            
-            Check the app for updated scoreboard.
+            Hi,
+
+            Points have been updated successfully for the following match(es):
+
+            ${{ steps.run_scraper.outputs.updated_details }}
+
+            Date (IST): ${{ steps.run_scraper.outputs.target_date }}
+
+            — IPL Auction System
           
       - name: Send Failure Email (Primary Admin)
         if: failure()
         uses: dawidd6/action-send-mail@v4
         with:
-          server_address: ${{ secrets.SMTP_SERVER }}
-          server_port: ${{ secrets.SMTP_PORT }}
-          username: ${{ secrets.SMTP_USER }}
-          password: ${{ secrets.SMTP_PASS }}
+          server_address: smtp.gmail.com
+          server_port: 587
+          username: ${{ secrets.MAIL_USERNAME || secrets.SMTP_USER }}
+          password: ${{ secrets.MAIL_PASSWORD || secrets.SMTP_PASS }}
           subject: "ALERT: IPL 2026 Scraper FAILED"
           to: "naisicric97@gmail.com"
-          from: "Scraper Intelligence <${{ secrets.SMTP_USER }}>"
+          from: "IPL Auction System <${{ secrets.MAIL_USERNAME || secrets.SMTP_USER || 'noreply@ipl2026.com' }}>"
           body: |
             CRITICAL: Match synchronization failed.
             
