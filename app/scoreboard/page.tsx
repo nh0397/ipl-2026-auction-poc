@@ -25,6 +25,7 @@ import { useAuth } from "@/components/auth/AuthProvider";
 import React from "react";
 import ScorecardViewer from "@/components/scoreboard/ScorecardViewer";
 import { ScoringRulesLegend } from "@/components/rules/ScoringRulesLegend";
+import { adaptCricApiToScorecardViewer } from "@/lib/adapters/cricapiScorecard";
 
 // ─── Fixture helpers ────────────────────────────────────────────────
 interface Fixture {
@@ -485,7 +486,11 @@ export default function ScoreboardPage() {
                          <Dialog open={expandedScorecardId === match.api_match_id} onOpenChange={(o) => setExpandedScorecardId(o ? match.api_match_id : null)}>
                             <DialogContent className="max-w-[95vw] sm:max-w-4xl bg-[#F8FAFC] border-0 p-0 rounded-[2rem] overflow-hidden">
                                <div className="bg-slate-900 p-8 text-white"><DialogTitle className="text-2xl font-black uppercase italic">Match Statistics</DialogTitle></div>
-                               <div className="p-4 sm:p-8 max-h-[75vh] overflow-y-auto no-scrollbar"><ScorecardViewer scorecard={match.scorecard} /></div>
+                               <div className="p-4 sm:p-8 max-h-[75vh] overflow-y-auto no-scrollbar">
+                                 {expandedScorecardId === match.api_match_id ? (
+                                   <ScorecardViewer scorecard={adaptCricApiToScorecardViewer(match.scorecard)} />
+                                 ) : null}
+                               </div>
                             </DialogContent>
                          </Dialog>
 
@@ -502,26 +507,43 @@ export default function ScoreboardPage() {
                                         <tr><th className="px-4 py-4 text-[9px] font-black uppercase opacity-30">Selection</th><th className="px-3 py-4 text-[9px] font-black opacity-30 text-center uppercase">Contribution</th><th className="px-4 py-4 text-[11px] font-black text-right uppercase">Final Points</th></tr>
                                      </thead>
                                      <tbody className="divide-y divide-slate-100">
-                                        {(() => {
-                                            const sc = match.scorecard as any; if (!sc?.innings) return null;
+                                        {expandedPointsId === match.api_match_id ? (() => {
+                                            const sc = adaptCricApiToScorecardViewer(match.scorecard) as any; if (!sc?.innings) return null;
                                             const stats: Record<string, any> = {};
                                             const team1 = match.team1_short || "";
                                             const team2 = match.team2_short || "";
+
+                                            const normalizePlayerName = (raw: string) =>
+                                              String(raw || "")
+                                                .replace(/†/g, "")
+                                                .replace(/\(c\)/gi, "")
+                                                .replace(/\s+/g, " ")
+                                                .trim();
                                             
-                                            // 1. Master Discovery: Use the top-level 'playing_squad' to initialize the registry
-                                            const masterSquad = (sc.playing_squad || []) as string[];
-                                            masterSquad.forEach(name => {
-                                               const n = name.replace(/[†(c)]/g, "").trim();
-                                               // Find which team they belong to by checking innings squad manifests
-                                               const playerInning = sc.innings.find((inn: any) => (inn.squad || []).includes(name));
-                                               const playerTeam = playerInning?.team || "Unknown";
-                                               const key = `${n}_${playerTeam}`;
-                                               if (!stats[key]) stats[key] = { n, team: playerTeam, r:0, b:0, f:0, s:0, w:0, m:0, o:0, r_conc:0, c:0, st:0, dots:0, lbwB:0, ro:0, isDuck: false, role: 'Fielder' };
+                                            // Initialize registry from batting/bowling names (CricAPI doesn't provide playing_squad here).
+                                            sc.innings.forEach((inn: any) => {
+                                              const battingTeam = inn.team;
+                                              const bowlingTeam = sc.innings.find((i: any) => i.team !== battingTeam)?.team || "Opponent";
+                                              (inn.batting || []).forEach((b: any) => {
+                                                const raw = b.player || "";
+                                                if (!raw || raw === "BATTING") return;
+                                                const n = normalizePlayerName(raw);
+                                                const key = `${n}_${battingTeam}`;
+                                                if (!stats[key]) stats[key] = { n, team: battingTeam, r:0, b:0, f:0, s:0, w:0, m:0, o:0, r_conc:0, c:0, st:0, dots:0, lbwB:0, ro:0, isDuck: false, role: 'Batter' };
+                                              });
+                                              (inn.bowling || []).forEach((bw: any) => {
+                                                const raw = bw.bowler || "";
+                                                if (!raw || raw === "BOWLING") return;
+                                                const n = normalizePlayerName(raw);
+                                                // Bowling listed under an innings is performed by the opposition team.
+                                                const key = `${n}_${bowlingTeam}`;
+                                                if (!stats[key]) stats[key] = { n, team: bowlingTeam, r:0, b:0, f:0, s:0, w:0, m:0, o:0, r_conc:0, c:0, st:0, dots:0, lbwB:0, ro:0, isDuck: false, role: 'Bowler' };
+                                              });
                                             });
 
                                             // Universal Mapping: Resolve short names against the Master Squad
                                             const findMappedKey = (name: string, team: string) => {
-                                               const n = name.replace(/[†(c)]/g, "").trim();
+                                               const n = normalizePlayerName(name);
                                                const exact = `${n}_${team}`;
                                                if (stats[exact]) return exact;
                                                
@@ -541,8 +563,8 @@ export default function ScoreboardPage() {
 
                                                // Process Batting
                                                (inn.batting || []).forEach((b: any) => { 
-                                                  if (!b.player && !b.batsman) return;
-                                                  const rawN = b.player || b.batsman?.name || "";
+                                                  if (!b.player) return;
+                                                  const rawN = b.player || "";
                                                   if (!rawN || rawN === "BATTING") return;
                                                   const key = findMappedKey(rawN, currentTeam);
                                                   const dStr = (b.dismissal || b["dismissal-text"] || "").toLowerCase();
@@ -561,11 +583,12 @@ export default function ScoreboardPage() {
                                                // Process Bowling
                                                (inn.bowling || []).forEach((bw: any) => { 
                                                   if (!bw.bowler) return;
-                                                  const rawN = typeof bw.bowler === 'string' ? bw.bowler : bw.bowler.name;
+                                                  const rawN = bw.bowler;
                                                   if (!rawN || rawN === "BOWLING") return;
-                                                  const key = findMappedKey(rawN, currentTeam);
+                                                  // Bowlers belong to the opposition (they bowl to this batting innings).
+                                                  const key = findMappedKey(rawN, opposingTeam);
 
-                                                  if (!stats[key]) stats[key] = { n: key.split('_')[0], team: currentTeam, r:0, b:0, f:0, s:0, r_conc:0, w:0, m:0, o:0, c:0, st:0, dots:0, lbwB:0, ro:0, isDuck:false, role: 'Bowler' }; 
+                                                  if (!stats[key]) stats[key] = { n: key.split('_')[0], team: opposingTeam, r:0, b:0, f:0, s:0, r_conc:0, w:0, m:0, o:0, c:0, st:0, dots:0, lbwB:0, ro:0, isDuck:false, role: 'Bowler' }; 
                                                   stats[key].w += Number(bw.W || bw.w) || 0; 
                                                   stats[key].m += Number(bw.M || bw.m) || 0; 
                                                   stats[key].r_conc += Number(bw.R || bw.r) || 0;
@@ -683,7 +706,7 @@ export default function ScoreboardPage() {
                                                   </React.Fragment>
                                                );
                                             });
-                                         })()}
+                                        })() : null}
                                      </tbody>
                                   </table>
                                </div>

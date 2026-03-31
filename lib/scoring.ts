@@ -100,3 +100,131 @@ export function calculateDream11Points(stats: MatchStats): number {
   
   return points * multiplier;
 }
+
+// ============================================================================
+// IPL Fantasy (Python rules port)
+// ============================================================================
+
+export interface IplFantasyBatting {
+  runs: number;
+  balls: number;
+  fours: number;
+  sixes: number;
+  /** Example values: "not out", "c ...", "b ...", "retired hurt" */
+  dismissal: string;
+}
+
+export interface IplFantasyBowling {
+  overs: number; // already normalized to (overs + balls/6)
+  maidens: number;
+  runs_conceded: number;
+  wickets: number;
+  lbw_bowled_wickets: number;
+  dot_balls: number;
+}
+
+export interface IplFantasyFielding {
+  catches: number;
+  stumpings: number;
+  runout_direct: number;
+  runout_indirect: number;
+}
+
+export interface IplFantasyPlayerForScoring {
+  batting: Partial<IplFantasyBatting>;
+  bowling: Partial<IplFantasyBowling>;
+  fielding: Partial<IplFantasyFielding>;
+  in_announced_lineup?: boolean;
+  is_playing_substitute?: boolean;
+  is_captain?: boolean;
+  is_vice_captain?: boolean;
+}
+
+export function iplFantasyBattingPoints(bat: Partial<IplFantasyBatting> | undefined): number {
+  const runs = Number(bat?.runs ?? 0) || 0;
+  const balls = Number(bat?.balls ?? 0) || 0;
+  const fours = Number(bat?.fours ?? 0) || 0;
+  const sixes = Number(bat?.sixes ?? 0) || 0;
+  const d = String(bat?.dismissal ?? "").toLowerCase();
+
+  const isDismissed = !["", "not out", "retired hurt"].includes(d);
+
+  let pts = 0;
+  pts += runs + fours * 4 + sixes * 6;
+
+  if (runs >= 100) pts += 16;
+  else if (runs >= 75) pts += 12;
+  else if (runs >= 50) pts += 8;
+  else if (runs >= 25) pts += 4;
+
+  if (runs === 0 && isDismissed) pts -= 2;
+
+  if (balls >= 10 && isDismissed) {
+    const sr = (runs / balls) * 100;
+    if (sr > 170) pts += 6;
+    else if (sr >= 150.01) pts += 4;
+    else if (sr >= 130) pts += 2;
+    else if (sr >= 60 && sr < 70) pts -= 2;
+    else if (sr >= 50 && sr < 60) pts -= 4;
+    else if (sr < 50) pts -= 6;
+  }
+
+  return pts;
+}
+
+export function iplFantasyBowlingPoints(bwl: Partial<IplFantasyBowling> | undefined): number {
+  const overs = Number(bwl?.overs ?? 0) || 0;
+  const maidens = Number(bwl?.maidens ?? 0) || 0;
+  const runsC = Number(bwl?.runs_conceded ?? 0) || 0;
+  const wickets = Number(bwl?.wickets ?? 0) || 0;
+  const lbwB = Number(bwl?.lbw_bowled_wickets ?? 0) || 0;
+  const dots = Number(bwl?.dot_balls ?? 0) || 0;
+
+  let pts = 0;
+  pts += dots + wickets * 30 + lbwB * 8;
+
+  if (wickets >= 5) pts += 12;
+  else if (wickets === 4) pts += 8;
+  else if (wickets === 3) pts += 4;
+
+  pts += maidens * 12;
+
+  if (overs >= 2) {
+    const eco = runsC / overs;
+    if (eco < 5) pts += 6;
+    else if (eco <= 5.99) pts += 4;
+    else if (eco <= 7) pts += 2;
+    else if (eco <= 9) {
+      // pass
+    } else if (eco <= 11) pts -= 2;
+    else if (eco <= 12) pts -= 4;
+    else pts -= 6;
+  }
+
+  return pts;
+}
+
+export function iplFantasyFieldingPoints(fld: Partial<IplFantasyFielding> | undefined): number {
+  const catches = Number(fld?.catches ?? 0) || 0;
+  let pts = catches * 8;
+  if (catches >= 3) pts += 4;
+  pts += (Number(fld?.stumpings ?? 0) || 0) * 12;
+  pts += (Number(fld?.runout_direct ?? 0) || 0) * 12;
+  pts += (Number(fld?.runout_indirect ?? 0) || 0) * 6;
+  return pts;
+}
+
+export function scoreIplFantasyPlayer(p: IplFantasyPlayerForScoring) {
+  const b = iplFantasyBattingPoints(p.batting);
+  const bw = iplFantasyBowlingPoints(p.bowling);
+  const f = iplFantasyFieldingPoints(p.fielding);
+
+  let extra = p.in_announced_lineup ? 4 : 0;
+  if (p.is_playing_substitute) extra += 4;
+
+  const base = b + bw + f + extra;
+  const mult = p.is_captain ? 2.0 : p.is_vice_captain ? 1.5 : 1.0;
+  const total = Math.round(base * mult * 100) / 100;
+
+  return { batting_pts: b, bowling_pts: bw, fielding_pts: f, extra_pts: extra, multiplier: mult, total_pts: total };
+}

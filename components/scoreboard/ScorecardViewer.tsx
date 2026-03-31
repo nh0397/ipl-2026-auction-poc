@@ -45,19 +45,45 @@ interface ScorecardData {
 export default function ScorecardViewer({ scorecard }: { scorecard: ScorecardData }) {
   if (!scorecard || !scorecard.innings) return null;
 
-  const getFieldingStats = (player: string, innings: InningData[]) => {
-    let catches = 0;
-    let stumpings = 0;
-    innings.forEach(inn => {
-      (inn.batting || []).forEach(b => {
-        const text = (b.dismissal || "").toLowerCase();
-        const pName = (player || "").toLowerCase();
-        if (text.includes(`c ${pName}`) || text.includes(`c †${pName}`)) catches++;
-        if (text.includes(`st †${pName}`)) stumpings++;
-      });
-    });
-    return { catches, stumpings };
-  };
+  const normalizePlayerName = React.useCallback((raw: string) => {
+    return String(raw || "")
+      .replace(/†/g, "")
+      .replace(/\(c\)/gi, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }, []);
+
+  // This used to be computed per-row (O(batters * allDismissals)).
+  // Precompute once per scorecard to avoid huge CPU/RAM spikes when opening the modal.
+  const fieldingByPlayer = React.useMemo(() => {
+    const map = new Map<string, { catches: number; stumpings: number }>();
+
+    const bump = (key: string, kind: "catches" | "stumpings") => {
+      const k = (key || "").toLowerCase().trim();
+      if (!k) return;
+      const curr = map.get(k) || { catches: 0, stumpings: 0 };
+      curr[kind] += 1;
+      map.set(k, curr);
+    };
+
+    for (const inn of scorecard.innings || []) {
+      for (const b of inn.batting || []) {
+        const text = String(b.dismissal || "").toLowerCase();
+        if (!text) continue;
+
+        // Very lightweight parsing:
+        // - catches: "c <fielder>" or "c †<keeper>"
+        // - stumpings: "st †<keeper>"
+        // We only need the fielder/keeper token(s), not full structured parsing.
+        const cMatch = text.match(/\bc\s+†?([a-z0-9 .'-]+)/i);
+        if (cMatch?.[1]) bump(cMatch[1], "catches");
+        const stMatch = text.match(/\bst\s+†([a-z0-9 .'-]+)/i);
+        if (stMatch?.[1]) bump(stMatch[1], "stumpings");
+      }
+    }
+
+    return map;
+  }, [scorecard.innings]);
 
   return (
     <div className="space-y-12">
@@ -86,7 +112,8 @@ export default function ScorecardViewer({ scorecard }: { scorecard: ScorecardDat
               </TableHeader>
               <TableBody>
                 {inning.batting.filter(b => b.player && b.player !== "BATTING").map((b, j) => {
-                  const fielding = getFieldingStats(b.player, scorecard.innings);
+                  const key = normalizePlayerName(String(b.player || "")).toLowerCase();
+                  const fielding = fieldingByPlayer.get(key) || { catches: 0, stumpings: 0 };
                   const stats: MatchStats = {
                     runs: Number(b.R) || 0,
                     balls: Number(b.B) || 0,

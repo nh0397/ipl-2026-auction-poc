@@ -1,0 +1,49 @@
+name: CricAPI Fixtures + Scorecards Sync
+
+on:
+  schedule:
+    # Every day at 01:10 UTC (~06:40 IST)
+    - cron: "10 1 * * *"
+    # Every day at 16:40 UTC (~22:10 IST)
+    - cron: "40 16 * * *"
+  workflow_dispatch:
+    inputs:
+      date_ist:
+        description: "Backfill date in IST (YYYY-MM-DD). Leave blank for today."
+        required: false
+        default: ""
+
+jobs:
+  sync_cricapi:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests python-dotenv
+
+      - name: Populate fixtures_cricapi
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          NEXT_PUBLIC_CRICAPI_KEY: ${{ secrets.NEXT_PUBLIC_CRICAPI_KEY }}
+        run: |
+          python scripts/populate_fixtures_cricapi.py
+
+      - name: Sync scorecards into fixtures_cricapi
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          NEXT_PUBLIC_CRICAPI_KEY: ${{ secrets.NEXT_PUBLIC_CRICAPI_KEY }}
+        run: |
+          python scripts/sync_scorecards_cricapi.py \
+            ${{ github.event.inputs.date_ist != '' && format('--date {0}', github.event.inputs.date_ist) || '' }}
+
