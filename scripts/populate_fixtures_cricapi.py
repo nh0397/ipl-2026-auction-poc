@@ -104,10 +104,15 @@ def upsert_fixtures(rows: List[Dict[str, Any]], batch_size: int = 50) -> None:
     if not rows:
         return
 
+    # PostgREST upsert requires both:
+    # - Prefer: resolution=merge-duplicates (header)
+    # - on_conflict (query param)
+    upsert_url = f"{SUPABASE_URL}/rest/v1/{FIXTURES_TABLE}?on_conflict=api_match_id"
+
     for i in range(0, len(rows), batch_size):
         batch = rows[i : i + batch_size]
         res = requests.post(
-            f"{SUPABASE_URL}/rest/v1/{FIXTURES_TABLE}",
+            upsert_url,
             headers=HEADERS,
             json=batch,
         )
