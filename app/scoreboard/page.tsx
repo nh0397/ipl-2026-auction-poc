@@ -21,7 +21,6 @@ import {
 } from "lucide-react";
 import { cn, getPlayerImage, iplColors } from "@/lib/utils";
 import { useRouter } from "next/navigation";
-import { calculateDream11Points, MatchStats } from "@/lib/scoring";
 import { useAuth } from "@/components/auth/AuthProvider";
 import React from "react";
 import ScorecardViewer from "@/components/scoreboard/ScorecardViewer";
@@ -71,6 +70,23 @@ function cleanShort(short: string | null): string {
   return short.endsWith("W") && short.length > 2 ? short.slice(0, -1) : short;
 }
 
+function getIplTeamStyle(team: string | null | undefined) {
+  if (!team) {
+    return { bg: "bg-slate-50", border: "border-slate-200", text: "text-slate-700" };
+  }
+  return iplColors[team] || { bg: "bg-slate-50", border: "border-slate-100", text: "text-slate-600" };
+}
+
+/** IPL franchise (`team`) A–Z, then player name. */
+function sortSquadByTeamThenName(players: any[]) {
+  return [...players].sort((a, b) => {
+    const ta = (a.team ?? "").toString();
+    const tb = (b.team ?? "").toString();
+    if (ta !== tb) return ta.localeCompare(tb);
+    return (a.player_name ?? "").toString().localeCompare((b.player_name ?? "").toString());
+  });
+}
+
 // ─── Constants ───
 const TEAM_COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899", "#ef4444", "#06b6d4", "#f97316"];
 
@@ -97,7 +113,6 @@ export default function ScoreboardPage() {
   const [pendingEdits, setPendingEdits] = useState<Record<string, { player_id: string, match_id: string, points: number }>>({});
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState<"sheets" | "standings" | "fixtures">("sheets");
-  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [analyticsTeamId, setAnalyticsTeamId] = useState<string | null>(null);
   const [standings, setStandings] = useState<any[]>([]);
   const [allMatchPoints, setAllMatchPoints] = useState<any[]>([]);
@@ -110,13 +125,30 @@ export default function ScoreboardPage() {
   const [showRules, setShowRules] = useState(false);
   const [fixtures, setFixtures] = useState<Fixture[]>([]);
   const [fixtureFilter, setFixtureFilter] = useState<"all" | "upcoming" | "completed">("all");
+  /** Which auction franchise’s score sheet is shown (sub-tabs under Sheets). */
+  const [sheetFranchiseId, setSheetFranchiseId] = useState<string | null>(null);
   const today = useMemo(() => getTodayIST(), []);
 
   useEffect(() => { if (authProfile) setProfile(authProfile); }, [authProfile]);
+
+  useEffect(() => {
+    if (!franchises.length) return;
+    setSheetFranchiseId((prev) => {
+      if (prev && franchises.some((f) => f.id === prev)) return prev;
+      const mine = authProfile?.id ? franchises.find((f) => f.id === authProfile.id) : null;
+      return mine?.id ?? franchises[0].id;
+    });
+  }, [franchises, authProfile?.id]);
+
+  useEffect(() => {
+    setPendingEdits({});
+  }, [sheetFranchiseId]);
   useEffect(() => { fetchInitialData(); }, []);
   useEffect(() => { if (selectedMatchId) fetchMatchSpecificData(selectedMatchId); }, [selectedMatchId]);
   useEffect(() => { if (activeTab === "standings") fetchStandingsData(); }, [activeTab]);
-  useEffect(() => { if (activeTab === "sheets" && selectedTeamId) fetchTeamData(selectedTeamId); }, [activeTab, selectedTeamId]);
+  useEffect(() => {
+    if (activeTab === "sheets") fetchSheetsData();
+  }, [activeTab]);
   useEffect(() => { if (activeTab === "fixtures") fetchFixtures(); }, [activeTab]);
 
   const fetchFixtures = async () => {
@@ -133,7 +165,6 @@ export default function ScoreboardPage() {
       ]);
       const teamsData = teamsRes.data || [];
       setFranchises(teamsData);
-      if (authProfile) setSelectedTeamId(authProfile.id); else if (teamsData.length > 0) setSelectedTeamId(teamsData[0].id);
       if (matchesRes.data) {
         setAllMatches(matchesRes.data);
         const nextMatch = matchesRes.data.find(m => m.status === 'live' || m.status === 'scheduled') || matchesRes.data[0];
@@ -142,13 +173,19 @@ export default function ScoreboardPage() {
     } finally { setTimeout(() => setLoading(false), 300); }
   };
 
-  const fetchTeamData = async (teamId: string) => {
-    if (!teamId) return;
+  /** All auction franchises’ squads + persisted match points (sheets tab). */
+  const fetchSheetsData = async () => {
     setSubLoading(true);
-    const { data: teamPlayers } = await supabase.from("players").select("*").eq("sold_to_id", teamId);
-    setAllPlayers(teamPlayers || []);
-    setAllMatchPoints([]);
-    setSubLoading(false);
+    try {
+      const [playersRes, pointsRes] = await Promise.all([
+        supabase.from("players").select("*").eq("auction_status", "sold").order("player_name", { ascending: true }),
+        supabase.from("match_points").select("*"),
+      ]);
+      setAllPlayers(playersRes.data || []);
+      setAllMatchPoints(pointsRes.data || []);
+    } finally {
+      setSubLoading(false);
+    }
   };
 
   const fetchStandingsData = async () => {
@@ -199,13 +236,18 @@ export default function ScoreboardPage() {
   };
 
   const updateSeasonPoint = async (pId: string, mNo: number, val: string) => {
+    if (!profile?.id || sheetFranchiseId !== profile.id) return;
+    const fr = franchises.find((f) => f.id === sheetFranchiseId);
+    const player = allPlayers.find((p) => p.id === pId);
+    if (!fr || !player || (player.sold_to_id !== fr.id && player.sold_to !== fr.team_name)) return;
     const pts = parseFloat(val) || 0;
-    const match = allMatches.find(m => m.match_no === mNo);
+    const match = allMatches.find((m) => m.match_no === mNo);
     if (!match) return;
-    setPendingEdits(prev => ({ ...prev, [`${pId}_${match.id}`]: { player_id: pId, match_id: match.id, points: pts } }));
+    setPendingEdits((prev) => ({ ...prev, [`${pId}_${match.id}`]: { player_id: pId, match_id: match.id, points: pts } }));
   };
 
   const handleBulkSave = async () => {
+    if (!profile?.id || sheetFranchiseId !== profile.id) return;
     setSaving(true);
     const { error } = await supabase.from("match_points").upsert(Object.values(pendingEdits), { onConflict: "player_id,match_id" });
     if (!error) setPendingEdits({});
@@ -613,105 +655,236 @@ export default function ScoreboardPage() {
           </div>
         )}
 
-        {/* ─── TAB: SCORE SHEETS ─── */}
+        {/* ─── TAB: SCORE SHEETS (4 franchise tabs; edit only your own) ─── */}
         {activeTab === "sheets" && (
-           <div className="space-y-6 animate-in fade-in duration-500">
-              {/* Search & Download Header */}
-              <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-center justify-between">
-                 <div className="relative w-full sm:w-80">
-                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={16} />
-                    <Input 
-                      placeholder="Find player..." 
-                      className="pl-11 h-11 bg-white border-slate-200 rounded-xl font-bold text-sm shadow-sm" 
-                      value={searchQuery} 
-                      onChange={(e) => setSearchQuery(e.target.value)} 
-                    />
+           <div className="space-y-8 animate-in fade-in duration-500">
+              <div className="flex flex-col gap-4">
+                 <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-center justify-between">
+                    <div className="relative w-full sm:w-80">
+                       <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={16} />
+                       <Input 
+                         placeholder="Find player..." 
+                         className="pl-11 h-11 bg-white border-slate-200 rounded-xl font-bold text-sm shadow-sm" 
+                         value={searchQuery} 
+                         onChange={(e) => setSearchQuery(e.target.value)} 
+                       />
+                    </div>
+                    <Button 
+                      variant="outline" 
+                      onClick={() => {
+                        let csv = "Auction Franchise,Player,IPL Team,Role,Price\n";
+                        franchises.forEach((franchise) => {
+                          const squad = allPlayers.filter(p => p.sold_to_id === franchise.id || p.sold_to === franchise.team_name);
+                          squad.forEach((p) => {
+                            csv += `"${franchise.team_name || franchise.full_name}","${p.player_name}","${p.team ?? ""}","${p.role}","${p.sold_price || p.price}"\n`;
+                          });
+                        });
+                        const link = document.createElement("a");
+                        link.setAttribute("href", encodeURI("data:text/csv;charset=utf-8," + csv));
+                        link.setAttribute("download", "All_Franchises_Score_Sheets.csv");
+                        link.click();
+                      }} 
+                      className="h-11 border-slate-200 rounded-xl font-black uppercase tracking-widest flex gap-2 text-slate-600 px-6 shadow-sm text-[10px]"
+                    >
+                       <Download size={16} /> Export all squads
+                    </Button>
                  </div>
-                 <Button 
-                   variant="outline" 
-                   onClick={() => {
-                     const team = franchises.find(t => t.id === selectedTeamId);
-                     if (!team) return;
-                     const teamPlayers = allPlayers.filter(p => p.sold_to_id === team.id || p.sold_to === team.team_name);
-                     let csv = "Player,Team,Role,Price\n";
-                     teamPlayers.forEach(p => { csv += `"${p.player_name}","${p.team}","${p.role}","${p.sold_price || p.price}"\n`; });
-                     const link = document.createElement("a");
-                     link.setAttribute("href", encodeURI("data:text/csv;charset=utf-8," + csv));
-                     link.setAttribute("download", `${team.team_name}_Squad.csv`);
-                     link.click();
-                   }} 
-                   className="h-11 border-slate-200 rounded-xl font-black uppercase tracking-widest flex gap-2 text-slate-600 px-6 shadow-sm text-[10px]"
-                 >
-                    <Download size={16} /> Export CSV
-                 </Button>
+                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">
+                    Rows are ordered by IPL team name, then player. Row tint follows IPL franchise (CSK, MI, RCB, etc.), matching the auction room and dashboard.
+                 </p>
+                 <div className="flex flex-wrap gap-2 items-center bg-white/80 p-3 rounded-xl border border-slate-100">
+                    <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 mr-1">IPL legend</span>
+                    {Object.entries(iplColors).map(([code, colors]) => (
+                      <div key={code} className={cn("px-2 py-1 rounded-lg border", colors.bg, colors.border)}>
+                        <span className={cn("text-[9px] font-black uppercase tracking-tight", colors.text)}>{code}</span>
+                      </div>
+                    ))}
+                 </div>
               </div>
 
-              <div className="bg-white rounded-[2rem] border border-slate-200 overflow-hidden shadow-xl relative">
-                {subLoading && <div className="absolute inset-0 bg-white/60 backdrop-blur-md z-50 flex items-center justify-center"><Loader2 className="animate-spin text-slate-900" /></div>}
-                <div className="overflow-x-auto">
-                   <table className="w-full text-left min-w-[1200px]">
-                      <thead className="bg-slate-50">
-                         <tr>
-                            <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 sticky left-0 bg-slate-50 z-10">Squad Player</th>
-                            {[...Array(17)].map((_, i) => <th key={i} className="px-3 py-5 text-center text-[10px] font-black text-slate-400">G{i+1}</th>)}
-                            <th className="px-8 py-5 text-right text-[10px] font-black text-slate-900 sticky right-0 bg-slate-50 z-10">Total</th>
-                         </tr>
-                      </thead>
-                      <tbody>
-                         {allPlayers.filter(p => p.player_name.toLowerCase().includes(searchQuery.toLowerCase())).map(p => {
+              {/* One tab per auction franchise */}
+              {!subLoading && franchises.length > 0 && (
+                <div className="flex flex-wrap gap-2 bg-white/60 backdrop-blur-md p-1.5 rounded-[1.25rem] border border-slate-200">
+                  {franchises.map((f) => {
+                    const isActive = sheetFranchiseId === f.id;
+                    const isOwn = profile?.id === f.id;
+                    return (
+                      <button
+                        key={f.id}
+                        type="button"
+                        onClick={() => setSheetFranchiseId(f.id)}
+                        className={cn(
+                          "flex items-center gap-2 px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap",
+                          isActive ? "bg-slate-900 text-white shadow-lg" : "text-slate-500 hover:bg-white/80"
+                        )}
+                      >
+                        <span className="max-w-[140px] truncate">{f.team_name || f.full_name}</span>
+                        {isOwn ? (
+                          <span
+                            className={cn(
+                              "text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md",
+                              isActive ? "bg-emerald-500/20 text-emerald-300" : "bg-emerald-100 text-emerald-800"
+                            )}
+                          >
+                            You
+                          </span>
+                        ) : (
+                          <Lock className="h-3 w-3 opacity-60 shrink-0" aria-hidden />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {subLoading ? (
+                <div className="flex flex-col items-center justify-center py-24 bg-white rounded-[2rem] border border-slate-200 shadow-sm">
+                  <Loader2 className="h-10 w-10 text-slate-900 animate-spin mb-3" />
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Loading score sheets</p>
+                </div>
+              ) : (
+              (() => {
+                const franchise = franchises.find((f) => f.id === sheetFranchiseId) ?? franchises[0];
+                if (!franchise) return null;
+                const canEdit = !!profile?.id && franchise.id === profile.id;
+                const fi = franchises.findIndex((f) => f.id === franchise.id);
+                const squad = allPlayers.filter((p) => p.sold_to_id === franchise.id || p.sold_to === franchise.team_name);
+                const q = searchQuery.trim().toLowerCase();
+                const filtered = q ? squad.filter((p) => p.player_name.toLowerCase().includes(q)) : squad;
+                const visible = sortSquadByTeamThenName(filtered);
+                const showEmptySquad = !q && squad.length === 0;
+                const noSearchHits = q && visible.length === 0;
+
+                return (
+                  <div className="bg-white rounded-[2rem] border border-slate-200 overflow-hidden shadow-xl">
+                    <div className={cn("px-6 py-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3", "bg-slate-900 text-white")}>
+                      <div>
+                        <h2 className="text-sm font-black uppercase italic tracking-tight">{franchise.team_name || franchise.full_name}</h2>
+                        <p className="text-[9px] font-bold text-white/50 uppercase tracking-widest mt-0.5">
+                          {squad.length} players • Franchise {fi + 1} of {franchises.length}
+                          {canEdit ? " • You can edit this sheet" : " • View only (owner edits their own sheet)"}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        {canEdit ? (
+                          <span className="text-[9px] font-black uppercase px-2 py-1 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">Editing</span>
+                        ) : (
+                          <span className="text-[9px] font-black uppercase px-2 py-1 rounded-lg bg-white/10 text-white/70 border border-white/10 flex items-center gap-1">
+                            <Lock className="h-3 w-3" /> View only
+                          </span>
+                        )}
+                        <div className="h-10 w-10 rounded-xl bg-white/10 flex items-center justify-center font-black text-lg">{squad.length}</div>
+                      </div>
+                    </div>
+                    {showEmptySquad ? (
+                      <div className="px-8 py-14 text-center text-[11px] font-bold text-slate-400 uppercase tracking-wide">
+                        No sold players in this squad yet.
+                      </div>
+                    ) : noSearchHits ? (
+                      <div className="px-8 py-14 text-center text-[11px] font-bold text-slate-400 uppercase tracking-wide">
+                        No players match your search.
+                      </div>
+                    ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left min-w-[1200px]">
+                        <thead className="bg-slate-50">
+                          <tr>
+                            <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 sticky left-0 bg-slate-50 z-10 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.08)]">Squad Player</th>
+                            {[...Array(17)].map((_, i) => (
+                              <th key={i} className="px-3 py-5 text-center text-[10px] font-black text-slate-400">G{i + 1}</th>
+                            ))}
+                            <th className="px-8 py-5 text-right text-[10px] font-black text-slate-900 sticky right-0 bg-slate-50 z-10 shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)]">Total</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {visible.map((p) => {
+                            const teamStyle = getIplTeamStyle(p.team);
                             const pts = Array(17).fill(0);
-                            allMatchPoints.filter(pt => pt.player_id === p.id).forEach(pt => {
-                               const m = allMatches.find(match => match.id === pt.match_id);
-                               if (m?.match_no && m.match_no <= 17) pts[m.match_no-1] = pt.points;
+                            allMatchPoints.filter((pt) => pt.player_id === p.id).forEach((pt) => {
+                              const m = allMatches.find((match) => match.id === pt.match_id);
+                              if (m?.match_no && m.match_no <= 17) pts[m.match_no - 1] = pt.points;
                             });
-                            const total = pts.reduce((a,b) => a+b, 0);
+                            const total = pts.reduce((a, b) => a + b, 0);
 
                             return (
-                               <tr key={p.id} className="border-b transition-colors group hover:bg-slate-50">
-                                  <td className="px-8 py-4 sticky left-0 bg-white group-hover:bg-slate-50 z-10">
-                                     <div className="flex items-center gap-4">
-                                        <div className="h-9 w-9 rounded-xl bg-slate-100 overflow-hidden shrink-0 border border-slate-100 italic flex items-center justify-center">
-                                           {p.image_url ? (
-                                              <img src={getPlayerImage(p.image_url)!} className="w-full h-full object-cover object-top" />
-                                           ) : <User size={16} className="text-slate-200" />}
-                                        </div>
-                                        <div className="min-w-0">
-                                           <div className="font-bold text-slate-900 text-xs">{p.player_name}</div>
-                                           <div className="text-[8px] font-black text-slate-400 uppercase mt-0.5">{p.role}</div>
-                                        </div>
-                                     </div>
-                                  </td>
-                                  {pts.map((score, i) => {
-                                     const mObj = allMatches.find(m => m.match_no === i+1);
-                                     const isDirty = mObj && pendingEdits[`${p.id}_${mObj.id}`] !== undefined;
-                                     return (
-                                        <td key={i} className="px-3 py-4 text-center">
-                                           <Input 
-                                             type="number" step="0.5" 
-                                             defaultValue={score || ""}
-                                             onChange={(e) => updateSeasonPoint(p.id, i+1, e.target.value)} 
-                                             className={cn("h-8 w-14 mx-auto text-[10px] font-black text-center border-none rounded-lg", isDirty ? "bg-amber-100 text-amber-900 ring-1 ring-amber-300" : "bg-slate-50")} 
-                                             placeholder="0" 
-                                           />
-                                        </td>
-                                     );
-                                  })}
-                                  <td className="px-8 py-4 text-right font-black italic bg-white group-hover:bg-slate-50 sticky right-0 z-10 text-sm">
-                                     {String(total % 1 === 0 ? total : total.toFixed(1))}
-                                  </td>
-                                </tr>
+                              <tr key={p.id} className={cn("border-b border-slate-200/80 transition-colors", teamStyle.bg)}>
+                                <td
+                                  className={cn(
+                                    "px-8 py-4 sticky left-0 z-10 border-l-4 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.06)]",
+                                    teamStyle.bg,
+                                    teamStyle.border
+                                  )}
+                                >
+                                  <div className="flex items-center gap-4">
+                                    <div className="h-9 w-9 rounded-xl bg-white/60 overflow-hidden shrink-0 border border-white/80 italic flex items-center justify-center">
+                                      {p.image_url ? (
+                                        <img src={getPlayerImage(p.image_url)!} className="w-full h-full object-cover object-top" alt="" />
+                                      ) : (
+                                        <User size={16} className="text-slate-300" />
+                                      )}
+                                    </div>
+                                    <div className="min-w-0">
+                                      <div className={cn("font-bold text-xs", teamStyle.text)}>{p.player_name}</div>
+                                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
+                                        <span className="text-[8px] font-black uppercase text-slate-500">{p.role}</span>
+                                        {p.team ? (
+                                          <span className={cn("text-[8px] font-black uppercase px-1.5 py-0 rounded border", teamStyle.border, teamStyle.text, "bg-white/50")}>
+                                            {p.team}
+                                          </span>
+                                        ) : null}
+                                      </div>
+                                    </div>
+                                  </div>
+                                </td>
+                                {pts.map((score, i) => {
+                                  const mObj = allMatches.find((m) => m.match_no === i + 1);
+                                  const isDirty = mObj && pendingEdits[`${p.id}_${mObj.id}`] !== undefined;
+                                  return (
+                                    <td key={i} className={cn("px-3 py-4 text-center", teamStyle.bg)}>
+                                      <Input
+                                        type="number"
+                                        step="0.5"
+                                        defaultValue={score || ""}
+                                        readOnly={!canEdit}
+                                        onChange={(e) => {
+                                          if (!canEdit) return;
+                                          updateSeasonPoint(p.id, i + 1, e.target.value);
+                                        }}
+                                        className={cn(
+                                          "h-8 w-14 mx-auto text-[10px] font-black text-center border-none rounded-lg",
+                                          isDirty ? "bg-amber-100 text-amber-900 ring-1 ring-amber-300" : "bg-white/70 text-slate-900",
+                                          !canEdit && "cursor-not-allowed opacity-85"
+                                        )}
+                                        placeholder="0"
+                                      />
+                                    </td>
+                                  );
+                                })}
+                                <td
+                                  className={cn(
+                                    "px-8 py-4 text-right font-black italic text-sm sticky right-0 z-10 shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.06)]",
+                                    teamStyle.bg
+                                  )}
+                                >
+                                  {String(total % 1 === 0 ? total : total.toFixed(1))}
+                                </td>
+                              </tr>
                             );
-                         })}
-                      </tbody>
-                   </table>
-                </div>
-              </div>
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                    )}
+                  </div>
+                );
+              })()
+              )}
            </div>
         )}
 
       </div>
 
-      {Object.keys(pendingEdits).length > 0 && (
+      {activeTab === "sheets" && profile?.id && sheetFranchiseId === profile.id && Object.keys(pendingEdits).length > 0 && (
          <div className="fixed bottom-6 right-6 z-50"><Button onClick={handleBulkSave} disabled={saving} className="bg-emerald-600 hover:bg-emerald-700 text-white rounded-full px-8 py-7 shadow-2xl flex gap-3 items-center font-black uppercase text-xs">{saving ? <Loader2 className="animate-spin" /> : <Save />} Save Changes ({Object.keys(pendingEdits).length})</Button></div>
       )}
     </div>
