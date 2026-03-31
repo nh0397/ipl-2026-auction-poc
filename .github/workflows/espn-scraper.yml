@@ -8,10 +8,14 @@ on:
     - cron: "30 14 * * 6,0"
   workflow_dispatch:
     inputs:
-      match_id:
-        description: 'Match ID to sync (optional, e.g. 1426461)'
+      date_ist:
+        description: "Target IST date (YYYY-MM-DD). Leave blank for today."
         required: false
-        default: ''
+        default: ""
+      match_id:
+        description: "Match ID to sync (optional). (Not wired yet)"
+        required: false
+        default: ""
 
 jobs:
   scrape_and_notify:
@@ -36,14 +40,12 @@ jobs:
         id: run_scraper
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
-          python scripts/scraper_espn_playwright.py "${{ github.event.inputs.match_id }}"
-          if [ -f summary.txt ]; then
-            echo "SUMMARY=$(cat summary.txt)" >> $GITHUB_OUTPUT
-          else
-            echo "SUMMARY=No summary file found." >> $GITHUB_OUTPUT
-          fi
+          python scripts/sync_scorecards_espn.py \
+            ${{ github.event.inputs.date_ist != '' && format('--date {0}', github.event.inputs.date_ist) || '' }}
+
+          echo "SUMMARY=ESPN scorecard sync completed." >> $GITHUB_OUTPUT
 
       - name: Send Success Email (All Admins)
         if: success()

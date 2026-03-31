@@ -24,7 +24,6 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/auth/AuthProvider";
 import React from "react";
 import ScorecardViewer from "@/components/scoreboard/ScorecardViewer";
-import { ScoringRulesLegend } from "@/components/rules/ScoringRulesLegend";
 import { adaptCricApiToScorecardViewer } from "@/lib/adapters/cricapiScorecard";
 import { scorePjRulesPlayer, scoreMy11CirclePlayer, scoreIplFantasyPlayer } from "@/lib/scoring";
 
@@ -143,16 +142,53 @@ export default function ScoreboardPage() {
   const [expandedScorecardId, setExpandedScorecardId] = useState<string | null>(null);
   const [expandedPointsId, setExpandedPointsId] = useState<string | null>(null);
   const [showBreakdownId, setShowBreakdownId] = useState<string | null>(null);
+  const [breakdownSource, setBreakdownSource] = useState<"cricapi" | "espn">("cricapi");
+  const [scorecardSource, setScorecardSource] = useState<"cricapi" | "espn">("cricapi");
   const [pointsVariant, setPointsVariant] = useState<"pjRules" | "my11circle" | "iplFantasy">("pjRules");
 
   useEffect(() => {
     // Prevent "stuck open" breakdown when switching scoring variants.
     setShowBreakdownId(null);
   }, [pointsVariant]);
+
+  useEffect(() => {
+    // Also reset the expanded row when switching data source.
+    setShowBreakdownId(null);
+  }, [breakdownSource]);
+
+  // scorecardSource is independent from breakdownSource (users can compare sources).
+
+  const [espnScorecardByMatchNo, setEspnScorecardByMatchNo] = useState<Record<number, any | null>>({});
+  const [espnScorecardLoadingByMatchNo, setEspnScorecardLoadingByMatchNo] = useState<Record<number, boolean>>({});
+
+  const fetchEspnScorecardForMatchNo = useCallback(async (matchNo: number) => {
+    if (!matchNo || matchNo <= 0) return;
+    if (espnScorecardLoadingByMatchNo[matchNo]) return;
+    if (espnScorecardByMatchNo[matchNo] !== undefined) return; // cached (including null)
+
+    setEspnScorecardLoadingByMatchNo((prev) => ({ ...prev, [matchNo]: true }));
+    try {
+      const { data, error } = await supabase
+        .from("fixtures")
+        .select("scorecard")
+        .eq("match_no", matchNo)
+        .maybeSingle();
+      if (error) {
+        console.error("[espn] scorecard fetch error", { matchNo, error });
+        setEspnScorecardByMatchNo((prev) => ({ ...prev, [matchNo]: null }));
+        return;
+      }
+      setEspnScorecardByMatchNo((prev) => ({ ...prev, [matchNo]: data?.scorecard ?? null }));
+    } catch (e) {
+      console.error("[espn] scorecard fetch exception", { matchNo, e });
+      setEspnScorecardByMatchNo((prev) => ({ ...prev, [matchNo]: null }));
+    } finally {
+      setEspnScorecardLoadingByMatchNo((prev) => ({ ...prev, [matchNo]: false }));
+    }
+  }, [espnScorecardByMatchNo, espnScorecardLoadingByMatchNo]);
   const [subLoading, setSubLoading] = useState(false);
   const [tabLoading, setTabLoading] = useState(false);
 
-  const [showRules, setShowRules] = useState(false);
   const [fixtures, setFixtures] = useState<Fixture[]>([]);
   const [fixtureFilter, setFixtureFilter] = useState<"all" | "upcoming" | "completed">("all");
   /** Which auction franchise’s score sheet is shown (sub-tabs under Sheets). */
@@ -402,25 +438,6 @@ export default function ScoreboardPage() {
            </div>
         </div>
 
-        {/* Rules Accordion */}
-        <div className="space-y-4">
-          <button 
-            onClick={() => setShowRules(!showRules)} 
-            className="w-full flex items-center justify-between bg-white/40 hover:bg-white/60 p-5 rounded-[1.5rem] border border-slate-200/50 backdrop-blur-md transition-all group"
-          >
-            <div className="flex items-center gap-4">
-               <div className="h-8 w-8 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-indigo-100"><Calculator size={14} /></div>
-               <div>
-                  <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-900 text-left leading-none">Scoring Rules & Points Guide</h3>
-                  <p className="text-[8px] font-black uppercase text-slate-400 mt-1 leading-none">Standard Dream11 • IPL 2025 Protocol</p>
-               </div>
-            </div>
-            <ChevronRight size={16} className={cn("text-slate-400 transition-transform duration-300", showRules ? "rotate-90" : "rotate-0")} />
-          </button>
-
-          {showRules && <ScoringRulesLegend />}
-        </div>
-
         {/* Tabs */}
         <div className="flex bg-white/50 backdrop-blur-md p-1.5 rounded-[1.5rem] border border-slate-200 overflow-x-auto no-scrollbar">
            {(["sheets", "standings", "fixtures"] as const).map(tab => {
@@ -592,11 +609,61 @@ export default function ScoreboardPage() {
                          {/* Scorecard Modal */}
                          <Dialog open={expandedScorecardId === match.api_match_id} onOpenChange={(o) => setExpandedScorecardId(o ? match.api_match_id : null)}>
                             <DialogContent className="max-w-[95vw] sm:max-w-4xl bg-[#F8FAFC] border-0 p-0 rounded-[2rem] overflow-hidden">
-                               <div className="bg-slate-900 p-8 text-white"><DialogTitle className="text-2xl font-black uppercase italic">Match Statistics</DialogTitle></div>
+                               <div className="bg-slate-900 p-8 text-white flex items-start justify-between gap-4">
+                                 <DialogTitle className="text-2xl font-black uppercase italic">Match Statistics</DialogTitle>
+                                 <div className="inline-flex rounded-xl bg-white/10 p-1 text-[10px] font-black uppercase tracking-widest">
+                                   <button
+                                     onClick={() => setScorecardSource("cricapi")}
+                                     className={cn("px-3 py-1.5 rounded-lg transition-all", scorecardSource === "cricapi" ? "bg-white text-slate-900 shadow-sm" : "text-white/80 hover:text-white")}
+                                   >
+                                     CricAPI
+                                   </button>
+                                   <button
+                                     onClick={() => {
+                                       setScorecardSource("espn");
+                                       const mn = deriveMatchNo(match);
+                                       if (mn) fetchEspnScorecardForMatchNo(mn);
+                                     }}
+                                     className={cn("px-3 py-1.5 rounded-lg transition-all", scorecardSource === "espn" ? "bg-white text-slate-900 shadow-sm" : "text-white/80 hover:text-white")}
+                                   >
+                                     ESPN
+                                   </button>
+                                 </div>
+                               </div>
                                <div className="p-4 sm:p-8 max-h-[75vh] overflow-y-auto no-scrollbar">
-                                 {expandedScorecardId === match.api_match_id ? (
-                                   <ScorecardViewer scorecard={adaptCricApiToScorecardViewer(match.scorecard)} />
-                                 ) : null}
+                                 {expandedScorecardId === match.api_match_id ? (() => {
+                                   const matchNo = deriveMatchNo(match) || 0;
+                                   const cric = adaptCricApiToScorecardViewer(match.scorecard);
+                                   const espn = matchNo ? espnScorecardByMatchNo[matchNo] : null;
+                                   const espnLoading = matchNo ? !!espnScorecardLoadingByMatchNo[matchNo] : false;
+
+                                   if (scorecardSource === "espn") {
+                                     if (!matchNo) {
+                                       return (
+                                         <div className="px-2 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
+                                           No match number found for ESPN lookup.
+                                         </div>
+                                       );
+                                     }
+                                     if (espnLoading) {
+                                       return (
+                                         <div className="px-2 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
+                                           Loading ESPN scorecard…
+                                         </div>
+                                       );
+                                     }
+                                     if (!espn) {
+                                       return (
+                                         <div className="px-2 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
+                                           ESPN scorecard not available yet for Match {matchNo}.
+                                         </div>
+                                       );
+                                     }
+                                     return <ScorecardViewer scorecard={espn as any} />;
+                                   }
+
+                                   return <ScorecardViewer scorecard={cric as any} />;
+                                 })() : null}
                                </div>
                             </DialogContent>
                          </Dialog>
@@ -607,25 +674,48 @@ export default function ScoreboardPage() {
                                <div className="bg-gradient-to-br from-indigo-600 to-blue-700 p-8 text-white">
                                   <DialogTitle className="text-2xl font-black uppercase tracking-tight leading-none">Scoring Intelligence</DialogTitle>
                                   <p className="text-[9px] font-black uppercase opacity-90 mt-1.5 leading-none">{match.team1_short} vs {match.team2_short} • 100% Team-Aware Coverage</p>
-                                  <div className="mt-5 inline-flex rounded-xl bg-white/10 p-1 text-[10px] font-black uppercase tracking-widest">
-                                    <button
-                                      onClick={() => setPointsVariant("pjRules")}
-                                      className={cn("px-3 py-1.5 rounded-lg transition-all", pointsVariant === "pjRules" ? "bg-white text-indigo-700 shadow-sm" : "text-white/80 hover:text-white")}
-                                    >
-                                      PJ Rules
-                                    </button>
-                                    <button
-                                      onClick={() => setPointsVariant("my11circle")}
-                                      className={cn("px-3 py-1.5 rounded-lg transition-all", pointsVariant === "my11circle" ? "bg-white text-indigo-700 shadow-sm" : "text-white/80 hover:text-white")}
-                                    >
-                                      My11Circle
-                                    </button>
-                                    <button
-                                      onClick={() => setPointsVariant("iplFantasy")}
-                                      className={cn("px-3 py-1.5 rounded-lg transition-all", pointsVariant === "iplFantasy" ? "bg-white text-indigo-700 shadow-sm" : "text-white/80 hover:text-white")}
-                                    >
-                                      IPL Fantasy
-                                    </button>
+                                  <div className="mt-5 flex flex-col gap-2">
+                                    <div className="inline-flex rounded-xl bg-white/10 p-1 text-[10px] font-black uppercase tracking-widest w-fit">
+                                      <button
+                                        onClick={() => {
+                                          setBreakdownSource("cricapi");
+                                        }}
+                                        className={cn("px-3 py-1.5 rounded-lg transition-all", breakdownSource === "cricapi" ? "bg-white text-indigo-700 shadow-sm" : "text-white/80 hover:text-white")}
+                                      >
+                                        CricAPI
+                                      </button>
+                                      <button
+                                        onClick={() => {
+                                          setBreakdownSource("espn");
+                                          const mn = deriveMatchNo(match);
+                                          if (mn) fetchEspnScorecardForMatchNo(mn);
+                                        }}
+                                        className={cn("px-3 py-1.5 rounded-lg transition-all", breakdownSource === "espn" ? "bg-white text-indigo-700 shadow-sm" : "text-white/80 hover:text-white")}
+                                      >
+                                        ESPN
+                                      </button>
+                                    </div>
+
+                                    <div className="inline-flex rounded-xl bg-white/10 p-1 text-[10px] font-black uppercase tracking-widest w-fit">
+                                      <button
+                                        onClick={() => setPointsVariant("pjRules")}
+                                        className={cn("px-3 py-1.5 rounded-lg transition-all", pointsVariant === "pjRules" ? "bg-white text-indigo-700 shadow-sm" : "text-white/80 hover:text-white")}
+                                      >
+                                        PJ Rules
+                                      </button>
+                                      <button
+                                        onClick={() => setPointsVariant("my11circle")}
+                                        className={cn("px-3 py-1.5 rounded-lg transition-all", pointsVariant === "my11circle" ? "bg-white text-indigo-700 shadow-sm" : "text-white/80 hover:text-white")}
+                                      >
+                                        My11Circle
+                                      </button>
+                                      <button
+                                        onClick={() => setPointsVariant("iplFantasy")}
+                                        className={cn("px-3 py-1.5 rounded-lg transition-all", pointsVariant === "iplFantasy" ? "bg-white text-indigo-700 shadow-sm" : "text-white/80 hover:text-white")}
+                                      >
+                                        IPL Fantasy
+                                      </button>
+                                    </div>
                                   </div>
                                </div>
                                <div className="p-2 sm:p-8 max-h-[75vh] overflow-y-auto no-scrollbar">
@@ -635,15 +725,41 @@ export default function ScoreboardPage() {
                                      </thead>
                                      <tbody className="divide-y divide-slate-100">
                                         {expandedPointsId === match.api_match_id ? (() => {
-                                            console.log("[breakdown] match", {
-                                              api_match_id: match.api_match_id,
-                                              points_synced: match.points_synced,
-                                              has_scorecard: !!match.scorecard,
-                                            });
-                                            console.log("[breakdown] raw scorecard keys", Object.keys(match.scorecard || {}));
+                                            const matchNo = deriveMatchNo(match) || 0;
+                                            const cric = adaptCricApiToScorecardViewer(match.scorecard) as any;
+                                            const espn = matchNo ? espnScorecardByMatchNo[matchNo] : null;
+                                            const espnLoading = matchNo ? !!espnScorecardLoadingByMatchNo[matchNo] : false;
 
-                                            const sc = adaptCricApiToScorecardViewer(match.scorecard) as any;
-                                            console.log("[breakdown] adapted innings length", sc?.innings?.length ?? null);
+                                            const sc = breakdownSource === "cricapi" ? cric : espn;
+                                            if (breakdownSource === "espn") {
+                                              if (!matchNo) {
+                                                return (
+                                                  <tr>
+                                                    <td colSpan={3} className="px-6 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
+                                                      No match number found for ESPN lookup.
+                                                    </td>
+                                                  </tr>
+                                                );
+                                              }
+                                              if (espnLoading) {
+                                                return (
+                                                  <tr>
+                                                    <td colSpan={3} className="px-6 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
+                                                      Loading ESPN scorecard…
+                                                    </td>
+                                                  </tr>
+                                                );
+                                              }
+                                              if (!sc) {
+                                                return (
+                                                  <tr>
+                                                    <td colSpan={3} className="px-6 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
+                                                      ESPN scorecard not available yet for Match {matchNo}.
+                                                    </td>
+                                                  </tr>
+                                                );
+                                              }
+                                            }
                                             if (!sc?.innings) return null;
                                             const stats: Record<string, any> = {};
                                             const team1 = match.team1_short || "";
