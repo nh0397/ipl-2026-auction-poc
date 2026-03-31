@@ -95,8 +95,10 @@ def to_fixture_row(m: Dict[str, Any]) -> Dict[str, Any]:
         "teams": m.get("teams", []) or [],
         "team_info": team_info,
         "raw_match": m,
-        "scorecard": None,
-        "points_synced": False,
+        # IMPORTANT:
+        # Do NOT include scorecard/points_synced in the fixtures upsert payload.
+        # This job runs repeatedly and would otherwise overwrite already-synced
+        # scorecards/points flags (making prior days look "wiped").
     }
 
 
