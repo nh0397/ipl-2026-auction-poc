@@ -134,6 +134,7 @@ def main() -> None:
         updated.append(
             {
                 "api_match_id": match_id,
+                "match_date": f.get("match_date") or "",
                 "title": f.get("title") or f.get("match_name") or "",
                 "team1_short": f.get("team1_short") or "",
                 "team2_short": f.get("team2_short") or "",
@@ -150,12 +151,15 @@ def main() -> None:
                 fh.write(f"updated_count={len(updated)}\n")
                 details_lines = []
                 for u in updated:
-                    label = u.get("title") or ""
-                    if not label and (u.get("team1_short") or u.get("team2_short")):
-                        label = f"{u.get('team1_short','')} vs {u.get('team2_short','')}".strip()
-                    if not label:
-                        label = u.get("api_match_id") or ""
-                    details_lines.append(f"- {label} ({u.get('api_match_id')})")
+                    md = u.get("match_date") or ""
+                    teams = ""
+                    if u.get("team1_short") or u.get("team2_short"):
+                        teams = f"{u.get('team1_short','')} vs {u.get('team2_short','')}".strip()
+                    title = u.get("title") or ""
+                    core = title or teams or (u.get("api_match_id") or "")
+                    date_prefix = f"{md} — " if md else ""
+                    team_suffix = f" — {teams}" if teams and teams not in core else ""
+                    details_lines.append(f"- {date_prefix}{core}{team_suffix} ({u.get('api_match_id')})")
                 fh.write("updated_details<<EOF\n")
                 fh.write("\n".join(details_lines) + ("\n" if details_lines else ""))
                 fh.write("EOF\n")
