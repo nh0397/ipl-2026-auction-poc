@@ -87,8 +87,26 @@ export default function RulesPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#fafafa] flex items-center justify-center">
-        <div className="h-12 w-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+      <div className="min-h-screen bg-[#fafafa] p-4 md:p-8">
+        <div className="max-w-7xl mx-auto space-y-10">
+          <div className="flex justify-end">
+            <div className="h-12 w-44 rounded-2xl bg-slate-200 animate-pulse shadow-sm" />
+          </div>
+          <div className="bg-white rounded-[2rem] border border-slate-100 shadow-sm overflow-hidden">
+            <div className="p-8 border-b border-slate-100 space-y-3">
+              <div className="h-6 w-56 bg-slate-200 rounded-xl animate-pulse" />
+              <div className="h-3 w-2/3 bg-slate-200 rounded-md animate-pulse" />
+            </div>
+            <div className="p-8 space-y-4">
+              <div className="h-4 w-full bg-slate-200 rounded-md animate-pulse" />
+              <div className="h-4 w-11/12 bg-slate-200 rounded-md animate-pulse" />
+              <div className="h-4 w-10/12 bg-slate-200 rounded-md animate-pulse" />
+              <div className="h-4 w-9/12 bg-slate-200 rounded-md animate-pulse" />
+              <div className="h-4 w-11/12 bg-slate-200 rounded-md animate-pulse" />
+              <div className="h-4 w-8/12 bg-slate-200 rounded-md animate-pulse" />
+            </div>
+          </div>
+        </div>
       </div>
     );
   }

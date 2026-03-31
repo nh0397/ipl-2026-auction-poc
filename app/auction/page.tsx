@@ -705,8 +705,42 @@ export default function AuctionPage() {
   // ─── Render ───
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#FDFDFF] flex items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+      <div className="min-h-screen bg-[#FDFDFF] p-4 md:p-10 font-sans">
+        <div className="max-w-7xl mx-auto px-4 py-8 space-y-8">
+          <div className="flex items-center justify-between gap-6">
+            <div className="space-y-2">
+              <div className="h-6 w-64 bg-slate-200 rounded-xl animate-pulse" />
+              <div className="h-3 w-80 bg-slate-200 rounded-md animate-pulse" />
+            </div>
+            <div className="h-10 w-40 bg-slate-200 rounded-2xl animate-pulse" />
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="bg-white rounded-[2rem] border border-slate-100 shadow-sm p-6 space-y-4">
+                <div className="h-4 w-32 bg-slate-200 rounded-md animate-pulse" />
+                <div className="h-10 w-24 bg-slate-200 rounded-xl animate-pulse" />
+                <div className="h-3 w-2/3 bg-slate-200 rounded-md animate-pulse" />
+              </div>
+            ))}
+          </div>
+
+          <div className="bg-white rounded-[2.5rem] border border-slate-100 shadow-sm p-8 space-y-6">
+            <div className="flex items-center gap-6">
+              <div className="h-28 w-28 bg-slate-200 rounded-[2rem] animate-pulse" />
+              <div className="flex-1 space-y-3">
+                <div className="h-6 w-56 bg-slate-200 rounded-xl animate-pulse" />
+                <div className="h-4 w-80 bg-slate-200 rounded-lg animate-pulse" />
+                <div className="h-4 w-64 bg-slate-200 rounded-lg animate-pulse" />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {[1, 2, 3, 4].map((i) => (
+                <div key={i} className="h-12 bg-slate-200 rounded-2xl animate-pulse" />
+              ))}
+            </div>
+          </div>
+        </div>
       </div>
     );
   }

@@ -8,10 +8,14 @@ on:
     - cron: "30 14 * * 6,0"
   workflow_dispatch:
     inputs:
-      match_id:
-        description: 'Match ID to sync (optional, e.g. 1426461)'
+      date_ist:
+        description: "Target IST date (YYYY-MM-DD). Leave blank for today."
         required: false
-        default: ''
+        default: ""
+      match_id:
+        description: "Match ID to sync (optional). (Not wired yet)"
+        required: false
+        default: ""
 
 jobs:
   scrape_and_notify:
@@ -36,16 +40,16 @@ jobs:
         id: run_scraper
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
-          python scripts/scraper_espn_playwright.py "${{ github.event.inputs.match_id }}"
-          if [ -f summary.txt ]; then
-            echo "SUMMARY=$(cat summary.txt)" >> $GITHUB_OUTPUT
-          else
-            echo "SUMMARY=No summary file found." >> $GITHUB_OUTPUT
-          fi
+          # Always run headless in CI for stability
+          export ESPN_HEADLESS=1
+          python scripts/sync_scorecards_espn.py \
+            ${{ github.event.inputs.date_ist != '' && format('--date {0}', github.event.inputs.date_ist) || '' }}
 
-      - name: Send Success Email (All Admins)
+          echo "SUMMARY=ESPN scorecard sync completed." >> $GITHUB_OUTPUT
+
+      - name: Send Success Email (All Participants)
         if: success()
         uses: dawidd6/action-send-mail@v4
         with:
@@ -54,7 +58,7 @@ jobs:
           username: ${{ secrets.SMTP_USER }}
           password: ${{ secrets.SMTP_PASS }}
           subject: "IPL 2026: Match Sync Success"
-          to: "naisicric97@gmail.com,admin2@example.com,admin3@example.com,admin4@example.com"
+          to: "harshshah661992@gmail.com,tradingwithparthshah@gmail.com,jalan.me4u@gmail.com,naisicric97@gmail.com"
           from: "Scraper Intelligence <${{ secrets.SMTP_USER }}>"
           body: |
             Match synchronization was successful!

@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
 from datetime import datetime, timedelta, timezone
 import argparse
+import re
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "../.env"))
 
@@ -113,11 +114,14 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--date", help="IST date (YYYY-MM-DD). Defaults to today (IST).", default=None)
     args = parser.parse_args()
+    if args.date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(args.date).strip()):
+        raise RuntimeError(f"Invalid --date value (expected YYYY-MM-DD): {args.date!r}")
 
     sleep_s = float(os.getenv("CRICAPI_SCORECARD_SLEEP_SECONDS", "1.0"))
 
-    targets = list_targets(args.date)
-    target_label = args.date or "today (IST)"
+    target_date = str(args.date).strip() if args.date else None
+    targets = list_targets(target_date)
+    target_label = target_date or "today (IST)"
     print(f"Target date: {target_label}. Found {len(targets)} ended fixtures missing scorecard.")
 
     updated: List[Dict[str, Any]] = []
@@ -147,7 +151,7 @@ def main() -> None:
     if gh_out:
         try:
             with open(gh_out, "a", encoding="utf-8") as fh:
-                fh.write(f"target_date={args.date or today_ist_date_str(datetime.now(timezone.utc))}\n")
+                fh.write(f"target_date={target_date or today_ist_date_str(datetime.now(timezone.utc))}\n")
                 fh.write(f"updated_count={len(updated)}\n")
                 details_lines = []
                 for u in updated:

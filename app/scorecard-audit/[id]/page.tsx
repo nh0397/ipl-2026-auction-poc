@@ -186,9 +186,38 @@ export default function ScorecardAuditPage() {
   };
 
   if (loading) return (
-    <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-8 text-center">
-       <Loader2 className="h-16 w-16 text-blue-600 animate-spin mb-8" />
-       <h2 className="text-2xl font-black uppercase italic tracking-tighter text-slate-900">Synchronizing Scorecard</h2>
+    <div className="min-h-screen bg-slate-50 p-4 md:p-8">
+      <div className="max-w-6xl mx-auto space-y-8">
+        <div className="bg-white rounded-[2rem] border border-slate-100 shadow-sm p-8 space-y-4">
+          <div className="h-5 w-64 bg-slate-200 rounded-lg animate-pulse" />
+          <div className="h-9 w-96 bg-slate-200 rounded-2xl animate-pulse" />
+          <div className="h-3 w-2/3 bg-slate-200 rounded-md animate-pulse" />
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="bg-white rounded-[2rem] border border-slate-100 shadow-sm p-6 space-y-3">
+              <div className="h-4 w-32 bg-slate-200 rounded-md animate-pulse" />
+              <div className="h-24 w-full bg-slate-200 rounded-2xl animate-pulse" />
+              <div className="h-3 w-2/3 bg-slate-200 rounded-md animate-pulse" />
+            </div>
+          ))}
+        </div>
+
+        <div className="bg-white rounded-[2rem] border border-slate-100 shadow-sm overflow-hidden">
+          <div className="p-6 border-b border-slate-100">
+            <div className="h-4 w-48 bg-slate-200 rounded-md animate-pulse" />
+          </div>
+          <div className="p-6 space-y-3">
+            {[1, 2, 3, 4, 5].map((i) => (
+              <div key={i} className="flex items-center justify-between gap-4">
+                <div className="h-4 w-64 bg-slate-200 rounded-md animate-pulse" />
+                <div className="h-4 w-24 bg-slate-200 rounded-md animate-pulse" />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
     </div>
   );
 
