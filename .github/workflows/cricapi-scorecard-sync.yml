@@ -39,6 +39,7 @@ jobs:
           python scripts/populate_fixtures_cricapi.py
 
       - name: Sync scorecards into fixtures_cricapi
+        id: sync_scorecards
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -46,4 +47,26 @@ jobs:
         run: |
           python scripts/sync_scorecards_cricapi.py \
             ${{ github.event.inputs.date_ist != '' && format('--date {0}', github.event.inputs.date_ist) || '' }}
+
+      - name: Email participants (points updated)
+        if: success() && steps.sync_scorecards.outputs.updated_count != '0'
+        uses: dawidd6/action-send-mail@v4
+        with:
+          server_address: smtp.gmail.com
+          server_port: 587
+          username: ${{ secrets.MAIL_USERNAME || secrets.SMTP_USER }}
+          password: ${{ secrets.MAIL_PASSWORD || secrets.SMTP_PASS }}
+          subject: "Points updated for match — ${{ steps.sync_scorecards.outputs.target_date }} (${{ steps.sync_scorecards.outputs.updated_count }} updated)"
+          to: "harshshah661992@gmail.com,tradingwithparthshah@gmail.com,jalan.me4u@gmail.com,naisicric97@gmail.com"
+          from: "IPL Auction System <${{ secrets.MAIL_USERNAME || secrets.SMTP_USER || 'noreply@ipl2026.com' }}>"
+          body: |
+            Hi,
+
+            Points have been updated successfully for the following match(es):
+
+            ${{ steps.sync_scorecards.outputs.updated_details }}
+
+            Date (IST): ${{ steps.sync_scorecards.outputs.target_date }}
+
+            — IPL Auction System
 

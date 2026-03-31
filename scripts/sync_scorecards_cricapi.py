@@ -64,7 +64,7 @@ def list_targets(match_date_ist: Optional[str]) -> List[Dict[str, Any]]:
     # Use params so requests handles encoding correctly (PostgREST interprets "+" as space otherwise).
     url = f"{SUPABASE_URL}/rest/v1/{FIXTURES_TABLE}"
     base_params = {
-        "select": "id,api_match_id,match_date,date_time_gmt,match_ended,scorecard",
+        "select": "id,api_match_id,match_date,date_time_gmt,match_ended,scorecard,title,match_name,team1_short,team2_short",
         "match_ended": "eq.true",
         "points_synced": "eq.false",
         "scorecard": "is.null",
@@ -120,6 +120,8 @@ def main() -> None:
     target_label = args.date or "today (IST)"
     print(f"Target date: {target_label}. Found {len(targets)} ended fixtures missing scorecard.")
 
+    updated: List[Dict[str, Any]] = []
+
     for idx, f in enumerate(targets, start=1):
         fixture_id = f.get("id")
         match_id = f.get("api_match_id")
@@ -129,7 +131,36 @@ def main() -> None:
         sc = fetch_scorecard(match_id)
         update_fixture_scorecard_and_mark_synced(fixture_id, sc)
         print(f"  ✅ stored scorecard + set points_synced=true for fixture_id={fixture_id}")
+        updated.append(
+            {
+                "api_match_id": match_id,
+                "title": f.get("title") or f.get("match_name") or "",
+                "team1_short": f.get("team1_short") or "",
+                "team2_short": f.get("team2_short") or "",
+            }
+        )
         time.sleep(sleep_s)
+
+    # Expose outputs for GitHub Actions (used to decide whether to email participants)
+    gh_out = os.getenv("GITHUB_OUTPUT")
+    if gh_out:
+        try:
+            with open(gh_out, "a", encoding="utf-8") as fh:
+                fh.write(f"target_date={args.date or today_ist_date_str(datetime.now(timezone.utc))}\n")
+                fh.write(f"updated_count={len(updated)}\n")
+                details_lines = []
+                for u in updated:
+                    label = u.get("title") or ""
+                    if not label and (u.get("team1_short") or u.get("team2_short")):
+                        label = f"{u.get('team1_short','')} vs {u.get('team2_short','')}".strip()
+                    if not label:
+                        label = u.get("api_match_id") or ""
+                    details_lines.append(f"- {label} ({u.get('api_match_id')})")
+                fh.write("updated_details<<EOF\n")
+                fh.write("\n".join(details_lines) + ("\n" if details_lines else ""))
+                fh.write("EOF\n")
+        except Exception as e:
+            print(f"WARNING: failed writing GITHUB_OUTPUT: {e}")
 
     print("Done.")
 
