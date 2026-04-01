@@ -60,45 +60,34 @@ export function calculateDream11Points(stats: MatchStats): number {
   points += stats.runOutDirect * 12;
   points += stats.runOutIndirect * 6;
 
-  // 4. Efficiency Points (Economy Rate - Min 2 Overs)
+  // 4. Economy rate (min 2 overs) — T20 chart: neutral for ~7–10 RPO
   if (stats.oversMoved && stats.oversMoved >= 2 && stats.economyRate !== undefined) {
-    if (stats.economyRate < 5) points += 6;
-    else if (stats.economyRate < 6) points += 4;
-    else if (stats.economyRate < 7) points += 2;
-    else if (stats.economyRate >= 12) points -= 6;
-    else if (stats.economyRate >= 11) points -= 4;
-    else if (stats.economyRate >= 10) points -= 2;
+    const eco = stats.economyRate;
+    if (eco < 5) points += 6;
+    else if (eco <= 5.99) points += 4;
+    else if (eco <= 7) points += 2;
+    else if (eco < 10) {
+      /* 7.01–9.99: 0 */
+    } else if (eco <= 11) points -= 2;
+    else if (eco <= 12) points -= 4;
+    else points -= 6;
   }
 
-  // 5. Strike Rate Points (Except Bowler - Min 10 Balls faced OR 20 runs scored)
-  if ((stats.balls >= 10 || stats.runs >= 20) && stats.strikeRate !== undefined && stats.role !== 'Bowler') {
-    if (stats.strikeRate >= 170) points += 6;
-    else if (stats.strikeRate >= 150) points += 4;
-    else if (stats.strikeRate >= 130) points += 2;
-    else if (stats.strikeRate < 50) points -= 6;
-    else if (stats.strikeRate < 60) points -= 4;
-    else if (stats.strikeRate < 70) points -= 2;
+  // 5. Strike rate (except bowler, min 10 balls)
+  if (stats.balls >= 10 && stats.strikeRate !== undefined && stats.role !== "Bowler") {
+    const sr = stats.strikeRate;
+    if (sr > 170) points += 6;
+    else if (sr >= 150.01 && sr <= 170) points += 4;
+    else if (sr >= 130 && sr <= 150) points += 2;
+    else if (sr >= 60 && sr < 70) points -= 2;
+    else if (sr >= 50 && sr < 60) points -= 4;
+    else if (sr < 50) points -= 6;
   }
   
-  // 6. Others
-  if (stats.isAnnounced) points += 4; // +4 for playing 11
-  
-  // 7. Multipliers (Custom Rules)
-  let multiplier = 1.0;
-  
-  // Batting Multiplier
-  if (stats.runs >= 150) multiplier = Math.max(multiplier, 4.0);
-  else if (stats.runs >= 100) multiplier = Math.max(multiplier, 3.0);
-  else if (stats.runs >= 75) multiplier = Math.max(multiplier, 1.75);
-  else if (stats.runs >= 45) multiplier = Math.max(multiplier, 1.5);
-  else if (stats.runs >= 25) multiplier = Math.max(multiplier, 1.25);
-  
-  // Bowling Multiplier
-  if (stats.wickets >= 5) multiplier = Math.max(multiplier, 4.0);
-  else if (stats.wickets >= 3) multiplier = Math.max(multiplier, 2.0);
-  else if (stats.wickets === 2) multiplier = Math.max(multiplier, 1.5);
-  
-  return points * multiplier;
+  // 6. Others — announced playing XI (+4)
+  if (stats.isAnnounced) points += 4;
+
+  return points;
 }
 
 // ============================================================================
@@ -134,13 +123,19 @@ export interface IplFantasyPlayerForScoring {
   batting: Partial<IplFantasyBatting>;
   bowling: Partial<IplFantasyBowling>;
   fielding: Partial<IplFantasyFielding>;
+  /** +4 when player is in the announced XI (T20 chart). */
   in_announced_lineup?: boolean;
   is_playing_substitute?: boolean;
   is_captain?: boolean;
   is_vice_captain?: boolean;
+  /** Used for duck (−2) and SR (skip for pure bowlers): Batter | Bowler | WK | All-Rounder */
+  playerRole?: string;
 }
 
-export function iplFantasyBattingPoints(bat: Partial<IplFantasyBatting> | undefined): number {
+export function iplFantasyBattingPoints(
+  bat: Partial<IplFantasyBatting> | undefined,
+  opts?: { isBowler?: boolean }
+): { points: number; srPoints: number } {
   const runs = Number(bat?.runs ?? 0) || 0;
   const balls = Number(bat?.balls ?? 0) || 0;
   const fours = Number(bat?.fours ?? 0) || 0;
@@ -157,22 +152,25 @@ export function iplFantasyBattingPoints(bat: Partial<IplFantasyBatting> | undefi
   else if (runs >= 50) pts += 8;
   else if (runs >= 25) pts += 4;
 
-  if (runs === 0 && isDismissed) pts -= 2;
+  // Duck: −2 for Batter / WK / AR (not pure bowlers)
+  if (runs === 0 && isDismissed && !opts?.isBowler) pts -= 2;
 
-  if (balls >= 10 && isDismissed) {
-    const sr = (runs / balls) * 100;
-    if (sr > 170) pts += 6;
-    else if (sr >= 150.01) pts += 4;
-    else if (sr >= 130) pts += 2;
-    else if (sr >= 60 && sr < 70) pts -= 2;
-    else if (sr >= 50 && sr < 60) pts -= 4;
-    else if (sr < 50) pts -= 6;
+  let srPts = 0;
+  if (!opts?.isBowler && balls >= 10) {
+    const sr = balls > 0 ? (runs / balls) * 100 : 0;
+    if (sr > 170) srPts = 6;
+    else if (sr >= 150.01 && sr <= 170) srPts = 4;
+    else if (sr >= 130 && sr <= 150) srPts = 2;
+    else if (sr >= 60 && sr < 70) srPts = -2;
+    else if (sr >= 50 && sr < 60) srPts = -4;
+    else if (sr < 50) srPts = -6;
   }
+  pts += srPts;
 
-  return pts;
+  return { points: pts, srPoints: srPts };
 }
 
-export function iplFantasyBowlingPoints(bwl: Partial<IplFantasyBowling> | undefined): number {
+export function iplFantasyBowlingPoints(bwl: Partial<IplFantasyBowling> | undefined): { points: number; ecoPoints: number } {
   const overs = Number(bwl?.overs ?? 0) || 0;
   const maidens = Number(bwl?.maidens ?? 0) || 0;
   const runsC = Number(bwl?.runs_conceded ?? 0) || 0;
@@ -189,19 +187,20 @@ export function iplFantasyBowlingPoints(bwl: Partial<IplFantasyBowling> | undefi
 
   pts += maidens * 12;
 
+  let ecoPts = 0;
   if (overs >= 2) {
     const eco = runsC / overs;
-    if (eco < 5) pts += 6;
-    else if (eco <= 5.99) pts += 4;
-    else if (eco <= 7) pts += 2;
-    else if (eco <= 9) {
-      // pass
-    } else if (eco <= 11) pts -= 2;
-    else if (eco <= 12) pts -= 4;
-    else pts -= 6;
+    if (eco < 5) ecoPts = 6;
+    else if (eco <= 5.99) ecoPts = 4;
+    else if (eco <= 7) ecoPts = 2;
+    else if (eco < 10) ecoPts = 0;
+    else if (eco <= 11) ecoPts = -2;
+    else if (eco <= 12) ecoPts = -4;
+    else ecoPts = -6;
+    pts += ecoPts;
   }
 
-  return pts;
+  return { points: pts, ecoPoints: ecoPts };
 }
 
 export function iplFantasyFieldingPoints(fld: Partial<IplFantasyFielding> | undefined): number {
@@ -214,20 +213,236 @@ export function iplFantasyFieldingPoints(fld: Partial<IplFantasyFielding> | unde
   return pts;
 }
 
-// PJ Rules (Python) scorer (name kept distinct from IPL Fantasy app rules).
+/** One row in the PJ Rules expandable breakdown (scoreboard UI). */
+export type PjRulesBreakdownLine = {
+  label: string;
+  pts: number;
+  /** Short stat text, e.g. "SR 185.2 (≥10 balls)" */
+  detail?: string;
+};
+
+export type PjRulesDetailedBreakdown = {
+  batting: PjRulesBreakdownLine[];
+  bowling: PjRulesBreakdownLine[];
+  fielding: PjRulesBreakdownLine[];
+  extras: PjRulesBreakdownLine[];
+};
+
+function pjMilestoneLine(runs: number): PjRulesBreakdownLine | null {
+  if (runs >= 100) return { label: "Century bonus", pts: 16, detail: "100+ runs" };
+  if (runs >= 75) return { label: "75 run bonus", pts: 12, detail: "75+ runs" };
+  if (runs >= 50) return { label: "Half-century bonus", pts: 8, detail: "50+ runs" };
+  if (runs >= 25) return { label: "25 run bonus", pts: 4, detail: "25+ runs" };
+  return null;
+}
+
+function pjEconomyLine(
+  overs: number,
+  runsC: number,
+  ecoPts: number
+): PjRulesBreakdownLine | null {
+  if (overs < 2) return null;
+  const eco = runsC / overs;
+  let band: string;
+  if (eco < 5) band = "<5 RPO";
+  else if (eco <= 5.99) band = "5–5.99 RPO";
+  else if (eco <= 7) band = "6–7 RPO";
+  else if (eco < 10) band = "7.01–9.99 RPO (neutral)";
+  else if (eco <= 11) band = "10–11 RPO";
+  else if (eco <= 12) band = "11.01–12 RPO";
+  else band = ">12 RPO";
+  return {
+    label: "Economy rate",
+    pts: ecoPts,
+    detail: `${eco.toFixed(2)} RPO (${band})`,
+  };
+}
+
+/** Line-by-line PJ Rules breakdown for the scoreboard panel (sums match `scorePjRulesPlayer`). */
+export function pjRulesDetailedBreakdown(p: IplFantasyPlayerForScoring): PjRulesDetailedBreakdown {
+  const isBowler = p.playerRole === "Bowler";
+  const bat = p.batting ?? {};
+  const bwl = p.bowling ?? {};
+  const fld = p.fielding ?? {};
+
+  const runs = Number(bat.runs ?? 0) || 0;
+  const balls = Number(bat.balls ?? 0) || 0;
+  const fours = Number(bat.fours ?? 0) || 0;
+  const sixes = Number(bat.sixes ?? 0) || 0;
+  const d = String(bat.dismissal ?? "").toLowerCase();
+  const isDismissed = !["", "not out", "retired hurt"].includes(d);
+
+  const batOut: PjRulesBreakdownLine[] = [];
+  batOut.push({ label: "Runs (1 pt/run)", pts: runs, detail: `${runs} runs` });
+  if (fours > 0) batOut.push({ label: "Boundary bonus (4 pt/four)", pts: fours * 4, detail: `${fours}×4` });
+  if (sixes > 0) batOut.push({ label: "Six bonus (6 pt/six)", pts: sixes * 6, detail: `${sixes}×6` });
+
+  const ms = pjMilestoneLine(runs);
+  if (ms) batOut.push(ms);
+
+  if (runs === 0 && isDismissed && !isBowler) {
+    batOut.push({ label: "Duck (Batter / WK / AR)", pts: -2, detail: "Dismissed for 0" });
+  }
+
+  const batFull = iplFantasyBattingPoints(p.batting, { isBowler });
+  if (!isBowler && balls >= 10) {
+    const sr = balls > 0 ? (runs / balls) * 100 : 0;
+    let band: string;
+    if (sr > 170) band = ">170";
+    else if (sr >= 150.01 && sr <= 170) band = "150.01–170";
+    else if (sr >= 130 && sr <= 150) band = "130–150";
+    else if (sr >= 60 && sr < 70) band = "60–70";
+    else if (sr >= 50 && sr < 60) band = "50–60";
+    else if (sr < 50) band = "<50";
+    else band = "70.01–129.99 (neutral)";
+    batOut.push({
+      label: "Strike rate",
+      pts: batFull.srPoints,
+      detail: `SR ${sr.toFixed(1)} (${band}) · min 10 balls`,
+    });
+  }
+
+  const overs = Number(bwl.overs ?? 0) || 0;
+  const maidens = Number(bwl.maidens ?? 0) || 0;
+  const runsC = Number(bwl.runs_conceded ?? 0) || 0;
+  const wickets = Number(bwl.wickets ?? 0) || 0;
+  const lbwB = Number(bwl.lbw_bowled_wickets ?? 0) || 0;
+  const dots = Number(bwl.dot_balls ?? 0) || 0;
+
+  const bwFull = iplFantasyBowlingPoints(p.bowling);
+
+  const bowlOut: PjRulesBreakdownLine[] = [];
+  if (dots > 0) bowlOut.push({ label: "Dot balls (1 pt/dot)", pts: dots, detail: `${dots} dots` });
+  if (wickets > 0) bowlOut.push({ label: "Wickets (30 pt each, excl. run-out)", pts: wickets * 30, detail: `${wickets}×30` });
+  if (lbwB > 0) bowlOut.push({ label: "LBW / bowled bonus", pts: lbwB * 8, detail: `${lbwB}×8` });
+  if (wickets >= 5) bowlOut.push({ label: "5-wicket bonus", pts: 12, detail: "5+ wickets" });
+  else if (wickets === 4) bowlOut.push({ label: "4-wicket bonus", pts: 8 });
+  else if (wickets === 3) bowlOut.push({ label: "3-wicket bonus", pts: 4 });
+  if (maidens > 0) bowlOut.push({ label: "Maiden overs (12 pt each)", pts: maidens * 12, detail: `${maidens} maidens` });
+
+  const ecoLine = pjEconomyLine(overs, runsC, bwFull.ecoPoints);
+  if (ecoLine) bowlOut.push(ecoLine);
+
+  const catches = Number(fld.catches ?? 0) || 0;
+  const stumpings = Number(fld.stumpings ?? 0) || 0;
+  const roD = Number(fld.runout_direct ?? 0) || 0;
+  const roI = Number(fld.runout_indirect ?? 0) || 0;
+
+  const fieldOut: PjRulesBreakdownLine[] = [];
+  if (catches > 0) fieldOut.push({ label: "Catches (8 pt each)", pts: catches * 8, detail: `${catches}×8` });
+  if (catches >= 3) fieldOut.push({ label: "3-catch bonus", pts: 4 });
+  if (stumpings > 0) fieldOut.push({ label: "Stumpings (12 pt each)", pts: stumpings * 12, detail: `${stumpings}×12` });
+  if (roD > 0) fieldOut.push({ label: "Run out — direct hit (12 pt each)", pts: roD * 12, detail: `${roD}×12` });
+  if (roI > 0) fieldOut.push({ label: "Run out — not direct (6 pt each)", pts: roI * 6, detail: `${roI}×6` });
+
+  const extras: PjRulesBreakdownLine[] = [];
+  if (p.in_announced_lineup) extras.push({ label: "Announced playing XI", pts: 4, detail: "Entry bonus" });
+  if (p.is_playing_substitute) extras.push({ label: "Playing substitute", pts: 4, detail: "If applicable" });
+
+  return { batting: batOut, bowling: bowlOut, fielding: fieldOut, extras };
+}
+
+/**
+ * Bonus multiplier: applies to **total** base fantasy points for that player for that match.
+ * Run-based and wicket-based tiers are evaluated separately; the **higher** multiplier is applied.
+ */
+export type D11BonusMultiplierInfo = {
+  runMultiplier: number;
+  wicketMultiplier: number;
+  appliedMultiplier: number;
+  /** Which side supplies the max multiplier (ties when both equal and &gt; 1×). */
+  appliedSource: "runs" | "wickets" | "both" | "none";
+  runTierLabel: string;
+  wicketTierLabel: string;
+};
+
+export function d11BonusMultiplierInfo(runs: number, wickets: number): D11BonusMultiplierInfo {
+  const r = Math.max(0, Math.floor(Number(runs) || 0));
+  const w = Math.max(0, Math.floor(Number(wickets) || 0));
+
+  let runMultiplier = 1;
+  let runTierLabel = "Under 25 runs (1×)";
+  if (r >= 150) {
+    runMultiplier = 4;
+    runTierLabel = "150+ runs (4×)";
+  } else if (r >= 100) {
+    runMultiplier = 3;
+    runTierLabel = "100–149 runs (3×)";
+  } else if (r >= 75) {
+    runMultiplier = 1.75;
+    runTierLabel = "75–99 runs (1.75×)";
+  } else if (r >= 45) {
+    runMultiplier = 1.5;
+    runTierLabel = "45–74 runs (1.5×)";
+  } else if (r >= 25) {
+    runMultiplier = 1.25;
+    runTierLabel = "25–44 runs (1.25×)";
+  }
+
+  let wicketMultiplier = 1;
+  let wicketTierLabel = "0–1 wickets (1×)";
+  if (w >= 5) {
+    wicketMultiplier = 4;
+    wicketTierLabel = "5+ wickets (4×)";
+  } else if (w >= 3) {
+    wicketMultiplier = 2;
+    wicketTierLabel = "3–4 wickets (2×)";
+  } else if (w === 2) {
+    wicketMultiplier = 1.5;
+    wicketTierLabel = "2 wickets (1.5×)";
+  }
+
+  const appliedMultiplier = Math.max(runMultiplier, wicketMultiplier);
+
+  let appliedSource: D11BonusMultiplierInfo["appliedSource"];
+  if (appliedMultiplier <= 1) {
+    appliedSource = "none";
+  } else if (runMultiplier === wicketMultiplier && runMultiplier > 1) {
+    appliedSource = "both";
+  } else if (runMultiplier > wicketMultiplier) {
+    appliedSource = "runs";
+  } else {
+    appliedSource = "wickets";
+  }
+
+  return {
+    runMultiplier,
+    wicketMultiplier,
+    appliedMultiplier,
+    appliedSource,
+    runTierLabel,
+    wicketTierLabel,
+  };
+}
+
+/** Total points after bonus multiplier (does not alter base calculation). */
+export function d11PointsAfterMultiplier(basePoints: number, appliedMultiplier: number): number {
+  return Math.round(Number(basePoints) * appliedMultiplier * 100) / 100;
+}
+
+// PJ Rules — T20 fantasy charts (batting / bowling / fielding / economy / SR) + announced XI +4; no cap multipliers for now.
 export function scorePjRulesPlayer(p: IplFantasyPlayerForScoring) {
-  const b = iplFantasyBattingPoints(p.batting);
+  const isBowler = p.playerRole === "Bowler";
+  const bat = iplFantasyBattingPoints(p.batting, { isBowler });
   const bw = iplFantasyBowlingPoints(p.bowling);
   const f = iplFantasyFieldingPoints(p.fielding);
 
   let extra = p.in_announced_lineup ? 4 : 0;
   if (p.is_playing_substitute) extra += 4;
 
-  const base = b + bw + f + extra;
-  const mult = p.is_captain ? 2.0 : p.is_vice_captain ? 1.5 : 1.0;
-  const total = Math.round(base * mult * 100) / 100;
+  const base = bat.points + bw.points + f + extra;
+  const total = Math.round(base * 100) / 100;
 
-  return { batting_pts: b, bowling_pts: bw, fielding_pts: f, extra_pts: extra, multiplier: mult, total_pts: total };
+  return {
+    batting_pts: bat.points,
+    bowling_pts: bw.points,
+    fielding_pts: f,
+    extra_pts: extra,
+    sr_pts: bat.srPoints,
+    eco_pts: bw.ecoPoints,
+    multiplier: 1,
+    total_pts: total,
+  };
 }
 
 // ============================================================================

@@ -545,9 +545,41 @@ def infer_team(heading: str, teams: Dict[str, str], innings_no: int) -> str:
     return teams["home"] or f"Innings {innings_no}"
 
 
+def infer_opposition_team(batting_team: str, teams: Dict[str, str]) -> str:
+    """The team that bowled this innings is always the other franchise (not the batting side)."""
+    if not batting_team:
+        return ""
+    b = batting_team.strip().lower()
+    h = (teams.get("home") or "").strip().lower()
+    a = (teams.get("away") or "").strip().lower()
+    if h and b == h and (teams.get("away") or "").strip():
+        return teams["away"].strip()
+    if a and b == a and (teams.get("home") or "").strip():
+        return teams["home"].strip()
+    return ""
+
+
 def clean_name(name: str) -> str:
     n = name.replace("†", "").replace("(c)", "").replace("(vc)", "").replace("(s/r)", "")
     return n.strip()
+
+
+def print_scraped_innings_block(
+    label: str,
+    batting_team: str,
+    bowling_team: str,
+    batting_data: Dict[str, Any],
+    bowling_data: List[Dict[str, Any]],
+) -> None:
+    """Debug: batting side vs bowling side + rows for one innings (batting table + bowling table)."""
+    print(f"\n{'=' * 60}\n{label}\n{'=' * 60}", flush=True)
+    print(f"Batting team: {batting_team}", flush=True)
+    print(f"Bowling team (opposition): {bowling_team}", flush=True)
+    print("\nBatting stats:", flush=True)
+    print(json.dumps(batting_data.get("batting") or [], indent=2, default=str), flush=True)
+    print("\nBowling stats:", flush=True)
+    print(json.dumps(bowling_data, indent=2, default=str), flush=True)
+    print(flush=True)
 
 
 async def scrape(page: Page) -> Dict[str, Any]:
@@ -560,6 +592,11 @@ async def scrape(page: Page) -> Dict[str, Any]:
 
     innings: List[Dict[str, Any]] = []
 
+    # First batting side = "Team A", second batting side = "Team B" (by innings order).
+    # Innings 1: batting+DNB → A, bowling → B. Innings 2: batting+DNB → B, bowling → A.
+    team_a_players: List[str] = []
+    team_b_players: List[str] = []
+
     for idx in range(0, len(chosen), 2):
         if idx + 1 >= len(chosen):
             break
@@ -570,30 +607,69 @@ async def scrape(page: Page) -> Dict[str, Any]:
 
         batting_data = await parse_batting(batting_table["locator"], innings_no)
         bowling_data = await parse_bowling(bowling_table["locator"], innings_no)
-        team = infer_team(batting_table["heading"], teams, innings_no)
+        batting_team = infer_team(batting_table["heading"], teams, innings_no)
+        bowling_team = infer_opposition_team(batting_team, teams)
+        if not bowling_team:
+            cand = infer_team(bowling_table["heading"], teams, innings_no)
+            if cand and cand.strip().lower() != batting_team.strip().lower():
+                bowling_team = cand
 
-        squad = [
-            name
-            for name in list(
-                set(
+        if innings_no == 1:
+            print_scraped_innings_block(
+                "First innings (1st batting table + 1st bowling table)",
+                batting_team,
+                bowling_team,
+                batting_data,
+                bowling_data,
+            )
+        elif innings_no == 2:
+            print_scraped_innings_block(
+                "Second innings (2nd batting table + 2nd bowling table)",
+                batting_team,
+                bowling_team,
+                batting_data,
+                bowling_data,
+            )
+
+        # Batting table = batting_team; bowling table = opposition. Do not merge into one "squad".
+        squad_batting = list(
+            dict.fromkeys(
+                n
+                for n in (
                     [clean_name(b["player"]) for b in batting_data["batting"]]
-                    + [clean_name(bw["bowler"]) for bw in bowling_data]
                     + [clean_name(p) for p in batting_data["yet_to_bat"]]
                 )
+                if n and n not in ("BATTING", "BOWLING")
             )
-            if name and name not in ["BATTING", "BOWLING"]
-        ]
+        )
+        squad_bowling = list(
+            dict.fromkeys(
+                n
+                for n in ([clean_name(bw["bowler"]) for bw in bowling_data])
+                if n and n not in ("BATTING", "BOWLING")
+            )
+        )
+
+        if innings_no == 1:
+            team_a_players.extend(squad_batting)
+            team_b_players.extend(squad_bowling)
+        elif innings_no == 2:
+            team_b_players.extend(squad_batting)
+            team_a_players.extend(squad_bowling)
 
         innings.append(
             {
-                "team": team,
+                "team": batting_team,
+                "batting_team": batting_team,
+                "bowling_team": bowling_team,
                 "batting": batting_data["batting"],
                 "did_not_bat": batting_data["yet_to_bat"],
                 "extras": batting_data["extras"],
                 "total": batting_data["total"],
                 "fall_of_wickets": batting_data["fall_of_wickets"],
                 "bowling": bowling_data,
-                "squad": squad,
+                "squad_batting": squad_batting,
+                "squad_bowling": squad_bowling,
             }
         )
 
@@ -603,18 +679,28 @@ async def scrape(page: Page) -> Dict[str, Any]:
         if len(parts) >= 2:
             cleaned_title = ", ".join(parts[1:])
 
-    all_players: List[str] = []
-    for inn in innings:
-        all_players.extend(inn.get("squad", []))
+    team_a_name = innings[0]["batting_team"] if len(innings) >= 1 else ""
+    team_b_name = innings[1]["batting_team"] if len(innings) >= 2 else ""
 
-    playing24 = sorted(list(set(all_players)))
+    unique_a = sorted({n for n in team_a_players if n})
+    unique_b = sorted({n for n in team_b_players if n})
 
-    log(f"[playing] playing24 total={len(playing24)}")
-    for n in playing24:
-        print("  -", n)
+    log(f"[team_a] name={team_a_name!r} unique count={len(unique_a)}")
+    for n in unique_a:
+        print("  [A]", n)
+    log(f"[team_b] name={team_b_name!r} unique count={len(unique_b)}")
+    for n in unique_b:
+        print("  [B]", n)
 
     return {
-        "playing_squad": playing24,
+        "team_a": {
+            "name": team_a_name,
+            "unique": unique_a,
+        },
+        "team_b": {
+            "name": team_b_name,
+            "unique": unique_b,
+        },
         "match_info": {
             "title": cleaned_title,
             "teams": teams,

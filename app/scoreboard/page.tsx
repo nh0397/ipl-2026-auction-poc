@@ -24,8 +24,48 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/auth/AuthProvider";
 import React from "react";
 import ScorecardViewer from "@/components/scoreboard/ScorecardViewer";
-import { adaptCricApiToScorecardViewer } from "@/lib/adapters/cricapiScorecard";
-import { scorePjRulesPlayer, scoreMy11CirclePlayer, scoreIplFantasyPlayer } from "@/lib/scoring";
+import {
+  scorePjRulesPlayer,
+  pjRulesDetailedBreakdown,
+  d11BonusMultiplierInfo,
+  d11PointsAfterMultiplier,
+  type PjRulesDetailedBreakdown,
+  type D11BonusMultiplierInfo,
+} from "@/lib/scoring";
+
+/** Cached breakdown rows may predate bonus `d11` / `pjDetail`; recompute from stats. */
+function getD11ForRow(p: {
+  d11?: D11BonusMultiplierInfo & { multipliedTotal: number };
+  r?: number;
+  w?: number;
+  total?: number;
+}): D11BonusMultiplierInfo & { multipliedTotal: number } {
+  if (p.d11) return p.d11;
+  const meta = d11BonusMultiplierInfo(p.r ?? 0, p.w ?? 0);
+  return {
+    ...meta,
+    multipliedTotal: d11PointsAfterMultiplier(p.total ?? 0, meta.appliedMultiplier),
+  };
+}
+
+function getPjDetailForRow(p: any): PjRulesDetailedBreakdown {
+  if (p.pjDetail) return p.pjDetail;
+  const pjInput = {
+    batting: { runs: p.r, balls: p.b, fours: p.f, sixes: p.s, dismissal: p.dismissal || "not out" },
+    bowling: {
+      overs: p.o,
+      maidens: p.m,
+      runs_conceded: p.r_conc,
+      wickets: p.w,
+      lbw_bowled_wickets: p.lbwB,
+      dot_balls: p.dots,
+    },
+    fielding: { catches: p.c, stumpings: p.st, runout_direct: p.ro, runout_indirect: 0 },
+    in_announced_lineup: true,
+    playerRole: p.role,
+  };
+  return pjRulesDetailedBreakdown(pjInput);
+}
 
 // ─── Fixture helpers ────────────────────────────────────────────────
 interface Fixture {
@@ -137,28 +177,11 @@ export default function ScoreboardPage() {
   const [expandedScorecardId, setExpandedScorecardId] = useState<string | null>(null);
   const [expandedPointsId, setExpandedPointsId] = useState<string | null>(null);
   const [showBreakdownId, setShowBreakdownId] = useState<string | null>(null);
-  const [breakdownSource, setBreakdownSource] = useState<"cricapi" | "espn">("cricapi");
-  const [scorecardSource, setScorecardSource] = useState<"cricapi" | "espn">("cricapi");
-  const [pointsVariant, setPointsVariant] = useState<"pjRules" | "my11circle" | "iplFantasy">("pjRules");
-
-  useEffect(() => {
-    // Prevent "stuck open" breakdown when switching scoring variants.
-    setShowBreakdownId(null);
-  }, [pointsVariant]);
-
-  useEffect(() => {
-    // Also reset the expanded row when switching data source.
-    setShowBreakdownId(null);
-  }, [breakdownSource]);
-
-  // scorecardSource is independent from breakdownSource (users can compare sources).
 
   const [espnScorecardByMatchNo, setEspnScorecardByMatchNo] = useState<Record<number, any | null>>({});
   const [espnScorecardLoadingByMatchNo, setEspnScorecardLoadingByMatchNo] = useState<Record<number, boolean>>({});
-  /** `public.fixtures.points_synced` keyed by `match_no` (loaded once; never overwritten from scorecard fetch). */
-  const [espnPointsSyncedByMatchNo, setEspnPointsSyncedByMatchNo] = useState<Record<number, boolean>>({});
-  /** `public.fixtureapi_points.synced` keyed by `api_match_id` — sole CricAPI sync flag for UI. */
-  const [fixtureapiPointsSyncedByApiMatchId, setFixtureapiPointsSyncedByApiMatchId] = useState<Record<string, boolean>>({});
+  /** `public.fixtures.points_synced` keyed by `match_no` — sole source for “synced”; not `fixtures_cricapi` or `match_ended`. */
+  const [fixturePointsSyncedByMatchNo, setFixturePointsSyncedByMatchNo] = useState<Record<number, boolean>>({});
 
   const [fixtures, setFixtures] = useState<Fixture[]>([]);
   const [fixtureFilter, setFixtureFilter] = useState<"all" | "upcoming" | "completed">("all");
@@ -189,14 +212,16 @@ export default function ScoreboardPage() {
     eco_pts: number | null;
     total: number;
     breakdownHint?: string;
-    _variant: "pjRules" | "my11circle" | "iplFantasy";
+    _variant: "pjRules";
+    pjDetail?: PjRulesDetailedBreakdown;
+    /** Bonus multiplier metadata on total base points (base `total` unchanged). */
+    d11?: D11BonusMultiplierInfo & { multipliedTotal: number };
   };
 
   const [breakdownCache, setBreakdownCache] = useState<Record<string, BreakdownRow[]>>({});
   const [breakdownLoadingKey, setBreakdownLoadingKey] = useState<string | null>(null);
 
-  const computeBreakdownRows = useCallback(
-    (sc: any, match: any, variant: "pjRules" | "my11circle" | "iplFantasy"): BreakdownRow[] => {
+  const computeBreakdownRows = useCallback((sc: any, match: any): BreakdownRow[] => {
       if (!sc?.innings) return [];
 
       const stats: Record<string, any> = {};
@@ -231,14 +256,56 @@ export default function ScoreboardPage() {
         });
       });
 
-      const findMappedKey = (name: string, team: string) => {
+      /** Map a name (possibly partial) to a stats key for exactly one franchise — never cross teams. */
+      const findKeyForTeamRoster = (name: string, team: string) => {
         const n = normalizePlayerName(name);
+        const suffix = `_${team}`;
         const exact = `${n}_${team}`;
         if (stats[exact]) return exact;
-        const matchedKey = Object.keys(stats).find((k) => k.endsWith(`_${team}`) && k.split("_")[0].includes(n));
-        if (matchedKey) return matchedKey;
-        const wholeMatchKey = Object.keys(stats).find((k) => k.split("_")[0].includes(n));
-        return wholeMatchKey || exact;
+        const keys = Object.keys(stats).filter((k) => k.endsWith(suffix));
+        const nLower = n.toLowerCase();
+        for (const k of keys) {
+          const playerPart = k.slice(0, -suffix.length);
+          if (playerPart.toLowerCase() === nLower) return k;
+        }
+        for (const k of keys) {
+          const pl = k.slice(0, -suffix.length).toLowerCase();
+          if (pl.includes(nLower) || nLower.includes(pl)) return k;
+        }
+        const lastTok = nLower.split(/\s+/).pop() || nLower;
+        for (const k of keys) {
+          const parts = k.slice(0, -suffix.length).toLowerCase().split(/\s+/).filter(Boolean);
+          if (parts.some((part) => part === lastTok || part.startsWith(lastTok) || lastTok.startsWith(part))) return k;
+        }
+        return exact;
+      };
+
+      const ensureStatRow = (key: string, team: string, role: string, displayName?: string) => {
+        if (stats[key]) return;
+        const suffix = `_${team}`;
+        const playerName =
+          displayName ||
+          (key.endsWith(suffix) ? key.slice(0, -suffix.length) : normalizePlayerName(String(key).split("_")[0] || ""));
+        stats[key] = {
+          n: playerName,
+          team,
+          r: 0,
+          b: 0,
+          f: 0,
+          s: 0,
+          w: 0,
+          m: 0,
+          o: 0,
+          r_conc: 0,
+          c: 0,
+          st: 0,
+          dots: 0,
+          lbwB: 0,
+          ro: 0,
+          isDuck: false,
+          role,
+          dismissal: "",
+        };
       };
 
       // Accumulate
@@ -249,10 +316,31 @@ export default function ScoreboardPage() {
         (inn.batting || []).forEach((b: any) => {
           const rawN = b.player || "";
           if (!rawN || rawN === "BATTING") return;
-          const key = findMappedKey(rawN, currentTeam);
+          const key = findKeyForTeamRoster(rawN, currentTeam);
           const dStr = (b.dismissal || b["dismissal-text"] || "").toLowerCase();
+          const sufCT = `_${currentTeam}`;
 
-          if (!stats[key]) stats[key] = { n: key.split("_")[0], team: currentTeam, r: 0, b: 0, f: 0, s: 0, w: 0, m: 0, o: 0, r_conc: 0, c: 0, st: 0, dots: 0, lbwB: 0, ro: 0, isDuck: false, role: "Batter", dismissal: "" };
+          if (!stats[key])
+            stats[key] = {
+              n: key.endsWith(sufCT) ? key.slice(0, -sufCT.length) : normalizePlayerName(rawN),
+              team: currentTeam,
+              r: 0,
+              b: 0,
+              f: 0,
+              s: 0,
+              w: 0,
+              m: 0,
+              o: 0,
+              r_conc: 0,
+              c: 0,
+              st: 0,
+              dots: 0,
+              lbwB: 0,
+              ro: 0,
+              isDuck: false,
+              role: "Batter",
+              dismissal: "",
+            };
           stats[key].r += Number(b.R || b.r) || 0;
           stats[key].b += Number(b.B || b.b) || 0;
           stats[key].f += Number(b["4s"]) || 0;
@@ -268,9 +356,29 @@ export default function ScoreboardPage() {
         (inn.bowling || []).forEach((bw: any) => {
           const rawN = bw.bowler;
           if (!rawN || rawN === "BOWLING") return;
-          const key = findMappedKey(rawN, opposingTeam);
+          const key = findKeyForTeamRoster(rawN, opposingTeam);
+          const sufOpp = `_${opposingTeam}`;
 
-          if (!stats[key]) stats[key] = { n: key.split("_")[0], team: opposingTeam, r: 0, b: 0, f: 0, s: 0, r_conc: 0, w: 0, m: 0, o: 0, c: 0, st: 0, dots: 0, lbwB: 0, ro: 0, isDuck: false, role: "Bowler" };
+          if (!stats[key])
+            stats[key] = {
+              n: key.endsWith(sufOpp) ? key.slice(0, -sufOpp.length) : normalizePlayerName(rawN),
+              team: opposingTeam,
+              r: 0,
+              b: 0,
+              f: 0,
+              s: 0,
+              r_conc: 0,
+              w: 0,
+              m: 0,
+              o: 0,
+              c: 0,
+              st: 0,
+              dots: 0,
+              lbwB: 0,
+              ro: 0,
+              isDuck: false,
+              role: "Bowler",
+            };
           stats[key].w += Number(bw.W || bw.w) || 0;
           stats[key].m += Number(bw.M || bw.m) || 0;
           stats[key].r_conc += Number(bw.R || bw.r) || 0;
@@ -284,32 +392,48 @@ export default function ScoreboardPage() {
         (inn.catching || []).forEach((c: any) => {
           const rawN = typeof c.catcher === "string" ? c.catcher : c.catcher?.name;
           if (!rawN) return;
-          const key = findMappedKey(rawN, opposingTeam);
-          if (stats[key]) {
-            stats[key].c += Number(c.catch || 0);
-            stats[key].st += Number(c.stumped || 0);
-          }
+          const key = findKeyForTeamRoster(rawN, opposingTeam);
+          ensureStatRow(key, opposingTeam, "Fielder", rawN);
+          stats[key].c += Number(c.catch || 0);
+          stats[key].st += Number(c.stumped || 0);
         });
 
         (inn.batting || []).forEach((b: any) => {
           const d = (b.dismissal || b["dismissal-text"] || "").toLowerCase();
+          if (!d) return;
+
+          // Bowling side (Team B when Team A bats): c & b, c, st, run out — map partial names only to opposingTeam.
+          if (/\bc\s*&\s*b\s+/i.test(d)) {
+            const m = d.match(/\bc\s*&\s*b\s+([a-zA-Z .''-]+)/i);
+            if (m?.[1]) {
+              const nRaw = m[1].trim();
+              const key = findKeyForTeamRoster(nRaw, opposingTeam);
+              ensureStatRow(key, opposingTeam, "Fielder", nRaw);
+              stats[key].c += 1;
+            }
+            return;
+          }
+
           if (d.startsWith("c ") || d.startsWith("st ")) {
             const parts = d.split(" b ");
             let nRaw = parts[0].replace(/^(?:c|st)\s+(?:†)?/, "").trim();
             if (nRaw && !["sub", "batting", "retired"].includes(nRaw)) {
-              const key = findMappedKey(nRaw, opposingTeam);
-              if (stats[key]) {
-                if (d.startsWith("c ")) stats[key].c++;
-                if (d.startsWith("st ")) stats[key].st++;
-              }
+              const key = findKeyForTeamRoster(nRaw, opposingTeam);
+              ensureStatRow(key, opposingTeam, "Fielder", nRaw);
+              if (d.startsWith("c ")) stats[key].c += 1;
+              if (d.startsWith("st ")) stats[key].st += 1;
             }
           }
+
           if (d.includes("run out")) {
             const roMatch = d.match(/\(([^)]+)\)/);
             if (roMatch?.[1]) {
-              const n = roMatch[1].trim();
-              const key = findMappedKey(n, opposingTeam);
-              if (stats[key]) stats[key].ro++;
+              const n = roMatch[1].split(/[/,]/)[0].trim();
+              if (n && !/^sub$/i.test(n)) {
+                const key = findKeyForTeamRoster(n, opposingTeam);
+                ensureStatRow(key, opposingTeam, "Fielder", n);
+                stats[key].ro += 1;
+              }
             }
           }
         });
@@ -318,73 +442,40 @@ export default function ScoreboardPage() {
       const base = 4;
 
       const rows: BreakdownRow[] = Object.values(stats).map((p: any) => {
-        if (variant === "pjRules") {
-          const scored = scorePjRulesPlayer({
-            batting: { runs: p.r, balls: p.b, fours: p.f, sixes: p.s, dismissal: p.dismissal || "not out" },
-            bowling: { overs: p.o, maidens: p.m, runs_conceded: p.r_conc, wickets: p.w, lbw_bowled_wickets: p.lbwB, dot_balls: p.dots },
-            fielding: { catches: p.c, stumpings: p.st, runout_direct: p.ro, runout_indirect: 0 },
-            in_announced_lineup: true,
-          });
-          return {
-            ...p,
-            _variant: "pjRules",
-            base,
-            b_pts: scored.batting_pts,
-            bw_pts: scored.bowling_pts,
-            f_pts: scored.fielding_pts,
-            sr_pts: null,
-            eco_pts: null,
-            total: base + scored.total_pts - 4,
-            breakdownHint: "PJ Rules (Python)",
-          };
-        }
-
-        if (variant === "my11circle") {
-          const isBowlerType = /bowler/i.test(String(p.role || "")) || (Number(p.o) || 0) >= 2 || (Number(p.w) || 0) > 0;
-          const scored = scoreMy11CirclePlayer(
-            {
-              batting: { runs: p.r, balls: p.b, fours: p.f, sixes: p.s, dismissal: p.dismissal || "not out" },
-              bowling: { overs: p.o, maidens: p.m, runs_conceded: p.r_conc, wickets: p.w, lbw_bowled_wickets: p.lbwB, dot_balls: p.dots },
-              fielding: { catches: p.c, stumpings: p.st, runout_direct: p.ro, runout_indirect: 0 },
-              in_announced_lineup: true,
-            },
-            { excludeDuckForBowlers: true, isBowler: isBowlerType }
-          );
-          return {
-            ...p,
-            _variant: "my11circle",
-            base,
-            b_pts: scored.batting_pts,
-            bw_pts: scored.bowling_pts,
-            f_pts: scored.fielding_pts,
-            sr_pts: scored.sr_pts,
-            eco_pts: scored.eco_pts,
-            total: scored.total_pts,
-            breakdownHint: "My11Circle rules",
-          };
-        }
-
-        const ipl = scoreIplFantasyPlayer(
-          {
-            batting: { runs: p.r, balls: p.b, fours: p.f, sixes: p.s, dismissal: p.dismissal || "not out" },
-            bowling: { overs: p.o, maidens: p.m, runs_conceded: p.r_conc, wickets: p.w, lbw_bowled_wickets: p.lbwB, dot_balls: p.dots },
-            fielding: { catches: p.c, stumpings: p.st, runout_direct: p.ro, runout_indirect: 0 },
-            in_announced_lineup: true,
+        const pjInput = {
+          batting: { runs: p.r, balls: p.b, fours: p.f, sixes: p.s, dismissal: p.dismissal || "not out" },
+          bowling: {
+            overs: p.o,
+            maidens: p.m,
+            runs_conceded: p.r_conc,
+            wickets: p.w,
+            lbw_bowled_wickets: p.lbwB,
+            dot_balls: p.dots,
           },
-          { excludeDuckForBowlers: true, isBowler: p.role === "Bowler", applyStrikeRateForBowlers: false }
-        );
-
+          fielding: { catches: p.c, stumpings: p.st, runout_direct: p.ro, runout_indirect: 0 },
+          in_announced_lineup: true,
+          playerRole: p.role,
+        };
+        const scored = scorePjRulesPlayer(pjInput);
+        const pjDetail = pjRulesDetailedBreakdown(pjInput);
+        const totalPts = base + scored.total_pts - 4;
+        const d11Meta = d11BonusMultiplierInfo(p.r, p.w);
         return {
           ...p,
-          _variant: "iplFantasy",
+          _variant: "pjRules" as const,
           base,
-          b_pts: ipl.batting_pts,
-          bw_pts: ipl.bowling_pts,
-          f_pts: ipl.fielding_pts,
-          sr_pts: ipl.sr_pts,
-          eco_pts: ipl.eco_pts,
-          total: ipl.total_pts,
-          breakdownHint: "IPL Fantasy rules",
+          b_pts: scored.batting_pts,
+          bw_pts: scored.bowling_pts,
+          f_pts: scored.fielding_pts,
+          sr_pts: scored.sr_pts ?? null,
+          eco_pts: scored.eco_pts ?? null,
+          total: totalPts,
+          breakdownHint: "PJ Rules (T20)",
+          pjDetail,
+          d11: {
+            ...d11Meta,
+            multipliedTotal: d11PointsAfterMultiplier(totalPts, d11Meta.appliedMultiplier),
+          },
         };
       });
 
@@ -399,32 +490,19 @@ export default function ScoreboardPage() {
     if (!match) return;
 
     const mn = espnMatchNo(match);
-    const cric = adaptCricApiToScorecardViewer(match.scorecard) as any;
     const espn = mn != null ? espnScorecardByMatchNo[mn] : null;
     const espnLoading = mn != null ? !!espnScorecardLoadingByMatchNo[mn] : false;
-    const cricSynced = !!fixtureapiPointsSyncedByApiMatchId[match.api_match_id];
-    const espnSynced = mn != null ? !!espnPointsSyncedByMatchNo[mn] : false;
+    const pointsSynced = mn != null ? !!fixturePointsSyncedByMatchNo[mn] : false;
 
-    const sc = breakdownSource === "cricapi" ? cric : espn;
-    const key = `${expandedPointsId}|${breakdownSource}|${pointsVariant}`;
+    const key = expandedPointsId;
 
-    if (breakdownSource === "cricapi" && !cricSynced) {
+    if (mn == null || !pointsSynced) {
       setBreakdownLoadingKey(null);
       return;
     }
-    if (breakdownSource === "espn") {
-      if (mn == null) {
-        setBreakdownLoadingKey(null);
-        return;
-      }
-      if (!espnSynced) {
-        setBreakdownLoadingKey(null);
-        return;
-      }
-      if (espnLoading) {
-        setBreakdownLoadingKey(null);
-        return;
-      }
+    if (espnLoading) {
+      setBreakdownLoadingKey(null);
+      return;
     }
 
     if (breakdownCache[key]) {
@@ -432,7 +510,7 @@ export default function ScoreboardPage() {
       return;
     }
 
-    if (!sc?.innings?.length) {
+    if (!espn?.innings?.length) {
       setBreakdownCache((prev) => ({ ...prev, [key]: [] }));
       setBreakdownLoadingKey(null);
       return;
@@ -441,7 +519,7 @@ export default function ScoreboardPage() {
     setBreakdownLoadingKey(key);
     const t = setTimeout(() => {
       try {
-        const rows = computeBreakdownRows(sc, match, pointsVariant);
+        const rows = computeBreakdownRows(espn, match);
         setBreakdownCache((prev) => ({ ...prev, [key]: rows }));
       } finally {
         setBreakdownLoadingKey((cur) => (cur === key ? null : cur));
@@ -452,13 +530,10 @@ export default function ScoreboardPage() {
   }, [
     expandedPointsId,
     fixtures,
-    breakdownSource,
-    pointsVariant,
     breakdownCache,
     espnScorecardByMatchNo,
     espnScorecardLoadingByMatchNo,
-    espnPointsSyncedByMatchNo,
-    fixtureapiPointsSyncedByApiMatchId,
+    fixturePointsSyncedByMatchNo,
     computeBreakdownRows,
   ]);
 
@@ -547,10 +622,9 @@ export default function ScoreboardPage() {
   const fetchFixtures = async () => {
     setTabLoading(true);
     try {
-      const [cricRes, espnRes, fapRes] = await Promise.all([
+      const [cricRes, espnRes] = await Promise.all([
         supabase.from("fixtures_cricapi").select("*").order("date_time_gmt", { ascending: true }),
         supabase.from("fixtures").select("match_no,points_synced"),
-        supabase.from("fixtureapi_points").select("api_match_id,synced"),
       ]);
       if (cricRes.data) setFixtures(cricRes.data);
       if (espnRes.data) {
@@ -559,18 +633,7 @@ export default function ScoreboardPage() {
           const n = Number(row.match_no);
           if (Number.isFinite(n)) m[n] = !!row.points_synced;
         }
-        setEspnPointsSyncedByMatchNo(m);
-      }
-      if (fapRes.error) {
-        console.error("[fixtures] fixtureapi_points fetch failed", fapRes.error);
-      }
-      if (fapRes.data) {
-        const m: Record<string, boolean> = {};
-        for (const row of fapRes.data as { api_match_id?: string | null; synced?: boolean | null }[]) {
-          const id = row.api_match_id;
-          if (id) m[id] = !!row.synced;
-        }
-        setFixtureapiPointsSyncedByApiMatchId(m);
+        setFixturePointsSyncedByMatchNo(m);
       }
     } finally {
       setTabLoading(false);
@@ -927,9 +990,8 @@ export default function ScoreboardPage() {
                    {matches.map(match => {
                       const isToday = match.match_date === today;
                       const mnRow = espnMatchNo(match);
-                      const cricPointsSynced = !!fixtureapiPointsSyncedByApiMatchId[match.api_match_id];
-                      const espnPointsSynced = mnRow != null ? !!espnPointsSyncedByMatchNo[mnRow] : false;
-                      const breakdownReady = cricPointsSynced || espnPointsSynced;
+                      const pointsSynced = mnRow != null ? !!fixturePointsSyncedByMatchNo[mnRow] : false;
+                      const breakdownReady = pointsSynced;
                       return (
                       <div key={match.id} className="space-y-2">
                         {isToday && (
@@ -965,12 +1027,8 @@ export default function ScoreboardPage() {
                                    variant="outline"
                                    size="sm"
                                    onClick={() => {
-                                     if (cricPointsSynced) setScorecardSource("cricapi");
-                                     else if (espnPointsSynced) {
-                                       setScorecardSource("espn");
-                                       const mn = espnMatchNo(match);
-                                       if (mn != null) fetchEspnScorecardForMatchNo(mn);
-                                     }
+                                     const mn = espnMatchNo(match);
+                                     if (mn != null) fetchEspnScorecardForMatchNo(mn);
                                      setExpandedScorecardId(match.api_match_id);
                                    }}
                                    className="h-8 text-[9px] font-black uppercase shadow-none border-slate-200"
@@ -981,12 +1039,8 @@ export default function ScoreboardPage() {
                                    variant="outline"
                                    size="sm"
                                    onClick={() => {
-                                     if (cricPointsSynced) setBreakdownSource("cricapi");
-                                     else if (espnPointsSynced) {
-                                       setBreakdownSource("espn");
-                                       const mn = espnMatchNo(match);
-                                       if (mn != null) fetchEspnScorecardForMatchNo(mn);
-                                     } else setBreakdownSource("cricapi");
+                                     const mn = espnMatchNo(match);
+                                     if (mn != null) fetchEspnScorecardForMatchNo(mn);
                                      setExpandedPointsId(match.api_match_id);
                                    }}
                                    className="h-8 text-[9px] font-black uppercase border-amber-200 text-amber-600 bg-amber-50/50 shadow-none"
@@ -994,7 +1048,7 @@ export default function ScoreboardPage() {
                                    Breakdown
                                  </Button>
                               </div>
-                            ) : !breakdownReady ? (
+                            ) : match.match_ended && !pointsSynced ? (
                               <span className="text-[9px] font-black text-blue-600 bg-blue-50 px-2 py-1 rounded uppercase">Points will be updated soon.</span>
                             ) : (
                               <span className="text-[9px] font-black text-amber-500 bg-amber-50 px-2 py-1 rounded uppercase">Live Soon</span>
@@ -1004,70 +1058,39 @@ export default function ScoreboardPage() {
                          {/* Scorecard Modal */}
                          <Dialog open={expandedScorecardId === match.api_match_id} onOpenChange={(o) => setExpandedScorecardId(o ? match.api_match_id : null)}>
                             <DialogContent className="max-w-[95vw] sm:max-w-4xl bg-[#F8FAFC] border-0 p-0 rounded-[2rem] overflow-hidden">
-                               <div className="bg-slate-900 p-8 text-white flex items-start justify-between gap-4">
+                               <div className="bg-slate-900 p-8 text-white flex flex-col gap-1">
                                  <DialogTitle className="text-2xl font-black uppercase italic">Match Statistics</DialogTitle>
-                                 <div className="inline-flex rounded-xl bg-white/10 p-1 text-[10px] font-black uppercase tracking-widest">
-                                   <button
-                                     onClick={() => setScorecardSource("cricapi")}
-                                     className={cn("px-3 py-1.5 rounded-lg transition-all", scorecardSource === "cricapi" ? "bg-white text-slate-900 shadow-sm" : "text-white/80 hover:text-white")}
-                                   >
-                                     CricAPI
-                                   </button>
-                                   <button
-                                     onClick={() => {
-                                       setScorecardSource("espn");
-                                       const mn = espnMatchNo(match);
-                                       if (mn != null) fetchEspnScorecardForMatchNo(mn);
-                                     }}
-                                     className={cn("px-3 py-1.5 rounded-lg transition-all", scorecardSource === "espn" ? "bg-white text-slate-900 shadow-sm" : "text-white/80 hover:text-white")}
-                                   >
-                                     ESPN
-                                   </button>
-                                 </div>
+                                 <p className="text-[10px] font-black uppercase tracking-widest text-white/60">ESPNcricinfo</p>
                                </div>
                                <div className="p-4 sm:p-8 max-h-[75vh] min-h-[60vh] overflow-y-auto no-scrollbar">
                                  {expandedScorecardId === match.api_match_id ? (() => {
                                    const mn = espnMatchNo(match);
-                                   const cricSynced = !!fixtureapiPointsSyncedByApiMatchId[match.api_match_id];
-                                   const cric = adaptCricApiToScorecardViewer(match.scorecard);
                                    const espn = mn != null ? espnScorecardByMatchNo[mn] : null;
                                    const espnLoading = mn != null ? !!espnScorecardLoadingByMatchNo[mn] : false;
-                                   const espnSyncedModal = mn != null ? !!espnPointsSyncedByMatchNo[mn] : false;
+                                   const pointsSyncedModal = mn != null ? !!fixturePointsSyncedByMatchNo[mn] : false;
 
-                                   if (scorecardSource === "cricapi" && !cricSynced) {
+                                   if (mn == null) {
                                      return (
                                        <div className="px-2 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
                                          Score not available for this category.
                                        </div>
                                      );
                                    }
-
-                                   if (scorecardSource === "espn") {
-                                     if (mn == null) {
-                                       return (
-                                         <div className="px-2 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
-                                           Score not available for this category.
-                                         </div>
-                                       );
-                                     }
-                                     if (espnLoading) {
-                                       return (
-                                         <div className="px-2 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
-                                           Loading ESPN scorecard…
-                                         </div>
-                                       );
-                                     }
-                                     if (!espnSyncedModal) {
-                                       return (
-                                         <div className="px-2 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
-                                           Score not available for this category.
-                                         </div>
-                                       );
-                                     }
-                                     return <ScorecardViewer scorecard={(espn ?? {}) as any} />;
+                                   if (espnLoading) {
+                                     return (
+                                       <div className="px-2 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
+                                         Loading ESPN scorecard…
+                                       </div>
+                                     );
                                    }
-
-                                   return <ScorecardViewer scorecard={(cric ?? {}) as any} />;
+                                   if (!pointsSyncedModal) {
+                                     return (
+                                       <div className="px-2 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
+                                         Score not available for this category.
+                                       </div>
+                                     );
+                                   }
+                                   return <ScorecardViewer scorecard={(espn ?? {}) as any} />;
                                  })() : null}
                                </div>
                             </DialogContent>
@@ -1078,50 +1101,9 @@ export default function ScoreboardPage() {
                             <DialogContent className="max-w-[95vw] sm:max-w-3xl bg-white border-0 p-0 rounded-[2rem] overflow-hidden">
                                <div className="bg-gradient-to-br from-indigo-600 to-blue-700 p-8 text-white">
                                   <DialogTitle className="text-2xl font-black uppercase tracking-tight leading-none">Scoring Intelligence</DialogTitle>
-                                  <p className="text-[9px] font-black uppercase opacity-90 mt-1.5 leading-none">{match.team1_short} vs {match.team2_short} • 100% Team-Aware Coverage</p>
-                                  <div className="mt-5 flex flex-col gap-2">
-                                    <div className="inline-flex rounded-xl bg-white/10 p-1 text-[10px] font-black uppercase tracking-widest w-fit">
-                                      <button
-                                        onClick={() => {
-                                          setBreakdownSource("cricapi");
-                                        }}
-                                        className={cn("px-3 py-1.5 rounded-lg transition-all", breakdownSource === "cricapi" ? "bg-white text-indigo-700 shadow-sm" : "text-white/80 hover:text-white")}
-                                      >
-                                        CricAPI
-                                      </button>
-                                      <button
-                                        onClick={() => {
-                                          setBreakdownSource("espn");
-                                          const mn = espnMatchNo(match);
-                                          if (mn != null) fetchEspnScorecardForMatchNo(mn);
-                                        }}
-                                        className={cn("px-3 py-1.5 rounded-lg transition-all", breakdownSource === "espn" ? "bg-white text-indigo-700 shadow-sm" : "text-white/80 hover:text-white")}
-                                      >
-                                        ESPN
-                                      </button>
-                                    </div>
-
-                                    <div className="inline-flex rounded-xl bg-white/10 p-1 text-[10px] font-black uppercase tracking-widest w-fit">
-                                      <button
-                                        onClick={() => setPointsVariant("pjRules")}
-                                        className={cn("px-3 py-1.5 rounded-lg transition-all", pointsVariant === "pjRules" ? "bg-white text-indigo-700 shadow-sm" : "text-white/80 hover:text-white")}
-                                      >
-                                        PJ Rules
-                                      </button>
-                                      <button
-                                        onClick={() => setPointsVariant("my11circle")}
-                                        className={cn("px-3 py-1.5 rounded-lg transition-all", pointsVariant === "my11circle" ? "bg-white text-indigo-700 shadow-sm" : "text-white/80 hover:text-white")}
-                                      >
-                                        My11Circle
-                                      </button>
-                                      <button
-                                        onClick={() => setPointsVariant("iplFantasy")}
-                                        className={cn("px-3 py-1.5 rounded-lg transition-all", pointsVariant === "iplFantasy" ? "bg-white text-indigo-700 shadow-sm" : "text-white/80 hover:text-white")}
-                                      >
-                                        IPL Fantasy
-                                      </button>
-                                    </div>
-                                  </div>
+                                  <p className="text-[9px] font-black uppercase opacity-90 mt-1.5 leading-none">
+                                    {match.team1_short} vs {match.team2_short} • ESPN scorecard • PJ Rules
+                                  </p>
                                </div>
                                <div className="p-2 sm:p-8 max-h-[75vh] min-h-[60vh] overflow-y-auto no-scrollbar">
                                   <table className="w-full text-left">
@@ -1131,14 +1113,13 @@ export default function ScoreboardPage() {
                                      <tbody className="divide-y divide-slate-100">
                                         {expandedPointsId === match.api_match_id ? (() => {
                                           const mn = espnMatchNo(match);
-                                          const key = `${match.api_match_id}|${breakdownSource}|${pointsVariant}`;
+                                          const key = match.api_match_id;
                                           const rows = breakdownCache[key];
                                           const isLoading = breakdownLoadingKey === key;
-                                          const cricSynced = !!fixtureapiPointsSyncedByApiMatchId[match.api_match_id];
-                                          const espnSynced = mn != null ? !!espnPointsSyncedByMatchNo[mn] : false;
+                                          const pointsSyncedRow = mn != null ? !!fixturePointsSyncedByMatchNo[mn] : false;
                                           const espnLoadingRow = mn != null ? !!espnScorecardLoadingByMatchNo[mn] : false;
 
-                                          if (breakdownSource === "cricapi" && !cricSynced) {
+                                          if (mn == null) {
                                             return (
                                               <tr>
                                                 <td colSpan={3} className="px-6 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
@@ -1147,8 +1128,7 @@ export default function ScoreboardPage() {
                                               </tr>
                                             );
                                           }
-
-                                          if (breakdownSource === "espn" && mn == null) {
+                                          if (!pointsSyncedRow) {
                                             return (
                                               <tr>
                                                 <td colSpan={3} className="px-6 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
@@ -1157,16 +1137,7 @@ export default function ScoreboardPage() {
                                               </tr>
                                             );
                                           }
-                                          if (breakdownSource === "espn" && !espnSynced) {
-                                            return (
-                                              <tr>
-                                                <td colSpan={3} className="px-6 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
-                                                  Score not available for this category.
-                                                </td>
-                                              </tr>
-                                            );
-                                          }
-                                          if (breakdownSource === "espn" && espnLoadingRow) {
+                                          if (espnLoadingRow) {
                                             return (
                                               <tr>
                                                 <td colSpan={3} className="px-6 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
@@ -1203,6 +1174,7 @@ export default function ScoreboardPage() {
                                           }
 
                                           return rows.map((p: any) => {
+                                            const d11 = getD11ForRow(p);
                                             return (
                                               <React.Fragment key={`${p.n}_${p.team}`}>
                                                 <tr
@@ -1225,70 +1197,163 @@ export default function ScoreboardPage() {
                                                   </td>
                                                   <td className="px-4 py-4 text-right">
                                                     <div className="text-sm font-black text-slate-900">{Math.round(p.total)}</div>
+                                                    {d11.appliedMultiplier > 1 ? (
+                                                      <div className="text-[8px] font-bold text-indigo-600 mt-1 leading-tight">
+                                                        Bonus multiplier {d11.multipliedTotal.toFixed(1)} pts
+                                                        <span className="text-indigo-400"> · {d11.appliedMultiplier}×</span>
+                                                      </div>
+                                                    ) : null}
                                                   </td>
                                                 </tr>
                                                 {showBreakdownId === `${p.n}_${p.team}` && (
                                                   <tr className="bg-slate-50/50 border-none">
                                                     <td colSpan={3} className="px-4 pb-6 pt-2 border-none">
-                                                      <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-inner grid grid-cols-1 sm:grid-cols-2 gap-6 animate-in slide-in-from-top-2">
-                                                        <div className="space-y-2">
-                                                          <h4 className="text-[8px] font-black uppercase text-indigo-600 tracking-widest border-b pb-1">
-                                                            {pointsVariant === "pjRules" ? "PJ Rules Breakdown" : pointsVariant === "my11circle" ? "My11Circle Breakdown" : "IPL Fantasy Breakdown"} ({p.team})
+                                                      <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-inner max-w-xl animate-in slide-in-from-top-2">
+                                                        <div className="space-y-4">
+                                                          <h4 className="text-[8px] font-black uppercase text-indigo-600 tracking-widest border-b border-slate-100 pb-2">
+                                                            PJ Rules Breakdown ({p.team})
                                                           </h4>
-                                                          <div className="space-y-2.5">
-                                                            <div className="flex flex-col gap-0.5">
-                                                              <div className="flex justify-between text-[10px]">
-                                                                <span className="text-slate-400 font-bold uppercase tracking-tight">Playing XI Base</span>
-                                                                <span className="font-black text-slate-900">+4.0</span>
+                                                          {(() => {
+                                                            const d = getPjDetailForRow(p);
+                                                            const sumL = (lines: { pts: number }[]) =>
+                                                              lines.reduce((a, l) => a + l.pts, 0);
+                                                            const fmt = (n: number) =>
+                                                              `${n >= 0 ? "+" : "−"}${Math.abs(n).toFixed(1)}`;
+                                                            const Block = ({
+                                                              title,
+                                                              lines,
+                                                              subtotal,
+                                                            }: {
+                                                              title: string;
+                                                              lines: { label: string; pts: number; detail?: string }[];
+                                                              subtotal: number;
+                                                            }) => (
+                                                              <div className="space-y-1.5">
+                                                                <div className="flex justify-between items-baseline gap-2">
+                                                                  <span className="text-[9px] font-black uppercase tracking-wider text-slate-500">
+                                                                    {title}
+                                                                  </span>
+                                                                  <span className="text-[10px] font-black text-slate-800 tabular-nums">
+                                                                    {fmt(subtotal)}
+                                                                  </span>
+                                                                </div>
+                                                                <ul className="space-y-1 border-l-2 border-slate-100 pl-3">
+                                                                  {lines.length === 0 ? (
+                                                                    <li className="text-[9px] text-slate-400 italic">No points in this category</li>
+                                                                  ) : (
+                                                                    lines.map((line, i) => (
+                                                                      <li key={`${title}-${i}`} className="text-[9px] leading-snug">
+                                                                        <div className="flex justify-between gap-3">
+                                                                          <span className="text-slate-600 font-medium">{line.label}</span>
+                                                                          <span
+                                                                            className={cn(
+                                                                              "font-mono font-bold tabular-nums shrink-0",
+                                                                              line.pts >= 0 ? "text-emerald-700" : "text-rose-600"
+                                                                            )}
+                                                                          >
+                                                                            {fmt(line.pts)}
+                                                                          </span>
+                                                                        </div>
+                                                                        {line.detail ? (
+                                                                          <p className="text-[7px] text-slate-400 mt-0.5 font-medium uppercase tracking-tight">
+                                                                            {line.detail}
+                                                                          </p>
+                                                                        ) : null}
+                                                                      </li>
+                                                                    ))
+                                                                  )}
+                                                                </ul>
                                                               </div>
-                                                              <p className="text-[7px] font-black text-slate-300 uppercase leading-none">Automatic Entry Bonus</p>
-                                                            </div>
-                                                            <div className="flex flex-col gap-0.5">
-                                                              <div className="flex justify-between text-[10px]">
-                                                                <span className="text-slate-400 font-bold uppercase tracking-tight">Batting</span>
-                                                                <span className="font-black text-slate-900">+{Number(p.b_pts || 0).toFixed(1)}</span>
-                                                              </div>
-                                                              {pointsVariant === "pjRules" ? (
-                                                                <p className="text-[7px] font-black text-indigo-400 uppercase leading-none italic">
-                                                                  {p.r}R + ({p.f}*1) + ({p.s}*2) + SR({p.sr_pts}) + MS
-                                                                </p>
-                                                              ) : (
-                                                                <p className="text-[7px] font-black text-slate-300 uppercase leading-none">{p.breakdownHint || ""}</p>
-                                                              )}
-                                                            </div>
-                                                            <div className="flex flex-col gap-0.5">
-                                                              <div className="flex justify-between text-[10px]">
-                                                                <span className="text-slate-400 font-bold uppercase tracking-tight">Bowling</span>
-                                                                <span className="font-black text-slate-900">+{Number(p.bw_pts || 0).toFixed(1)}</span>
-                                                              </div>
-                                                              {pointsVariant === "pjRules" ? (
-                                                                <p className="text-[7px] font-black text-indigo-400 uppercase leading-none italic">
-                                                                  ({p.w}*30) + ({p.lbwB}*8) + ({p.m}*12) + {p.dots}D + ECO({p.eco_pts}) + MS
-                                                                </p>
-                                                              ) : (
-                                                                <p className="text-[7px] font-black text-slate-300 uppercase leading-none">{p.breakdownHint || ""}</p>
-                                                              )}
-                                                            </div>
-                                                            <div className="flex flex-col gap-0.5">
-                                                              <div className="flex justify-between text-[10px]">
-                                                                <span className="text-slate-400 font-bold uppercase tracking-tight">Fielding</span>
-                                                                <span className="font-black text-slate-900">+{Number(p.f_pts || 0).toFixed(1)}</span>
-                                                              </div>
-                                                              {pointsVariant === "pjRules" ? (
-                                                                <p className="text-[7px] font-black text-indigo-400 uppercase leading-none italic">
-                                                                  ({p.c}*8) + ({p.st}*12) + ({p.ro}*12)
-                                                                </p>
-                                                              ) : (
-                                                                <p className="text-[7px] font-black text-slate-300 uppercase leading-none">{p.breakdownHint || ""}</p>
-                                                              )}
-                                                            </div>
-                                                            <div className="border-t pt-1.5 flex justify-between text-[11px] font-black uppercase">
-                                                              <span className="text-slate-900">FINAL TOTAL</span>
-                                                              <span className="text-slate-900">{Number(p.total || 0).toFixed(1)}</span>
-                                                            </div>
-                                                          </div>
+                                                            );
+                                                            return (
+                                                              <>
+                                                                <Block
+                                                                  title="Entry & playing XI"
+                                                                  lines={d.extras}
+                                                                  subtotal={sumL(d.extras)}
+                                                                />
+                                                                <Block
+                                                                  title="Batting"
+                                                                  lines={d.batting}
+                                                                  subtotal={sumL(d.batting)}
+                                                                />
+                                                                <Block
+                                                                  title="Bowling"
+                                                                  lines={d.bowling}
+                                                                  subtotal={sumL(d.bowling)}
+                                                                />
+                                                                <Block
+                                                                  title="Fielding"
+                                                                  lines={d.fielding}
+                                                                  subtotal={sumL(d.fielding)}
+                                                                />
+                                                                <div className="border-t border-slate-200 pt-3 flex justify-between items-center gap-2">
+                                                                  <span className="text-[11px] font-black uppercase text-slate-900">
+                                                                    Final total (base PJ)
+                                                                  </span>
+                                                                  <span className="text-sm font-black text-slate-900 tabular-nums">
+                                                                    {fmt(Number(p.total || 0))}
+                                                                  </span>
+                                                                </div>
+                                                                <div className="rounded-xl bg-indigo-50/80 border border-indigo-100 p-3 space-y-2">
+                                                                  <div className="text-[8px] font-black uppercase tracking-widest text-indigo-700 border-b border-indigo-100 pb-1.5">
+                                                                    Bonus multiplier (on total base points)
+                                                                  </div>
+                                                                  <div className="space-y-1 text-[9px]">
+                                                                    <div className="flex justify-between gap-2">
+                                                                      <span className="text-slate-600 font-semibold">Runs tier</span>
+                                                                      <span className="font-mono font-bold text-slate-800">
+                                                                        {d11.runMultiplier}×
+                                                                      </span>
+                                                                    </div>
+                                                                    <p className="text-[7px] text-slate-500 uppercase tracking-tight leading-tight">
+                                                                      {d11.runTierLabel}
+                                                                    </p>
+                                                                    <div className="flex justify-between gap-2 pt-1">
+                                                                      <span className="text-slate-600 font-semibold">Wickets tier</span>
+                                                                      <span className="font-mono font-bold text-slate-800">
+                                                                        {d11.wicketMultiplier}×
+                                                                      </span>
+                                                                    </div>
+                                                                    <p className="text-[7px] text-slate-500 uppercase tracking-tight leading-tight">
+                                                                      {d11.wicketTierLabel}
+                                                                    </p>
+                                                                    <div className="flex justify-between gap-2 pt-2 border-t border-indigo-100 items-baseline">
+                                                                      <span className="text-indigo-900 font-black uppercase text-[9px]">
+                                                                        Applied (max)
+                                                                      </span>
+                                                                      <span className="text-sm font-black text-indigo-700 tabular-nums">
+                                                                        {d11.appliedMultiplier}×
+                                                                      </span>
+                                                                    </div>
+                                                                    <p className="text-[7px] text-indigo-600/90 font-bold uppercase tracking-tight">
+                                                                      {d11.appliedSource === "none" && "No bonus tier — 1×"}
+                                                                      {d11.appliedSource === "runs" &&
+                                                                        "Higher multiplier from runs"}
+                                                                      {d11.appliedSource === "wickets" &&
+                                                                        "Higher multiplier from wickets"}
+                                                                      {d11.appliedSource === "both" &&
+                                                                        "Runs & wickets tie on same multiplier"}
+                                                                    </p>
+                                                                    <div className="flex justify-between gap-2 pt-1 border-t border-indigo-100">
+                                                                      <span className="text-slate-800 font-black uppercase text-[10px]">
+                                                                        Points after bonus multiplier
+                                                                      </span>
+                                                                      <span className="text-sm font-black text-indigo-800 tabular-nums">
+                                                                        {fmt(d11.multipliedTotal)}
+                                                                      </span>
+                                                                    </div>
+                                                                    <p className="text-[7px] text-slate-500 leading-relaxed normal-case font-medium">
+                                                                      {Number(p.total || 0).toFixed(1)} base × {d11.appliedMultiplier} ={" "}
+                                                                      {d11.multipliedTotal.toFixed(1)}
+                                                                    </p>
+                                                                  </div>
+                                                                </div>
+                                                              </>
+                                                            );
+                                                          })()}
                                                         </div>
-                                                           </div>
+                                                      </div>
                                                         </td></tr>
                                                      )}
                                                   </React.Fragment>

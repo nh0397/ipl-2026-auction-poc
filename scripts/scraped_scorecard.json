@@ -1,41 +1,51 @@
 {
-  "playing_squad": [
-    "AM Ghazanfar",
-    "Ajinkya Rahane",
-    "Angkrish Raghuvanshi",
-    "Anukul Roy",
-    "Blessing Muzarabani",
-    "Cameron Green",
-    "Finn Allen",
-    "Hardik Pandya",
-    "Jasprit Bumrah",
-    "Kartik Tyagi",
-    "Mayank Markande",
-    "Naman Dhir",
-    "Ramandeep Singh",
-    "Rinku Singh",
-    "Rohit Sharma",
-    "Ryan Rickelton",
-    "Shardul Thakur",
-    "Sherfane Rutherford",
-    "Sunil Narine",
-    "Suryakumar Yadav",
-    "Tilak Varma",
-    "Trent Boult",
-    "Vaibhav Arora",
-    "Varun Chakravarthy"
-  ],
+  "team_a": {
+    "name": "GT",
+    "unique": [
+      "Ashok Sharma",
+      "Glenn Phillips",
+      "Jos Buttler",
+      "Kagiso Rabada",
+      "M Shahrukh Khan",
+      "Mohammed Siraj",
+      "Prasidh Krishna",
+      "Rahul Tewatia",
+      "Rashid Khan",
+      "Sai Sudharsan",
+      "Shubman Gill",
+      "Washington Sundar"
+    ]
+  },
+  "team_b": {
+    "name": "PBKS",
+    "unique": [
+      "Arshdeep Singh",
+      "Cooper Connolly",
+      "Marco Jansen",
+      "Marcus Stoinis",
+      "Nehal Wadhera",
+      "Prabhsimran Singh",
+      "Priyansh Arya",
+      "Shashank Singh",
+      "Shreyas Iyer",
+      "Vijaykumar Vyshak",
+      "Xavier Bartlett",
+      "Yuzvendra Chahal"
+    ]
+  },
   "match_info": {
-    "title": "2nd Match at Mumbai, IPL, Mar 28 2026 - Full Scorecard",
+    "title": "4th Match at New Chandigarh, IPL, Mar 30 2026 - Full Scorecard",
     "teams": {
-      "home": "MI",
-      "away": "KKR"
+      "home": "PBKS",
+      "away": "GT"
     },
-    "result": "AUS Women won by 90 runs Schedule RESULT PSL 2026 • Lahore LQ 128/9 KK (19"
+    "result": "PBKS won by 3 wickets (with 5 balls remaining) PLAYER OF THE MATCH Cooper Connolly , PBKS 72* (44) CRICINFO'S MVP Cooper Connolly , PBKS 87"
   },
   "innings": [
     {
-      "team": "MI",
+      "team": "GT",
+      "batting_team": "GT",
+      "bowling_team": "PBKS",
       "batting": [
         {
           "player": "BATTING",
@@ -48,87 +58,107 @@
           "SR": "SR"
         },
         {
-          "player": "Ajinkya Rahane (c)",
-          "dismissal": "c Pandya b Thakur",
-          "R": 67,
-          "B": 40,
-          "M": 69,
-          "4s": 3,
-          "6s": 5,
-          "SR": 167.5
+          "player": "Sai Sudharsan",
+          "dismissal": "c Iyer b Jansen",
+          "R": 13,
+          "B": 11,
+          "M": 18,
+          "4s": 2,
+          "6s": 0,
+          "SR": 118.18
         },
         {
-          "player": "Finn Allen",
-          "dismissal": "c Tilak Varma b Thakur",
-          "R": 37,
-          "B": 17,
-          "M": 26,
+          "player": "Shubman Gill (c)",
+          "dismissal": "c Connolly b Chahal",
+          "R": 39,
+          "B": 27,
+          "M": 48,
           "4s": 6,
-          "6s": 2,
-          "SR": 217.64
+          "6s": 0,
+          "SR": 144.44
         },
         {
-          "player": "Cameron Green",
-          "dismissal": "c Rutherford b Thakur",
+          "player": "Jos Buttler †",
+          "dismissal": "c Bartlett b Chahal",
+          "R": 38,
+          "B": 33,
+          "M": 62,
+          "4s": 3,
+          "6s": 2,
+          "SR": 115.15
+        },
+        {
+          "player": "Glenn Phillips",
+          "dismissal": "c Jansen b Vyshak",
+          "R": 25,
+          "B": 17,
+          "M": 21,
+          "4s": 1,
+          "6s": 1,
+          "SR": 147.05
+        },
+        {
+          "player": "Washington Sundar",
+          "dismissal": "c Arshdeep Singh b Vyshak",
           "R": 18,
+          "B": 16,
+          "M": 24,
+          "4s": 2,
+          "6s": 0,
+          "SR": 112.5
+        },
+        {
+          "player": "M Shahrukh Khan",
+          "dismissal": "c Arshdeep Singh b Vyshak",
+          "R": 4,
+          "B": 6,
+          "M": 23,
+          "4s": 0,
+          "6s": 0,
+          "SR": 66.66
+        },
+        {
+          "player": "Rahul Tewatia",
+          "dismissal": "not out",
+          "R": 11,
           "B": 10,
           "M": 18,
           "4s": 1,
-          "6s": 1,
-          "SR": 180.0
-        },
-        {
-          "player": "Angkrish Raghuvanshi †",
-          "dismissal": "c Tilak Varma b Pandya",
-          "R": 51,
-          "B": 29,
-          "M": 50,
-          "4s": 6,
-          "6s": 2,
-          "SR": 175.86
-        },
-        {
-          "player": "Rinku Singh",
-          "dismissal": "not out",
-          "R": 33,
-          "B": 21,
-          "M": 34,
-          "4s": 4,
           "6s": 0,
-          "SR": 157.14
+          "SR": 110.0
         },
         {
-          "player": "Ramandeep Singh",
+          "player": "Rashid Khan",
           "dismissal": "not out",
-          "R": 4,
-          "B": 4,
-          "M": 8,
+          "R": 0,
+          "B": 1,
+          "M": 6,
           "4s": 0,
           "6s": 0,
-          "SR": 100.0
+          "SR": 0.0
         }
       ],
       "did_not_bat": [
-        "Anukul Roy",
-        "Sunil Narine",
-        "Varun Chakravarthy",
-        "Vaibhav Arora",
-        "Blessing Muzarabani"
+        "Kagiso Rabada",
+        "Ashok Sharma",
+        "Mohammed Siraj"
       ],
       "extras": {
-        "text": "(lb 2, nb 1, w 7)",
-        "total": 10
+        "text": "(lb 2, nb 1, w 11)",
+        "total": 14
       },
       "total": {
         "score": "20",
         "overs": "",
-        "run_rate": "11.00"
+        "run_rate": "8.10"
       },
       "fall_of_wickets": [
-        "1-69 (Finn Allen, 5.2 ov)",
-        "2-109 (Cameron Green, 8.5 ov)",
-        "3-145 (Ajinkya Rahane, 13.3 ov)",
-        "4-205 (Angkrish Raghuvanshi, 18.3 ov)"
+        "1-37 (Sai Sudharsan, 3.4 ov)",
+        "2-83 (Shubman Gill, 9.3 ov)",
+        "3-119 (Glenn Phillips, 13.6 ov)",
+        "4-129 (Jos Buttler, 15.4 ov)",
+        "5-144 (Washington Sundar, 18.1 ov)",
+        "6-150 (M Shahrukh Khan, 18.6 ov)"
       ],
       "bowling": [
         {
@@ -143,285 +173,309 @@
           "NB": "NB"
         },
         {
-          "bowler": "Trent Boult",
+          "bowler": "Arshdeep Singh",
           "O": 4,
           "M": 0,
-          "R": 38,
+          "R": 42,
           "W": 0,
-          "ECON": 9.5,
-          "0s": 7,
-          "WD": 3,
-          "NB": 0
-        },
-        {
-          "bowler": "Hardik Pandya",
-          "O": 3,
-          "M": 0,
-          "R": 39,
-          "W": 1,
-          "ECON": 13.0,
-          "0s": 7,
-          "WD": 2,
-          "NB": 0
-        },
-        {
-          "bowler": "AM Ghazanfar",
-          "O": 4,
-          "M": 0,
-          "R": 51,
-          "W": 0,
-          "ECON": 12.75,
-          "0s": 6,
-          "WD": 1,
-          "NB": 0
-        },
-        {
-          "bowler": "Jasprit Bumrah",
-          "O": 4,
-          "M": 0,
-          "R": 35,
-          "W": 0,
-          "ECON": 8.75,
-          "0s": 4,
-          "WD": 1,
+          "ECON": 10.5,
+          "0s": 9,
+          "WD": 7,
           "NB": 1
         },
         {
-          "bowler": "Shardul Thakur",
+          "bowler": "Xavier Bartlett",
           "O": 4,
           "M": 0,
-          "R": 39,
-          "W": 3,
-          "ECON": 9.75,
-          "0s": 7,
-          "WD": 0,
-          "NB": 0
-        },
-        {
-          "bowler": "Mayank Markande",
-          "O": 1,
-          "M": 0,
-          "R": 16,
+          "R": 36,
           "W": 0,
-          "ECON": 16.0,
-          "0s": 1,
-          "WD": 0,
+          "ECON": 9.0,
+          "0s": 9,
+          "WD": 1,
           "NB": 0
-        }
-      ],
-      "squad": [
-        "Varun Chakravarthy",
-        "Finn Allen",
-        "Rinku Singh",
-        "Ramandeep Singh",
-        "Sunil Narine",
-        "AM Ghazanfar",
-        "Jasprit Bumrah",
-        "Anukul Roy",
-        "Mayank Markande",
-        "Ajinkya Rahane",
-        "Angkrish Raghuvanshi",
-        "Vaibhav Arora",
-        "Hardik Pandya",
-        "Trent Boult",
-        "Shardul Thakur",
-        "Cameron Green",
-        "Blessing Muzarabani"
-      ]
-    },
-    {
-      "team": "MI",
-      "batting": [
-        {
-          "player": "BATTING",
-          "dismissal": "",
-          "R": "R",
-          "B": "B",
-          "M": "M",
-          "4s": "4s",
-          "6s": "6s",
-          "SR": "SR"
         },
         {
-          "player": "Ryan Rickelton †",
-          "dismissal": "run out (Roy)",
-          "R": 81,
-          "B": 43,
-          "M": 82,
-          "4s": 4,
-          "6s": 8,
-          "SR": 188.37
-        },
-        {
-          "player": "Rohit Sharma",
-          "dismissal": "c Roy b Arora",
-          "R": 78,
-          "B": 38,
-          "M": 61,
-          "4s": 6,
-          "6s": 6,
-          "SR": 205.26
-        },
-        {
-          "player": "Suryakumar Yadav",
-          "dismissal": "c Singh b Kartik Tyagi",
-          "R": 16,
-          "B": 8,
-          "M": 11,
-          "4s": 3,
-          "6s": 0,
-          "SR": 200.0
-        },
-        {
-          "player": "Tilak Varma",
-          "dismissal": "c sub (MK Pandey) b Narine",
-          "R": 20,
-          "B": 14,
-          "M": 25,
-          "4s": 4,
-          "6s": 0,
-          "SR": 142.85
-        },
-        {
-          "player": "Hardik Pandya (c)",
-          "dismissal": "not out",
-          "R": 18,
-          "B": 11,
-          "M": 20,
-          "4s": 3,
-          "6s": 0,
-          "SR": 163.63
-        },
-        {
-          "player": "Naman Dhir",
-          "dismissal": "not out",
-          "R": 5,
-          "B": 2,
-          "M": 3,
-          "4s": 1,
-          "6s": 0,
-          "SR": 250.0
-        }
-      ],
-      "did_not_bat": [
-        "Sherfane Rutherford",
-        "Shardul Thakur",
-        "Mayank Markande",
-        "AM Ghazanfar",
-        "Trent Boult"
-      ],
-      "extras": {
-        "text": "(lb 2, nb 1, w 3)",
-        "total": 6
-      },
-      "total": {
-        "score": "19",
-        "overs": "",
-        "run_rate": "11.68"
-      },
-      "fall_of_wickets": [
-        "1-148 (Rohit Sharma, 11.5 ov)",
-        "2-179 (Suryakumar Yadav, 14.2 ov)",
-        "3-184 (Ryan Rickelton, 15.2 ov)",
-        "4-215 (Tilak Varma, 18.4 ov)"
-      ],
-      "bowling": [
-        {
-          "bowler": "BOWLING",
-          "O": "O",
-          "M": "M",
-          "R": "R",
-          "W": "W",
-          "ECON": "ECON",
-          "0s": "0S",
-          "WD": "WD",
-          "NB": "NB"
-        },
-        {
-          "bowler": "Vaibhav Arora",
+          "bowler": "Marco Jansen",
           "O": 4,
           "M": 0,
-          "R": 52,
+          "R": 20,
           "W": 1,
-          "ECON": 13.0,
+          "ECON": 5.0,
+          "0s": 8,
+          "WD": 0,
+          "NB": 0
+        },
+        {
+          "bowler": "Vijaykumar Vyshak",
+          "O": 4,
+          "M": 0,
+          "R": 34,
+          "W": 3,
+          "ECON": 8.5,
           "0s": 8,
           "WD": 1,
           "NB": 0
         },
         {
-          "bowler": "Blessing Muzarabani",
-          "O": 3,
-          "M": 0,
-          "R": 34,
-          "W": 0,
-          "ECON": 11.33,
-          "0s": 6,
-          "WD": 0,
-          "NB": 0
-        },
-        {
-          "bowler": "Varun Chakravarthy",
+          "bowler": "Yuzvendra Chahal",
           "O": 4,
           "M": 0,
-          "R": 48,
-          "W": 0,
-          "ECON": 12.0,
-          "0s": 5,
-          "WD": 1,
-          "NB": 0
-        },
-        {
-          "bowler": "Kartik Tyagi",
-          "O": 4,
-          "M": 0,
-          "R": 43,
-          "W": 1,
-          "ECON": 10.75,
+          "R": 28,
+          "W": 2,
+          "ECON": 7.0,
           "0s": 9,
-          "WD": 0,
-          "NB": 1
-        },
-        {
-          "bowler": "Sunil Narine",
-          "O": 3,
-          "M": 0,
-          "R": 30,
-          "W": 1,
-          "ECON": 10.0,
-          "0s": 6,
-          "WD": 0,
-          "NB": 0
-        },
-        {
-          "bowler": "Anukul Roy",
-          "O": 1.1,
-          "M": 0,
-          "R": 15,
-          "W": 0,
-          "ECON": 12.85,
-          "0s": 1,
           "WD": 1,
           "NB": 0
         }
       ],
-      "squad": [
-        "Varun Chakravarthy",
-        "Sunil Narine",
-        "Tilak Varma",
-        "Rohit Sharma",
-        "AM Ghazanfar",
-        "Sherfane Rutherford",
-        "Anukul Roy",
-        "Mayank Markande",
-        "Suryakumar Yadav",
-        "Vaibhav Arora",
-        "Hardik Pandya",
-        "Shardul Thakur",
-        "Trent Boult",
-        "Ryan Rickelton",
-        "Naman Dhir",
-        "Kartik Tyagi",
-        "Blessing Muzarabani"
+      "squad_batting": [
+        "Sai Sudharsan",
+        "Shubman Gill",
+        "Jos Buttler",
+        "Glenn Phillips",
+        "Washington Sundar",
+        "M Shahrukh Khan",
+        "Rahul Tewatia",
+        "Rashid Khan",
+        "Kagiso Rabada",
+        "Ashok Sharma",
+        "Mohammed Siraj"
+      ],
+      "squad_bowling": [
+        "Arshdeep Singh",
+        "Xavier Bartlett",
+        "Marco Jansen",
+        "Vijaykumar Vyshak",
+        "Yuzvendra Chahal"
+      ]
+    },
+    {
+      "team": "PBKS",
+      "batting_team": "PBKS",
+      "bowling_team": "GT",
+      "batting": [
+        {
+          "player": "BATTING",
+          "dismissal": "",
+          "R": "R",
+          "B": "B",
+          "M": "M",
+          "4s": "4s",
+          "6s": "6s",
+          "SR": "SR"
+        },
+        {
+          "player": "Priyansh Arya",
+          "dismissal": "c Ashok Sharma b Rabada",
+          "R": 7,
+          "B": 8,
+          "M": 6,
+          "4s": 0,
+          "6s": 1,
+          "SR": 87.5
+        },
+        {
+          "player": "Prabhsimran Singh †",
+          "dismissal": "c Prasidh Krishna b Rashid Khan",
+          "R": 37,
+          "B": 24,
+          "M": 43,
+          "4s": 1,
+          "6s": 4,
+          "SR": 154.16
+        },
+        {
+          "player": "Cooper Connolly",
+          "dismissal": "not out",
+          "R": 72,
+          "B": 44,
+          "M": 95,
+          "4s": 5,
+          "6s": 5,
+          "SR": 163.63
+        },
+        {
+          "player": "Shreyas Iyer (c)",
+          "dismissal": "c Washington Sundar b Prasidh Krishna",
+          "R": 18,
+          "B": 11,
+          "M": 14,
+          "4s": 0,
+          "6s": 2,
+          "SR": 163.63
+        },
+        {
+          "player": "Nehal Wadhera",
+          "dismissal": "c Shubman Gill b Washington Sundar",
+          "R": 3,
+          "B": 6,
+          "M": 4,
+          "4s": 0,
+          "6s": 0,
+          "SR": 50.0
+        },
+        {
+          "player": "Shashank Singh",
+          "dismissal": "c †Buttler b Prasidh Krishna",
+          "R": 4,
+          "B": 5,
+          "M": 5,
+          "4s": 0,
+          "6s": 0,
+          "SR": 80.0
+        },
+        {
+          "player": "Marcus Stoinis",
+          "dismissal": "c Rashid Khan b Prasidh Krishna",
+          "R": 0,
+          "B": 2,
+          "M": 1,
+          "4s": 0,
+          "6s": 0,
+          "SR": 0.0
+        },
+        {
+          "player": "Marco Jansen",
+          "dismissal": "c Shubman Gill b Ashok Sharma",
+          "R": 9,
+          "B": 10,
+          "M": 17,
+          "4s": 0,
+          "6s": 1,
+          "SR": 90.0
+        },
+        {
+          "player": "Xavier Bartlett",
+          "dismissal": "not out",
+          "R": 11,
+          "B": 5,
+          "M": 10,
+          "4s": 0,
+          "6s": 1,
+          "SR": 220.0
+        }
+      ],
+      "did_not_bat": [
+        "Vijaykumar Vyshak",
+        "Arshdeep Singh"
+      ],
+      "extras": {
+        "text": "(w 4)",
+        "total": 4
+      },
+      "total": {
+        "score": "19",
+        "overs": "",
+        "run_rate": "8.60"
+      },
+      "fall_of_wickets": [
+        "1-7 (Priyansh Arya, 1.2 ov)",
+        "2-83 (Prabhsimran Singh, 9.3 ov)",
+        "3-110 (Shreyas Iyer, 12.1 ov)",
+        "4-113 (Nehal Wadhera, 13.1 ov)",
+        "5-118 (Shashank Singh, 14.2 ov)",
+        "6-118 (Marcus Stoinis, 14.4 ov)",
+        "7-144 (Marco Jansen, 17.4 ov)"
+      ],
+      "bowling": [
+        {
+          "bowler": "BOWLING",
+          "O": "O",
+          "M": "M",
+          "R": "R",
+          "W": "W",
+          "ECON": "ECON",
+          "0s": "0S",
+          "WD": "WD",
+          "NB": "NB"
+        },
+        {
+          "bowler": "Mohammed Siraj",
+          "O": 2,
+          "M": 0,
+          "R": 15,
+          "W": 0,
+          "ECON": 7.5,
+          "0s": 6,
+          "WD": 0,
+          "NB": 0
+        },
+        {
+          "bowler": "Kagiso Rabada",
+          "O": 3,
+          "M": 0,
+          "R": 34,
+          "W": 1,
+          "ECON": 11.33,
+          "0s": 7,
+          "WD": 0,
+          "NB": 0
+        },
+        {
+          "bowler": "Ashok Sharma",
+          "O": 3,
+          "M": 0,
+          "R": 31,
+          "W": 1,
+          "ECON": 10.33,
+          "0s": 8,
+          "WD": 2,
+          "NB": 0
+        },
+        {
+          "bowler": "Rashid Khan",
+          "O": 4,
+          "M": 0,
+          "R": 29,
+          "W": 1,
+          "ECON": 7.25,
+          "0s": 10,
+          "WD": 0,
+          "NB": 0
+        },
+        {
+          "bowler": "Washington Sundar",
+          "O": 3.1,
+          "M": 0,
+          "R": 27,
+          "W": 1,
+          "ECON": 8.52,
+          "0s": 6,
+          "WD": 0,
+          "NB": 0
+        },
+        {
+          "bowler": "Prasidh Krishna",
+          "O": 4,
+          "M": 0,
+          "R": 29,
+          "W": 3,
+          "ECON": 7.25,
+          "0s": 11,
+          "WD": 2,
+          "NB": 0
+        }
+      ],
+      "squad_batting": [
+        "Priyansh Arya",
+        "Prabhsimran Singh",
+        "Cooper Connolly",
+        "Shreyas Iyer",
+        "Nehal Wadhera",
+        "Shashank Singh",
+        "Marcus Stoinis",
+        "Marco Jansen",
+        "Xavier Bartlett",
+        "Vijaykumar Vyshak",
+        "Arshdeep Singh"
+      ],
+      "squad_bowling": [
+        "Mohammed Siraj",
+        "Kagiso Rabada",
+        "Ashok Sharma",
+        "Rashid Khan",
+        "Washington Sundar",
+        "Prasidh Krishna"
       ]
     }
   ]
