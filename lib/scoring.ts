@@ -112,6 +112,74 @@ export interface IplFantasyBowling {
   dot_balls: number;
 }
 
+/**
+ * ESPN-style dismissal text for +8 LBW/bowled bowling bonus — returns the **bowler** name, not the batter.
+ * Examples: `lbw b Jadeja`, `lbw b R Ashwin`, `b Burger` (pure bowled). Not `c Iyer b Jansen` (caught).
+ * Caught & bowled (`c & b Name`) does not use this — catch points only, no bowled bonus.
+ */
+export function parseLbwBowledBowlerName(dismissal: string): string | null {
+  const raw = String(dismissal || "").trim();
+  if (!raw) return null;
+  const lower = raw.toLowerCase();
+  if (lower === "not out" || lower.startsWith("retired") || lower.startsWith("absent")) return null;
+
+  const lbw = /^lbw\s+b\s+(.+)$/i.exec(raw);
+  if (lbw?.[1]) {
+    const name = lbw[1].replace(/\s*\([^)]*\)\s*$/g, "").trim();
+    return name || null;
+  }
+
+  // Bowled only: leading `b <bowler>` (not caught-and-bowled `c … b …`, which starts with `c`)
+  if (/^b\s+/i.test(raw) && !/^c\s+/i.test(raw)) {
+    const name = raw.replace(/^b\s+/i, "").replace(/\s*\([^)]*\)\s*$/g, "").trim();
+    return name || null;
+  }
+
+  return null;
+}
+
+/** True only for specialist bowlers (duck/SR rules do not apply). Case-insensitive. */
+export function pjIsPureBowlerRole(playerRole?: string): boolean {
+  return String(playerRole || "").trim().toLowerCase() === "bowler";
+}
+
+/**
+ * Map `public.players.type` / `role` to PJ scoring role. Returns null if columns are empty or unrecognized.
+ */
+export function pjScoringRoleFromPlayerRow(
+  type: string | null | undefined,
+  role: string | null | undefined
+): string | null {
+  const raw = `${type ?? ""} ${role ?? ""}`.trim().toLowerCase();
+  if (!raw) return null;
+  if (/\ball[\s-]?round/.test(raw)) return "All-Rounder";
+  if (/wicket|wk\b|keeper|wicketkeeper/.test(raw)) return "WK";
+  if (/\bbowler\b/.test(raw) && !/\ball[\s-]?round/.test(raw)) return "Bowler";
+  if (/batsman|batter|batting/.test(raw)) return "Batter";
+  return null;
+}
+
+/** Fallback when no DB row: from scorecard inference labels used in the scoreboard aggregator. */
+export function pjScoringRoleFromScorecardInference(scorecardRole: string): string {
+  const s = scorecardRole.trim();
+  if (s === "Bowler") return "Bowler";
+  if (s === "WK/Bowler") return "All-Rounder";
+  if (s === "WK" || s === "All-Rounder") return s;
+  if (s === "Fielder") return "Batter";
+  return "Batter";
+}
+
+/** Prefer `players.type` / `players.role`; otherwise scorecard-derived role. */
+export function pjResolveScoringPlayerRole(
+  dbType: string | null | undefined,
+  dbRole: string | null | undefined,
+  scorecardRole: string
+): string {
+  const fromDb = pjScoringRoleFromPlayerRow(dbType, dbRole);
+  if (fromDb) return fromDb;
+  return pjScoringRoleFromScorecardInference(scorecardRole);
+}
+
 export interface IplFantasyFielding {
   catches: number;
   stumpings: number;
@@ -260,7 +328,7 @@ function pjEconomyLine(
 
 /** Line-by-line PJ Rules breakdown for the scoreboard panel (sums match `scorePjRulesPlayer`). */
 export function pjRulesDetailedBreakdown(p: IplFantasyPlayerForScoring): PjRulesDetailedBreakdown {
-  const isBowler = p.playerRole === "Bowler";
+  const isBowler = pjIsPureBowlerRole(p.playerRole);
   const bat = p.batting ?? {};
   const bwl = p.bowling ?? {};
   const fld = p.fielding ?? {};
@@ -422,7 +490,7 @@ export function d11PointsAfterMultiplier(basePoints: number, appliedMultiplier: 
 
 // PJ Rules — T20 fantasy charts (batting / bowling / fielding / economy / SR) + announced XI +4; no cap multipliers for now.
 export function scorePjRulesPlayer(p: IplFantasyPlayerForScoring) {
-  const isBowler = p.playerRole === "Bowler";
+  const isBowler = pjIsPureBowlerRole(p.playerRole);
   const bat = iplFantasyBattingPoints(p.batting, { isBowler });
   const bw = iplFantasyBowlingPoints(p.bowling);
   const f = iplFantasyFieldingPoints(p.fielding);

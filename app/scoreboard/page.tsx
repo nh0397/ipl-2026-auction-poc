@@ -29,9 +29,80 @@ import {
   pjRulesDetailedBreakdown,
   d11BonusMultiplierInfo,
   d11PointsAfterMultiplier,
+  parseLbwBowledBowlerName,
+  pjResolveScoringPlayerRole,
   type PjRulesDetailedBreakdown,
   type D11BonusMultiplierInfo,
 } from "@/lib/scoring";
+
+type PlayerCatalogRow = {
+  player_name: string;
+  team: string;
+  type: string | null;
+  role: string | null;
+};
+
+function normalizeScorecardPlayerName(raw: string) {
+  return String(raw || "")
+    .replace(/†/g, "")
+    .replace(/\(c\)/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function catalogNameMatches(scorecardNorm: string, dbName: string): boolean {
+  const a = scorecardNorm.toLowerCase().replace(/\s+/g, " ").trim();
+  const b = normalizeScorecardPlayerName(dbName).toLowerCase();
+  if (a === b) return true;
+  if (a.includes(b) || b.includes(a)) return true;
+  const al = a.split(/\s+/).pop() || a;
+  const bl = b.split(/\s+/).pop() || b;
+  if (al === bl && al.length >= 3) return true;
+  return false;
+}
+
+function catalogTeamMatches(
+  scorecardTeam: string,
+  playerTeam: string,
+  match: {
+    team1_short?: string | null;
+    team1_name?: string | null;
+    team2_short?: string | null;
+    team2_name?: string | null;
+  }
+): boolean {
+  const pt = playerTeam.trim().toLowerCase();
+  if (!pt) return true;
+  const st = scorecardTeam.trim().toLowerCase();
+  if (st.includes(pt) || pt.includes(st)) return true;
+  const hints = [match.team1_short, match.team1_name, match.team2_short, match.team2_name].filter(Boolean) as string[];
+  for (const h of hints) {
+    const hl = h.toLowerCase();
+    if (hl.includes(pt) || pt.includes(hl)) return true;
+    if (st.includes(hl) || hl.includes(st)) return true;
+  }
+  return false;
+}
+
+function findPlayerCatalogRow(
+  displayName: string,
+  scorecardTeam: string,
+  catalog: PlayerCatalogRow[],
+  match: {
+    team1_short?: string | null;
+    team1_name?: string | null;
+    team2_short?: string | null;
+    team2_name?: string | null;
+  }
+): PlayerCatalogRow | null {
+  if (!catalog?.length) return null;
+  const norm = normalizeScorecardPlayerName(displayName);
+  const candidates = catalog.filter((p) => catalogNameMatches(norm, p.player_name));
+  if (candidates.length === 0) return null;
+  if (candidates.length === 1) return candidates[0];
+  const teamScoped = candidates.filter((p) => catalogTeamMatches(scorecardTeam, p.team, match));
+  return teamScoped[0] ?? candidates[0];
+}
 
 /** Cached breakdown rows may predate bonus `d11` / `pjDetail`; recompute from stats. */
 function getD11ForRow(p: {
@@ -154,6 +225,8 @@ export default function ScoreboardPage() {
   const router = useRouter();
   const [profile, setProfile] = useState<any>(null);
   const [allPlayers, setAllPlayers] = useState<any[]>([]);
+  /** `players.type` / `players.role` for PJ duck/SR (sold players). */
+  const [playersCatalog, setPlayersCatalog] = useState<PlayerCatalogRow[]>([]);
   const [franchises, setFranchises] = useState<any[]>([]);
 
   // Auth Guard
@@ -221,17 +294,10 @@ export default function ScoreboardPage() {
   const [breakdownCache, setBreakdownCache] = useState<Record<string, BreakdownRow[]>>({});
   const [breakdownLoadingKey, setBreakdownLoadingKey] = useState<string | null>(null);
 
-  const computeBreakdownRows = useCallback((sc: any, match: any): BreakdownRow[] => {
+  const computeBreakdownRows = useCallback((sc: any, match: any, catalog: PlayerCatalogRow[]): BreakdownRow[] => {
       if (!sc?.innings) return [];
 
       const stats: Record<string, any> = {};
-
-      const normalizePlayerName = (raw: string) =>
-        String(raw || "")
-          .replace(/†/g, "")
-          .replace(/\(c\)/gi, "")
-          .replace(/\s+/g, " ")
-          .trim();
 
       // Initialize registry from batting/bowling names
       sc.innings.forEach((inn: any) => {
@@ -240,7 +306,7 @@ export default function ScoreboardPage() {
         (inn.batting || []).forEach((b: any) => {
           const raw = b.player || "";
           if (!raw || raw === "BATTING") return;
-          const n = normalizePlayerName(raw);
+          const n = normalizeScorecardPlayerName(raw);
           const key = `${n}_${battingTeam}`;
           if (!stats[key])
             stats[key] = { n, team: battingTeam, r: 0, b: 0, f: 0, s: 0, w: 0, m: 0, o: 0, r_conc: 0, c: 0, st: 0, dots: 0, lbwB: 0, ro: 0, isDuck: false, role: "Batter" };
@@ -248,7 +314,7 @@ export default function ScoreboardPage() {
         (inn.bowling || []).forEach((bw: any) => {
           const raw = bw.bowler || "";
           if (!raw || raw === "BOWLING") return;
-          const n = normalizePlayerName(raw);
+          const n = normalizeScorecardPlayerName(raw);
           // bowling is done by opposition
           const key = `${n}_${bowlingTeam}`;
           if (!stats[key])
@@ -258,7 +324,7 @@ export default function ScoreboardPage() {
 
       /** Map a name (possibly partial) to a stats key for exactly one franchise — never cross teams. */
       const findKeyForTeamRoster = (name: string, team: string) => {
-        const n = normalizePlayerName(name);
+        const n = normalizeScorecardPlayerName(name);
         const suffix = `_${team}`;
         const exact = `${n}_${team}`;
         if (stats[exact]) return exact;
@@ -285,7 +351,7 @@ export default function ScoreboardPage() {
         const suffix = `_${team}`;
         const playerName =
           displayName ||
-          (key.endsWith(suffix) ? key.slice(0, -suffix.length) : normalizePlayerName(String(key).split("_")[0] || ""));
+          (key.endsWith(suffix) ? key.slice(0, -suffix.length) : normalizeScorecardPlayerName(String(key).split("_")[0] || ""));
         stats[key] = {
           n: playerName,
           team,
@@ -322,7 +388,7 @@ export default function ScoreboardPage() {
 
           if (!stats[key])
             stats[key] = {
-              n: key.endsWith(sufCT) ? key.slice(0, -sufCT.length) : normalizePlayerName(rawN),
+              n: key.endsWith(sufCT) ? key.slice(0, -sufCT.length) : normalizeScorecardPlayerName(rawN),
               team: currentTeam,
               r: 0,
               b: 0,
@@ -350,7 +416,14 @@ export default function ScoreboardPage() {
           else if (stats[key].role === "Fielder") stats[key].role = "Batter";
 
           if (stats[key].r === 0 && dStr !== "not out" && dStr !== "") stats[key].isDuck = true;
-          if (dStr.includes("lbw") || dStr.includes("bowled")) stats[key].lbwB += 1;
+
+          // +8 LBW/bowled bonus credits the **bowler** (opposing team), not the dismissed batter.
+          const lbwBowledBy = parseLbwBowledBowlerName(b.dismissal || b["dismissal-text"] || "");
+          if (lbwBowledBy) {
+            const bKey = findKeyForTeamRoster(lbwBowledBy, opposingTeam);
+            ensureStatRow(bKey, opposingTeam, "Bowler", lbwBowledBy);
+            stats[bKey].lbwB += 1;
+          }
         });
 
         (inn.bowling || []).forEach((bw: any) => {
@@ -361,7 +434,7 @@ export default function ScoreboardPage() {
 
           if (!stats[key])
             stats[key] = {
-              n: key.endsWith(sufOpp) ? key.slice(0, -sufOpp.length) : normalizePlayerName(rawN),
+              n: key.endsWith(sufOpp) ? key.slice(0, -sufOpp.length) : normalizeScorecardPlayerName(rawN),
               team: opposingTeam,
               r: 0,
               b: 0,
@@ -410,6 +483,7 @@ export default function ScoreboardPage() {
               const key = findKeyForTeamRoster(nRaw, opposingTeam);
               ensureStatRow(key, opposingTeam, "Fielder", nRaw);
               stats[key].c += 1;
+              // c&b: catch points only (no separate bowled/LBW +8).
             }
             return;
           }
@@ -442,6 +516,8 @@ export default function ScoreboardPage() {
       const base = 4;
 
       const rows: BreakdownRow[] = Object.values(stats).map((p: any) => {
+        const cat = findPlayerCatalogRow(p.n, p.team, catalog, match);
+        const resolvedRole = pjResolveScoringPlayerRole(cat?.type, cat?.role, p.role);
         const pjInput = {
           batting: { runs: p.r, balls: p.b, fours: p.f, sixes: p.s, dismissal: p.dismissal || "not out" },
           bowling: {
@@ -454,7 +530,7 @@ export default function ScoreboardPage() {
           },
           fielding: { catches: p.c, stumpings: p.st, runout_direct: p.ro, runout_indirect: 0 },
           in_announced_lineup: true,
-          playerRole: p.role,
+          playerRole: resolvedRole,
         };
         const scored = scorePjRulesPlayer(pjInput);
         const pjDetail = pjRulesDetailedBreakdown(pjInput);
@@ -462,6 +538,7 @@ export default function ScoreboardPage() {
         const d11Meta = d11BonusMultiplierInfo(p.r, p.w);
         return {
           ...p,
+          role: resolvedRole,
           _variant: "pjRules" as const,
           base,
           b_pts: scored.batting_pts,
@@ -481,8 +558,12 @@ export default function ScoreboardPage() {
 
       return rows.sort((a: any, b: any) => (b.total || 0) - (a.total || 0));
     },
-    []
+    [playersCatalog]
   );
+
+  useEffect(() => {
+    setBreakdownCache({});
+  }, [playersCatalog]);
 
   useEffect(() => {
     if (!expandedPointsId) return;
@@ -519,7 +600,7 @@ export default function ScoreboardPage() {
     setBreakdownLoadingKey(key);
     const t = setTimeout(() => {
       try {
-        const rows = computeBreakdownRows(espn, match);
+        const rows = computeBreakdownRows(espn, match, playersCatalog);
         setBreakdownCache((prev) => ({ ...prev, [key]: rows }));
       } finally {
         setBreakdownLoadingKey((cur) => (cur === key ? null : cur));
@@ -535,6 +616,7 @@ export default function ScoreboardPage() {
     espnScorecardLoadingByMatchNo,
     fixturePointsSyncedByMatchNo,
     computeBreakdownRows,
+    playersCatalog,
   ]);
 
   const fetchEspnScorecardForMatchNo = useCallback(async (matchNo: number) => {
@@ -643,9 +725,14 @@ export default function ScoreboardPage() {
   const fetchInitialData = async () => {
     try {
       setLoading(true);
-      const [teamsRes, matchesRes] = await Promise.all([
+      const [teamsRes, matchesRes, playersCatRes] = await Promise.all([
         supabase.from("profiles").select("*").neq("role", "Viewer").order("team_name", { ascending: true }),
-        supabase.from("matches").select("*").order("match_no", { ascending: true })
+        supabase.from("matches").select("*").order("match_no", { ascending: true }),
+        supabase
+          .from("players")
+          .select("player_name, team, type, role")
+          .eq("auction_status", "sold")
+          .order("player_name", { ascending: true }),
       ]);
       const teamsData = teamsRes.data || [];
       setFranchises(teamsData);
@@ -653,6 +740,9 @@ export default function ScoreboardPage() {
         setAllMatches(matchesRes.data);
         const nextMatch = matchesRes.data.find(m => m.status === 'live' || m.status === 'scheduled') || matchesRes.data[0];
         if (nextMatch) setSelectedMatchId(nextMatch.id);
+      }
+      if (playersCatRes.data) {
+        setPlayersCatalog(playersCatRes.data as PlayerCatalogRow[]);
       }
     } finally { setTimeout(() => setLoading(false), 300); }
   };
@@ -665,7 +755,16 @@ export default function ScoreboardPage() {
         supabase.from("players").select("*").eq("auction_status", "sold").order("player_name", { ascending: true }),
         supabase.from("match_points").select("*"),
       ]);
-      setAllPlayers(playersRes.data || []);
+      const pl = playersRes.data || [];
+      setAllPlayers(pl);
+      setPlayersCatalog(
+        pl.map((p: any) => ({
+          player_name: p.player_name,
+          team: p.team,
+          type: p.type ?? null,
+          role: p.role ?? null,
+        }))
+      );
       setAllMatchPoints(pointsRes.data || []);
     } finally {
       setSubLoading(false);
