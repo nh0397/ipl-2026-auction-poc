@@ -82,15 +82,10 @@ function cleanShort(short: string | null): string {
   return short.endsWith("W") && short.length > 2 ? short.slice(0, -1) : short;
 }
 
-function deriveMatchNo(f: any): number | null {
+/** Join key to `public.fixtures` (ESPN) — only the stored `match_no` column, never parsed from titles. */
+function espnMatchNo(f: { match_no?: number | null }): number | null {
   const n = Number(f?.match_no);
-  if (Number.isFinite(n) && n > 0) return n;
-  const s = String(f?.title || f?.match_name || f?.name || "");
-  const m = s.match(/(\d+)(st|nd|rd|th)\s+Match/i);
-  if (m?.[1]) return Number(m[1]);
-  const m2 = s.match(/\bMatch\s+(\d+)\b/i);
-  if (m2?.[1]) return Number(m2[1]);
-  return null;
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
 function getIplTeamStyle(team: string | null | undefined) {
@@ -160,8 +155,10 @@ export default function ScoreboardPage() {
 
   const [espnScorecardByMatchNo, setEspnScorecardByMatchNo] = useState<Record<number, any | null>>({});
   const [espnScorecardLoadingByMatchNo, setEspnScorecardLoadingByMatchNo] = useState<Record<number, boolean>>({});
-  /** ESPN table `public.fixtures.points_synced` keyed by `match_no` */
+  /** `public.fixtures.points_synced` keyed by `match_no` (loaded once; never overwritten from scorecard fetch). */
   const [espnPointsSyncedByMatchNo, setEspnPointsSyncedByMatchNo] = useState<Record<number, boolean>>({});
+  /** `public.fixtureapi_points.synced` keyed by `api_match_id` — sole CricAPI sync flag for UI. */
+  const [fixtureapiPointsSyncedByApiMatchId, setFixtureapiPointsSyncedByApiMatchId] = useState<Record<string, boolean>>({});
 
   const [fixtures, setFixtures] = useState<Fixture[]>([]);
   const [fixtureFilter, setFixtureFilter] = useState<"all" | "upcoming" | "completed">("all");
@@ -401,12 +398,12 @@ export default function ScoreboardPage() {
     const match = fixtures.find((m) => m.api_match_id === expandedPointsId);
     if (!match) return;
 
-    const matchNo = deriveMatchNo(match) || 0;
+    const mn = espnMatchNo(match);
     const cric = adaptCricApiToScorecardViewer(match.scorecard) as any;
-    const espn = matchNo ? espnScorecardByMatchNo[matchNo] : null;
-    const espnLoading = matchNo ? !!espnScorecardLoadingByMatchNo[matchNo] : false;
-    const cricSynced = !!match.points_synced;
-    const espnSynced = matchNo ? !!espnPointsSyncedByMatchNo[matchNo] : false;
+    const espn = mn != null ? espnScorecardByMatchNo[mn] : null;
+    const espnLoading = mn != null ? !!espnScorecardLoadingByMatchNo[mn] : false;
+    const cricSynced = !!fixtureapiPointsSyncedByApiMatchId[match.api_match_id];
+    const espnSynced = mn != null ? !!espnPointsSyncedByMatchNo[mn] : false;
 
     const sc = breakdownSource === "cricapi" ? cric : espn;
     const key = `${expandedPointsId}|${breakdownSource}|${pointsVariant}`;
@@ -416,7 +413,7 @@ export default function ScoreboardPage() {
       return;
     }
     if (breakdownSource === "espn") {
-      if (!matchNo) {
+      if (mn == null) {
         setBreakdownLoadingKey(null);
         return;
       }
@@ -424,7 +421,7 @@ export default function ScoreboardPage() {
         setBreakdownLoadingKey(null);
         return;
       }
-      if (espnLoading || !espn) {
+      if (espnLoading) {
         setBreakdownLoadingKey(null);
         return;
       }
@@ -435,7 +432,11 @@ export default function ScoreboardPage() {
       return;
     }
 
-    if (!sc?.innings) return;
+    if (!sc?.innings?.length) {
+      setBreakdownCache((prev) => ({ ...prev, [key]: [] }));
+      setBreakdownLoadingKey(null);
+      return;
+    }
 
     setBreakdownLoadingKey(key);
     const t = setTimeout(() => {
@@ -457,6 +458,7 @@ export default function ScoreboardPage() {
     espnScorecardByMatchNo,
     espnScorecardLoadingByMatchNo,
     espnPointsSyncedByMatchNo,
+    fixtureapiPointsSyncedByApiMatchId,
     computeBreakdownRows,
   ]);
 
@@ -478,7 +480,6 @@ export default function ScoreboardPage() {
         return;
       }
       setEspnScorecardByMatchNo((prev) => ({ ...prev, [matchNo]: data?.scorecard ?? null }));
-      setEspnPointsSyncedByMatchNo((prev) => ({ ...prev, [matchNo]: !!data?.points_synced }));
     } catch (e) {
       console.error("[espn] scorecard fetch exception", { matchNo, e });
       setEspnScorecardByMatchNo((prev) => ({ ...prev, [matchNo]: null }));
@@ -546,9 +547,10 @@ export default function ScoreboardPage() {
   const fetchFixtures = async () => {
     setTabLoading(true);
     try {
-      const [cricRes, espnRes] = await Promise.all([
+      const [cricRes, espnRes, fapRes] = await Promise.all([
         supabase.from("fixtures_cricapi").select("*").order("date_time_gmt", { ascending: true }),
         supabase.from("fixtures").select("match_no,points_synced"),
+        supabase.from("fixtureapi_points").select("api_match_id,synced"),
       ]);
       if (cricRes.data) setFixtures(cricRes.data);
       if (espnRes.data) {
@@ -558,6 +560,17 @@ export default function ScoreboardPage() {
           if (Number.isFinite(n)) m[n] = !!row.points_synced;
         }
         setEspnPointsSyncedByMatchNo(m);
+      }
+      if (fapRes.error) {
+        console.error("[fixtures] fixtureapi_points fetch failed", fapRes.error);
+      }
+      if (fapRes.data) {
+        const m: Record<string, boolean> = {};
+        for (const row of fapRes.data as { api_match_id?: string | null; synced?: boolean | null }[]) {
+          const id = row.api_match_id;
+          if (id) m[id] = !!row.synced;
+        }
+        setFixtureapiPointsSyncedByApiMatchId(m);
       }
     } finally {
       setTabLoading(false);
@@ -913,9 +926,9 @@ export default function ScoreboardPage() {
                    <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-2">{formatDate(date)}</div>
                    {matches.map(match => {
                       const isToday = match.match_date === today;
-                      const matchNoForSync = deriveMatchNo(match) || 0;
-                      const cricPointsSynced = !!match.points_synced;
-                      const espnPointsSynced = matchNoForSync ? !!espnPointsSyncedByMatchNo[matchNoForSync] : false;
+                      const mnRow = espnMatchNo(match);
+                      const cricPointsSynced = !!fixtureapiPointsSyncedByApiMatchId[match.api_match_id];
+                      const espnPointsSynced = mnRow != null ? !!espnPointsSyncedByMatchNo[mnRow] : false;
                       const breakdownReady = cricPointsSynced || espnPointsSynced;
                       return (
                       <div key={match.id} className="space-y-2">
@@ -946,32 +959,43 @@ export default function ScoreboardPage() {
                                 return `${ist}${localPart}${venue}`;
                               })()}
                             </div>
-                            {match.match_ended && (match.points_synced || breakdownReady) ? (
+                            {breakdownReady ? (
                               <div className="flex gap-2">
-                                 {match.points_synced ? (
-                                   <Button variant="outline" size="sm" onClick={() => setExpandedScorecardId(match.api_match_id)} className="h-8 text-[9px] font-black uppercase shadow-none border-slate-200">Scorecard</Button>
-                                 ) : null}
-                                 {breakdownReady ? (
-                                   <Button
-                                     variant="outline"
-                                     size="sm"
-                                     onClick={() => {
-                                       if (cricPointsSynced) setBreakdownSource("cricapi");
-                                       else if (espnPointsSynced) {
-                                         setBreakdownSource("espn");
-                                         const mn = deriveMatchNo(match);
-                                         if (mn) fetchEspnScorecardForMatchNo(mn);
-                                       } else setBreakdownSource("cricapi");
-                                       setExpandedPointsId(match.api_match_id);
-                                     }}
-                                     className="h-8 text-[9px] font-black uppercase border-amber-200 text-amber-600 bg-amber-50/50 shadow-none"
-                                   >
-                                     Breakdown
-                                   </Button>
-                                 ) : null}
+                                 <Button
+                                   variant="outline"
+                                   size="sm"
+                                   onClick={() => {
+                                     if (cricPointsSynced) setScorecardSource("cricapi");
+                                     else if (espnPointsSynced) {
+                                       setScorecardSource("espn");
+                                       const mn = espnMatchNo(match);
+                                       if (mn != null) fetchEspnScorecardForMatchNo(mn);
+                                     }
+                                     setExpandedScorecardId(match.api_match_id);
+                                   }}
+                                   className="h-8 text-[9px] font-black uppercase shadow-none border-slate-200"
+                                 >
+                                   Scorecard
+                                 </Button>
+                                 <Button
+                                   variant="outline"
+                                   size="sm"
+                                   onClick={() => {
+                                     if (cricPointsSynced) setBreakdownSource("cricapi");
+                                     else if (espnPointsSynced) {
+                                       setBreakdownSource("espn");
+                                       const mn = espnMatchNo(match);
+                                       if (mn != null) fetchEspnScorecardForMatchNo(mn);
+                                     } else setBreakdownSource("cricapi");
+                                     setExpandedPointsId(match.api_match_id);
+                                   }}
+                                   className="h-8 text-[9px] font-black uppercase border-amber-200 text-amber-600 bg-amber-50/50 shadow-none"
+                                 >
+                                   Breakdown
+                                 </Button>
                               </div>
-                            ) : match.match_ended && !breakdownReady ? (
-                              <span className="text-[9px] font-black text-blue-600 bg-blue-50 px-2 py-1 rounded uppercase">Processing points</span>
+                            ) : !breakdownReady ? (
+                              <span className="text-[9px] font-black text-blue-600 bg-blue-50 px-2 py-1 rounded uppercase">Points will be updated soon.</span>
                             ) : (
                               <span className="text-[9px] font-black text-amber-500 bg-amber-50 px-2 py-1 rounded uppercase">Live Soon</span>
                             )}
@@ -992,8 +1016,8 @@ export default function ScoreboardPage() {
                                    <button
                                      onClick={() => {
                                        setScorecardSource("espn");
-                                       const mn = deriveMatchNo(match);
-                                       if (mn) fetchEspnScorecardForMatchNo(mn);
+                                       const mn = espnMatchNo(match);
+                                       if (mn != null) fetchEspnScorecardForMatchNo(mn);
                                      }}
                                      className={cn("px-3 py-1.5 rounded-lg transition-all", scorecardSource === "espn" ? "bg-white text-slate-900 shadow-sm" : "text-white/80 hover:text-white")}
                                    >
@@ -1003,32 +1027,26 @@ export default function ScoreboardPage() {
                                </div>
                                <div className="p-4 sm:p-8 max-h-[75vh] min-h-[60vh] overflow-y-auto no-scrollbar">
                                  {expandedScorecardId === match.api_match_id ? (() => {
-                                   const matchNo = deriveMatchNo(match) || 0;
+                                   const mn = espnMatchNo(match);
+                                   const cricSynced = !!fixtureapiPointsSyncedByApiMatchId[match.api_match_id];
                                    const cric = adaptCricApiToScorecardViewer(match.scorecard);
-                                   const espn = matchNo ? espnScorecardByMatchNo[matchNo] : null;
-                                   const espnLoading = matchNo ? !!espnScorecardLoadingByMatchNo[matchNo] : false;
-                                   const espnSyncedModal = matchNo ? !!espnPointsSyncedByMatchNo[matchNo] : false;
+                                   const espn = mn != null ? espnScorecardByMatchNo[mn] : null;
+                                   const espnLoading = mn != null ? !!espnScorecardLoadingByMatchNo[mn] : false;
+                                   const espnSyncedModal = mn != null ? !!espnPointsSyncedByMatchNo[mn] : false;
 
-                                   if (scorecardSource === "cricapi" && !match.points_synced) {
+                                   if (scorecardSource === "cricapi" && !cricSynced) {
                                      return (
                                        <div className="px-2 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
-                                         CricAPI scorecard is not available for this match.
-                                       </div>
-                                     );
-                                   }
-                                   if (scorecardSource === "cricapi" && match.points_synced && !cric?.innings?.length) {
-                                     return (
-                                       <div className="px-2 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
-                                         CricAPI scorecard is not available for this match.
+                                         Score not available for this category.
                                        </div>
                                      );
                                    }
 
                                    if (scorecardSource === "espn") {
-                                     if (!matchNo) {
+                                     if (mn == null) {
                                        return (
                                          <div className="px-2 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
-                                           No match number found for ESPN lookup.
+                                           Score not available for this category.
                                          </div>
                                        );
                                      }
@@ -1042,28 +1060,14 @@ export default function ScoreboardPage() {
                                      if (!espnSyncedModal) {
                                        return (
                                          <div className="px-2 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
-                                           ESPN scorecard is not available for this match.
+                                           Score not available for this category.
                                          </div>
                                        );
                                      }
-                                     if (!espn) {
-                                       return (
-                                         <div className="px-2 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
-                                           ESPN scorecard is not available for this match.
-                                         </div>
-                                       );
-                                     }
-                                     if (!espn?.innings?.length) {
-                                       return (
-                                         <div className="px-2 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
-                                           ESPN scorecard is not available for this match.
-                                         </div>
-                                       );
-                                     }
-                                     return <ScorecardViewer scorecard={espn as any} />;
+                                     return <ScorecardViewer scorecard={(espn ?? {}) as any} />;
                                    }
 
-                                   return <ScorecardViewer scorecard={cric as any} />;
+                                   return <ScorecardViewer scorecard={(cric ?? {}) as any} />;
                                  })() : null}
                                </div>
                             </DialogContent>
@@ -1088,8 +1092,8 @@ export default function ScoreboardPage() {
                                       <button
                                         onClick={() => {
                                           setBreakdownSource("espn");
-                                          const mn = deriveMatchNo(match);
-                                          if (mn) fetchEspnScorecardForMatchNo(mn);
+                                          const mn = espnMatchNo(match);
+                                          if (mn != null) fetchEspnScorecardForMatchNo(mn);
                                         }}
                                         className={cn("px-3 py-1.5 rounded-lg transition-all", breakdownSource === "espn" ? "bg-white text-indigo-700 shadow-sm" : "text-white/80 hover:text-white")}
                                       >
@@ -1126,40 +1130,29 @@ export default function ScoreboardPage() {
                                      </thead>
                                      <tbody className="divide-y divide-slate-100">
                                         {expandedPointsId === match.api_match_id ? (() => {
-                                          const matchNo = deriveMatchNo(match) || 0;
+                                          const mn = espnMatchNo(match);
                                           const key = `${match.api_match_id}|${breakdownSource}|${pointsVariant}`;
                                           const rows = breakdownCache[key];
                                           const isLoading = breakdownLoadingKey === key;
-                                          const cricSynced = !!match.points_synced;
-                                          const espnSynced = matchNo ? !!espnPointsSyncedByMatchNo[matchNo] : false;
-                                          const cricAdapted = adaptCricApiToScorecardViewer(match.scorecard) as any;
-                                          const espnSc = matchNo ? espnScorecardByMatchNo[matchNo] : null;
-                                          const espnLoadingRow = matchNo ? !!espnScorecardLoadingByMatchNo[matchNo] : false;
+                                          const cricSynced = !!fixtureapiPointsSyncedByApiMatchId[match.api_match_id];
+                                          const espnSynced = mn != null ? !!espnPointsSyncedByMatchNo[mn] : false;
+                                          const espnLoadingRow = mn != null ? !!espnScorecardLoadingByMatchNo[mn] : false;
 
                                           if (breakdownSource === "cricapi" && !cricSynced) {
                                             return (
                                               <tr>
                                                 <td colSpan={3} className="px-6 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
-                                                  CricAPI scorecard is not available for this match.
-                                                </td>
-                                              </tr>
-                                            );
-                                          }
-                                          if (breakdownSource === "cricapi" && cricSynced && !cricAdapted?.innings?.length) {
-                                            return (
-                                              <tr>
-                                                <td colSpan={3} className="px-6 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
-                                                  CricAPI scorecard is not available for this match.
+                                                  Score not available for this category.
                                                 </td>
                                               </tr>
                                             );
                                           }
 
-                                          if (breakdownSource === "espn" && !matchNo) {
+                                          if (breakdownSource === "espn" && mn == null) {
                                             return (
                                               <tr>
                                                 <td colSpan={3} className="px-6 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
-                                                  No match number found for ESPN lookup.
+                                                  Score not available for this category.
                                                 </td>
                                               </tr>
                                             );
@@ -1168,7 +1161,7 @@ export default function ScoreboardPage() {
                                             return (
                                               <tr>
                                                 <td colSpan={3} className="px-6 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
-                                                  ESPN scorecard is not available for this match.
+                                                  Score not available for this category.
                                                 </td>
                                               </tr>
                                             );
@@ -1178,24 +1171,6 @@ export default function ScoreboardPage() {
                                               <tr>
                                                 <td colSpan={3} className="px-6 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
                                                   Loading ESPN scorecard…
-                                                </td>
-                                              </tr>
-                                            );
-                                          }
-                                          if (breakdownSource === "espn" && !espnSc) {
-                                            return (
-                                              <tr>
-                                                <td colSpan={3} className="px-6 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
-                                                  ESPN scorecard is not available for this match.
-                                                </td>
-                                              </tr>
-                                            );
-                                          }
-                                          if (breakdownSource === "espn" && espnSc && !espnSc?.innings?.length) {
-                                            return (
-                                              <tr>
-                                                <td colSpan={3} className="px-6 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
-                                                  ESPN scorecard is not available for this match.
                                                 </td>
                                               </tr>
                                             );

@@ -93,7 +93,7 @@ def list_targets(match_date_ist: Optional[str]) -> List[Dict[str, Any]]:
     return all_rows
 
 
-def update_fixture_scorecard_and_mark_synced(fixture_id: str, scorecard: Dict[str, Any]) -> None:
+def update_fixture_scorecard_and_mark_synced(fixture_id: str, api_match_id: str, scorecard: Dict[str, Any]) -> None:
     # Patch by primary key
     url = f"{SUPABASE_URL}/rest/v1/{FIXTURES_TABLE}?id=eq.{fixture_id}"
     res = requests.patch(
@@ -103,6 +103,15 @@ def update_fixture_scorecard_and_mark_synced(fixture_id: str, scorecard: Dict[st
         timeout=30,
     )
     res.raise_for_status()
+    # UI reads `public.fixtureapi_points.synced` only (not fixtures_cricapi.points_synced).
+    fap = f"{SUPABASE_URL}/rest/v1/fixtureapi_points"
+    r2 = requests.post(
+        fap,
+        headers={**HEADERS, "Prefer": "resolution=merge-duplicates"},
+        json={"api_match_id": api_match_id, "synced": True},
+        timeout=30,
+    )
+    r2.raise_for_status()
 
 
 def main() -> None:
@@ -133,7 +142,7 @@ def main() -> None:
             continue
         print(f"[{idx}/{len(targets)}] Fetching scorecard {match_id} …")
         sc = fetch_scorecard(match_id)
-        update_fixture_scorecard_and_mark_synced(fixture_id, sc)
+        update_fixture_scorecard_and_mark_synced(fixture_id, str(match_id), sc)
         print(f"  ✅ stored scorecard + set points_synced=true for fixture_id={fixture_id}")
         updated.append(
             {
