@@ -131,7 +131,7 @@ function getPjDetailForRow(p: any): PjRulesDetailedBreakdown {
       lbw_bowled_wickets: p.lbwB,
       dot_balls: p.dots,
     },
-    fielding: { catches: p.c, stumpings: p.st, runout_direct: p.ro, runout_indirect: 0 },
+    fielding: { catches: p.c, stumpings: p.st, runout_direct: p.ro, runout_indirect: p.roI ?? 0 },
     in_announced_lineup: true,
     playerRole: p.role,
   };
@@ -275,7 +275,10 @@ export default function ScoreboardPage() {
     st: number;
     dots: number;
     lbwB: number;
+    /** Direct run outs (parentheses with a single fielder). */
     ro: number;
+    /** Indirect run outs (`run out (p1/p2)`). */
+    roI: number;
     dismissal?: string;
     base: number;
     b_pts: number;
@@ -309,7 +312,7 @@ export default function ScoreboardPage() {
           const n = normalizeScorecardPlayerName(raw);
           const key = `${n}_${battingTeam}`;
           if (!stats[key])
-            stats[key] = { n, team: battingTeam, r: 0, b: 0, f: 0, s: 0, w: 0, m: 0, o: 0, r_conc: 0, c: 0, st: 0, dots: 0, lbwB: 0, ro: 0, isDuck: false, role: "Batter" };
+            stats[key] = { n, team: battingTeam, r: 0, b: 0, f: 0, s: 0, w: 0, m: 0, o: 0, r_conc: 0, c: 0, st: 0, dots: 0, lbwB: 0, ro: 0, roI: 0, isDuck: false, role: "Batter" };
         });
         (inn.bowling || []).forEach((bw: any) => {
           const raw = bw.bowler || "";
@@ -318,7 +321,7 @@ export default function ScoreboardPage() {
           // bowling is done by opposition
           const key = `${n}_${bowlingTeam}`;
           if (!stats[key])
-            stats[key] = { n, team: bowlingTeam, r: 0, b: 0, f: 0, s: 0, w: 0, m: 0, o: 0, r_conc: 0, c: 0, st: 0, dots: 0, lbwB: 0, ro: 0, isDuck: false, role: "Bowler" };
+            stats[key] = { n, team: bowlingTeam, r: 0, b: 0, f: 0, s: 0, w: 0, m: 0, o: 0, r_conc: 0, c: 0, st: 0, dots: 0, lbwB: 0, ro: 0, roI: 0, isDuck: false, role: "Bowler" };
         });
       });
 
@@ -368,6 +371,7 @@ export default function ScoreboardPage() {
           dots: 0,
           lbwB: 0,
           ro: 0,
+          roI: 0,
           isDuck: false,
           role,
           dismissal: "",
@@ -403,6 +407,7 @@ export default function ScoreboardPage() {
               dots: 0,
               lbwB: 0,
               ro: 0,
+              roI: 0,
               isDuck: false,
               role: "Batter",
               dismissal: "",
@@ -449,6 +454,7 @@ export default function ScoreboardPage() {
               dots: 0,
               lbwB: 0,
               ro: 0,
+              roI: 0,
               isDuck: false,
               role: "Bowler",
             };
@@ -502,11 +508,22 @@ export default function ScoreboardPage() {
           if (d.includes("run out")) {
             const roMatch = d.match(/\(([^)]+)\)/);
             if (roMatch?.[1]) {
-              const n = roMatch[1].split(/[/,]/)[0].trim();
-              if (n && !/^sub$/i.test(n)) {
-                const key = findKeyForTeamRoster(n, opposingTeam);
-                ensureStatRow(key, opposingTeam, "Fielder", n);
-                stats[key].ro += 1;
+              const inner = roMatch[1].trim();
+              // Direct: run out (p1). Indirect: (p1/p2) or (p1, p2) — two fielders, +6 each.
+              let parts: string[];
+              const bySlash = inner.split(/\s*\/\s*/).map((s: string) => s.trim()).filter(Boolean);
+              if (bySlash.length >= 2) parts = bySlash;
+              else {
+                const byComma = inner.split(/\s*,\s*/).map((s: string) => s.trim()).filter(Boolean);
+                parts = byComma.length >= 2 ? byComma : [inner];
+              }
+              const indirect = parts.length >= 2;
+              for (const nRaw of parts) {
+                if (!nRaw || /^sub$/i.test(nRaw)) continue;
+                const key = findKeyForTeamRoster(nRaw, opposingTeam);
+                ensureStatRow(key, opposingTeam, "Fielder", nRaw);
+                if (indirect) stats[key].roI += 1;
+                else stats[key].ro += 1;
               }
             }
           }
@@ -528,7 +545,7 @@ export default function ScoreboardPage() {
             lbw_bowled_wickets: p.lbwB,
             dot_balls: p.dots,
           },
-          fielding: { catches: p.c, stumpings: p.st, runout_direct: p.ro, runout_indirect: 0 },
+          fielding: { catches: p.c, stumpings: p.st, runout_direct: p.ro, runout_indirect: p.roI ?? 0 },
           in_announced_lineup: true,
           playerRole: resolvedRole,
         };
