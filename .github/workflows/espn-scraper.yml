@@ -2,10 +2,8 @@ name: ESPNcricinfo Scraper
 
 on:
   schedule:
-    # 11:55 PM IST = 6:25 PM UTC (Daily)
-    - cron: "25 18 * * *"
-    # 8:00 PM IST = 2:30 PM UTC (Sat, Sun)
-    - cron: "30 14 * * 6,0"
+    # 11:30 PM IST = 6:00 PM UTC (daily)
+    - cron: "0 18 * * *"
   workflow_dispatch:
     inputs:
       date_ist:
@@ -48,7 +46,7 @@ jobs:
           python scripts/sync_scorecards_espn.py \
             ${{ github.event.inputs.date_ist != '' && format('--date {0}', github.event.inputs.date_ist) || '' }}
 
-      - name: Send Success Email (All Participants)
+      - name: Send Success Email
         if: success() && steps.run_scraper.outputs.updated_count != '0'
         uses: dawidd6/action-send-mail@v4
         with:
@@ -56,8 +54,8 @@ jobs:
           server_port: 587
           username: ${{ secrets.MAIL_USERNAME || secrets.SMTP_USER }}
           password: ${{ secrets.MAIL_PASSWORD || secrets.SMTP_PASS }}
-          subject: "Points updated for match — ${{ steps.run_scraper.outputs.target_date }} (${{ steps.run_scraper.outputs.updated_count }} updated)"
-          to: "harshshah661992@gmail.com,tradingwithparthshah@gmail.com,jalan.me4u@gmail.com,naisicric97@gmail.com"
+          subject: "Points updated for match: ${{ steps.run_scraper.outputs.target_date }} (${{ steps.run_scraper.outputs.updated_count }} updated)"
+          to: "naisicric97@gmail.com"
           from: "IPL Auction System <${{ secrets.MAIL_USERNAME || secrets.SMTP_USER || 'noreply@ipl2026.com' }}>"
           body: |
             Hi,
@@ -68,7 +66,7 @@ jobs:
 
             Date (IST): ${{ steps.run_scraper.outputs.target_date }}
 
-            — IPL Auction System
+            IPL Auction System
           
       - name: Send Failure Email (Primary Admin)
         if: failure()
