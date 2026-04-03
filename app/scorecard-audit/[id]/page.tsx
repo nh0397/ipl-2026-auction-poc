@@ -169,7 +169,7 @@ export default function ScorecardAuditPage() {
      if (stats.runs >= 100) batting.push({ label: 'Century Bonus', points: 16 });
      else if (stats.runs >= 50) batting.push({ label: 'Half-Century Bonus', points: 8 });
 
-     if (stats.isDuck && stats.role !== 'Bowler') batting.push({ label: 'Duck Penalty', points: -2 });
+     if (stats.isDuck) batting.push({ label: 'Duck Penalty', points: -2 });
 
      if (stats.wickets > 0) bowling.push({ label: 'Wickets', points: stats.wickets * 25, value: stats.wickets });
      if (stats.maidens > 0) bowling.push({ label: 'Maiden Over Bonus', points: stats.maidens * 12, value: stats.maidens });

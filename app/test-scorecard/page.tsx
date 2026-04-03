@@ -87,7 +87,7 @@ export default function TestScorecardPage() {
      else if (stats.runs >= 50) batting.push({ label: 'Half-Century Bonus', points: 8 });
      else if (stats.runs >= 25) batting.push({ label: '25 Run Bonus', points: 4 });
 
-     if (stats.isDuck && stats.role !== 'Bowler') batting.push({ label: 'Duck Penalty', points: -2 });
+     if (stats.isDuck) batting.push({ label: 'Duck Penalty', points: -2 });
 
      if (stats.balls >= 10 && stats.strikeRate !== undefined && stats.role !== 'Bowler') {
         if (stats.strikeRate > 170) batting.push({ label: 'Strike Rate Bonus (>170)', points: 6, value: stats.strikeRate });

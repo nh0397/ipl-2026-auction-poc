@@ -38,7 +38,7 @@ export function calculateDream11Points(stats: MatchStats): number {
   else if (stats.runs >= 25) points += 4;
 
   // Duck Penalty
-  if (stats.isDuck && stats.role !== 'Bowler') {
+  if (stats.isDuck) {
     points -= 2;
   }
 
@@ -138,7 +138,7 @@ export function parseLbwBowledBowlerName(dismissal: string): string | null {
   return null;
 }
 
-/** True only for specialist bowlers (duck/SR rules do not apply). Case-insensitive. */
+/** True only for specialist bowlers (SR rules do not apply). Case-insensitive. */
 export function pjIsPureBowlerRole(playerRole?: string): boolean {
   return String(playerRole || "").trim().toLowerCase() === "bowler";
 }
@@ -196,7 +196,7 @@ export interface IplFantasyPlayerForScoring {
   is_playing_substitute?: boolean;
   is_captain?: boolean;
   is_vice_captain?: boolean;
-  /** Used for duck (−2) and SR (skip for pure bowlers): Batter | Bowler | WK | All-Rounder */
+  /** Used for SR (skip for pure bowlers): Batter | Bowler | WK | All-Rounder */
   playerRole?: string;
 }
 
@@ -220,8 +220,8 @@ export function iplFantasyBattingPoints(
   else if (runs >= 50) pts += 8;
   else if (runs >= 25) pts += 4;
 
-  // Duck: −2 for Batter / WK / AR (not pure bowlers)
-  if (runs === 0 && isDismissed && !opts?.isBowler) pts -= 2;
+  // Duck: −2
+  if (runs === 0 && isDismissed) pts -= 2;
 
   let srPts = 0;
   if (!opts?.isBowler && balls >= 10) {
@@ -348,8 +348,8 @@ export function pjRulesDetailedBreakdown(p: IplFantasyPlayerForScoring): PjRules
   const ms = pjMilestoneLine(runs);
   if (ms) batOut.push(ms);
 
-  if (runs === 0 && isDismissed && !isBowler) {
-    batOut.push({ label: "Duck (Batter / WK / AR)", pts: -2, detail: "Dismissed for 0" });
+  if (runs === 0 && isDismissed) {
+    batOut.push({ label: "Duck", pts: -2, detail: "Dismissed for 0" });
   }
 
   const batFull = iplFantasyBattingPoints(p.batting, { isBowler });
@@ -534,7 +534,7 @@ export function my11CircleBattingPoints(bat: Partial<IplFantasyBatting> | undefi
   else if (runs >= 50) pts += 8;
   else if (runs >= 25) pts += 4;
 
-  if (runs === 0 && isDismissed) pts -= 2; // excluding bowlers is handled at callsite if needed
+  if (runs === 0 && isDismissed) pts -= 2;
 
   let srPts = 0;
   // Screenshot: "Minimum 20 runs OR 10 balls"
@@ -594,16 +594,9 @@ export function my11CircleFieldingPoints(fld: Partial<IplFantasyFielding> | unde
   return pts;
 }
 
-export function scoreMy11CirclePlayer(p: IplFantasyPlayerForScoring, opts?: { excludeDuckForBowlers?: boolean; isBowler?: boolean }) {
+export function scoreMy11CirclePlayer(p: IplFantasyPlayerForScoring) {
   const batting = my11CircleBattingPoints(p.batting);
-  let battingPts = batting.points;
-  if (opts?.excludeDuckForBowlers && opts?.isBowler) {
-    // Undo duck penalty if applied for bowlers (screenshot: duck excluding bowlers)
-    const runs = Number(p.batting?.runs ?? 0) || 0;
-    const d = String(p.batting?.dismissal ?? "").toLowerCase();
-    const isDismissed = !["", "not out", "retired hurt"].includes(d);
-    if (runs === 0 && isDismissed) battingPts += 2;
-  }
+  const battingPts = batting.points;
 
   const bowling = my11CircleBowlingPoints(p.bowling);
   const fieldingPts = my11CircleFieldingPoints(p.fielding);
@@ -628,7 +621,7 @@ export function scoreMy11CirclePlayer(p: IplFantasyPlayerForScoring, opts?: { ex
 
 export function iplFantasyAppBattingPoints(
   bat: Partial<IplFantasyBatting> | undefined,
-  opts?: { excludeDuckForBowlers?: boolean; isBowler?: boolean }
+  opts?: { isBowler?: boolean }
 ): { points: number; srPoints: number } {
   const runs = Number(bat?.runs ?? 0) || 0;
   const balls = Number(bat?.balls ?? 0) || 0;
@@ -653,10 +646,9 @@ export function iplFantasyAppBattingPoints(
   else if (runs >= 50) pts += 8;
   else if (runs >= 30) pts += 4;
 
-  // Duck: -2 (excluding bowlers)
+  // Duck: -2
   if (runs === 0 && isDismissed) {
-    const exclude = !!opts?.excludeDuckForBowlers && !!opts?.isBowler;
-    if (!exclude) pts -= 2;
+    pts -= 2;
   }
 
   // Strike rate (except bowlers): min 10 balls OR 20 runs
@@ -711,9 +703,9 @@ export function iplFantasyAppBowlingPoints(bwl: Partial<IplFantasyBowling> | und
 
 export function scoreIplFantasyPlayer(
   p: IplFantasyPlayerForScoring,
-  opts?: { excludeDuckForBowlers?: boolean; isBowler?: boolean; applyStrikeRateForBowlers?: boolean }
+  opts?: { isBowler?: boolean; applyStrikeRateForBowlers?: boolean }
 ) {
-  const batting = iplFantasyAppBattingPoints(p.batting, { excludeDuckForBowlers: opts?.excludeDuckForBowlers, isBowler: opts?.isBowler });
+  const batting = iplFantasyAppBattingPoints(p.batting, { isBowler: opts?.isBowler });
   const bowling = iplFantasyAppBowlingPoints(p.bowling);
   const fieldingPts = my11CircleFieldingPoints(p.fielding); // identical per screenshots
 

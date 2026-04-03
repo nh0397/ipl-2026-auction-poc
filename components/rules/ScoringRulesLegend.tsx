@@ -38,7 +38,7 @@ export const ScoringRulesLegend = () => {
             <RuleRow label="50 Runs Bonus" pts={8} />
             <RuleRow label="75 Runs Bonus" pts={12} />
             <RuleRow label="100 Runs Bonus" pts={16} />
-            <RuleRow label="Dismissal for Duck" pts={-2} sub="Excl. Bowlers" isNegative />
+            <RuleRow label="Dismissal for Duck" pts={-2} isNegative />
           </div>
           
           <div className="pt-6 border-t border-slate-100">
