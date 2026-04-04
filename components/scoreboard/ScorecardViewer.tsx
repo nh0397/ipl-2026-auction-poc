@@ -1,5 +1,4 @@
 import React from "react";
-import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { calculateDream11Points, MatchStats } from "@/lib/scoring";
@@ -29,12 +28,65 @@ interface BowlingRow {
 
 interface InningData {
   team: string;
+  /** Batting side (ESPN scrape); optional */
+  batting_team?: string;
+  /** Opposition / bowling side when known (ESPN scrape) */
+  bowling_team?: string;
   batting: BattingRow[];
   extras: { text: string; total: number };
   total: { score: string; overs: string; run_rate: string };
   fall_of_wickets: string[];
   bowling: BowlingRow[];
   yet_to_bat?: string[];
+}
+
+/** Last token of bowler name from "… b Bowler Name" / "lbw b …" in dismissal text. */
+function bowlerTokenFromDismissal(dismissal: string): string | null {
+  const d = String(dismissal || "");
+  if (!d.trim() || /not out/i.test(d)) return null;
+  const m = d.match(/\bb\s+([A-Za-zÀ-ÿ .'-]+?)\s*$/i) || d.match(/\bb\s+([A-Za-zÀ-ÿ .'-]+)/i);
+  if (!m?.[1]) return null;
+  const parts = m[1].trim().split(/\s+/).filter(Boolean);
+  const last = parts[parts.length - 1];
+  if (!last || last.length < 2) return null;
+  return last.toLowerCase();
+}
+
+function bowlingTableMatchesBowlerToken(token: string, bowling: BowlingRow[]): boolean {
+  if (!token) return false;
+  return (bowling || []).some((bw) => {
+    const n = String(bw.bowler || "").trim().toLowerCase();
+    if (!n || n === "bowling") return false;
+    return n === token || n.endsWith(" " + token) || n.split(/\s+/).pop() === token || n.includes(token);
+  });
+}
+
+/** Share of dismissals whose `b <bowler>` appears in this bowling table (0–1). No dismissals → 0.5 (neutral). */
+function dismissalBowlingConsistency(inn: InningData): number {
+  let matched = 0;
+  let total = 0;
+  for (const b of inn.batting || []) {
+    const tok = bowlerTokenFromDismissal(String(b.dismissal || ""));
+    if (!tok) continue;
+    total += 1;
+    if (bowlingTableMatchesBowlerToken(tok, inn.bowling || [])) matched += 1;
+  }
+  if (total === 0) return 0.5;
+  return matched / total;
+}
+
+/** When two innings exist, sometimes batting₁ is paired with bowling₁ from the wrong block; swap if it improves dismissal↔bowling agreement. */
+function alignBowlingToBattingOpposition(innings: InningData[]): InningData[] {
+  if (innings.length !== 2) return innings;
+  const [a, b] = innings;
+  const asIs = dismissalBowlingConsistency(a) + dismissalBowlingConsistency(b);
+  const swappedA = { ...a, bowling: b.bowling };
+  const swappedB = { ...b, bowling: a.bowling };
+  const ifSwapped = dismissalBowlingConsistency(swappedA) + dismissalBowlingConsistency(swappedB);
+  if (ifSwapped > asIs + 0.01) {
+    return [swappedA, swappedB];
+  }
+  return innings;
 }
 
 interface ScorecardData {
@@ -44,6 +96,11 @@ interface ScorecardData {
 
 export default function ScorecardViewer({ scorecard }: { scorecard: ScorecardData }) {
   if (!scorecard || !scorecard.innings) return null;
+
+  const innings = React.useMemo(
+    () => alignBowlingToBattingOpposition(scorecard.innings),
+    [scorecard.innings]
+  );
 
   const normalizePlayerName = React.useCallback((raw: string) => {
     return String(raw || "")
@@ -66,7 +123,7 @@ export default function ScorecardViewer({ scorecard }: { scorecard: ScorecardDat
       map.set(k, curr);
     };
 
-    for (const inn of scorecard.innings || []) {
+    for (const inn of innings || []) {
       for (const b of inn.batting || []) {
         const text = String(b.dismissal || "").toLowerCase();
         if (!text) continue;
@@ -74,7 +131,7 @@ export default function ScorecardViewer({ scorecard }: { scorecard: ScorecardDat
         // Very lightweight parsing:
         // - catches: "c <fielder>" or "c †<keeper>"
         // - stumpings: "st †<keeper>"
-        // We only need the fielder/keeper token(s), not full structured parsing.
+        // Fielders/keepers here are the opposition (bowling side) for this batting card.
         const cMatch = text.match(/\bc\s+†?([a-z0-9 .'-]+)/i);
         if (cMatch?.[1]) bump(cMatch[1], "catches");
         const stMatch = text.match(/\bst\s+†([a-z0-9 .'-]+)/i);
@@ -83,17 +140,24 @@ export default function ScorecardViewer({ scorecard }: { scorecard: ScorecardDat
     }
 
     return map;
-  }, [scorecard.innings]);
+  }, [innings]);
 
   return (
     <div className="space-y-12">
-      {scorecard.innings.map((inning, idx) => (
+      {innings.map((inning, idx) => (
         <div key={idx} className="space-y-4">
           {/* Header Section (Cricinfo Style) */}
           <div className="flex items-center justify-between px-6 py-3 bg-[#E3F2FD] border-l-4 border-blue-500 rounded-r-lg">
-             <h2 className="text-sm sm:text-lg font-black text-slate-900 uppercase tracking-tighter">
-               {inning.team} <span className="text-slate-500 font-bold ml-2 text-xs sm:text-sm lowercase">(20 ovs maximum)</span>
-             </h2>
+             <div>
+               <h2 className="text-sm sm:text-lg font-black text-slate-900 uppercase tracking-tighter">
+                 {inning.team} <span className="text-slate-500 font-bold ml-2 text-xs sm:text-sm lowercase">(20 ovs maximum)</span>
+               </h2>
+               {(inning.bowling_team || "").trim() ? (
+                 <p className="text-[10px] font-bold text-slate-500 mt-1 uppercase tracking-wide">
+                   Bowling & fielding: {(inning.bowling_team || "").trim()}
+                 </p>
+               ) : null}
+             </div>
           </div>
 
           <div className="bg-white border border-slate-100 rounded-xl overflow-hidden shadow-sm">
@@ -212,12 +276,19 @@ export default function ScorecardViewer({ scorecard }: { scorecard: ScorecardDat
              </div>
           )}
 
-          {/* Bowling Table (Cricinfo Style) */}
+          {/* Bowling Table (Cricinfo Style) — opposition figures for this batting innings */}
           <div className="bg-white border border-slate-100 rounded-xl overflow-hidden shadow-sm mt-4">
             <Table>
               <TableHeader className="bg-slate-50">
                 <TableRow className="border-none hover:bg-transparent">
-                  <TableHead className="px-6 h-10 text-[9px] font-black uppercase text-slate-500">BOWLING</TableHead>
+                  <TableHead className="px-6 h-10 text-[9px] font-black uppercase text-slate-500">
+                    BOWLING
+                    {(inning.bowling_team || "").trim() ? (
+                      <span className="block font-bold text-slate-400 normal-case tracking-tight mt-0.5">
+                        {(inning.bowling_team || "").trim()}
+                      </span>
+                    ) : null}
+                  </TableHead>
                   <TableHead className="text-right h-10 text-[9px] font-black uppercase text-slate-500 px-2">O</TableHead>
                   <TableHead className="text-right h-10 text-[9px] font-black uppercase text-slate-500 px-2">M</TableHead>
                   <TableHead className="text-right h-10 text-[9px] font-black uppercase text-slate-500 px-2">R</TableHead>

@@ -11,7 +11,8 @@
     "start": "next start",
     "lint": "eslint",
     "sync:fixtures": "tsx scripts/sync-fixtures.ts",
-    "sync:auto": "tsx scripts/auto-sync-scores.ts"
+    "sync:auto": "tsx scripts/auto-sync-scores.ts",
+    "test:cricapi-bbb": "python3 scripts/test_cricapi_bbb.py"
   },
   "dependencies": {
     "@base-ui/react": "^1.2.0",

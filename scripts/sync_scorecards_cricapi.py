@@ -1,7 +1,7 @@
 import os
 import time
 import requests
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from dotenv import load_dotenv
 from datetime import datetime, timedelta, timezone
 import argparse
@@ -26,17 +26,46 @@ HEADERS = {
 }
 
 
-def fetch_scorecard(match_id: str) -> Dict[str, Any]:
+def fetch_match_bbb(match_id: str) -> Tuple[Optional[Any], Optional[str]]:
+    """
+    CricAPI exposes ball-by-ball on a separate endpoint: GET /v1/match_bbb?id=…
+    (Passing bbb=true on match_scorecard does not add BBB to that payload in practice.)
+    Returns (data, None) on success, (None, reason) on failure.
+    """
+    res = requests.get(
+        f"{CRICAPI_BASE_URL}/match_bbb",
+        params={"apikey": CRICAPI_KEY, "id": match_id},
+        timeout=60,
+    )
+    res.raise_for_status()
+    payload = res.json()
+    if payload.get("status") == "success":
+        return payload.get("data"), None
+    reason = payload.get("reason") or str(payload)
+    return None, reason
+
+
+def fetch_scorecard(match_id: str, include_bbb: bool = False) -> Dict[str, Any]:
+    params: Dict[str, Any] = {"apikey": CRICAPI_KEY, "id": match_id}
+    if include_bbb:
+        params["bbb"] = "true"
     res = requests.get(
         f"{CRICAPI_BASE_URL}/match_scorecard",
-        params={"apikey": CRICAPI_KEY, "id": match_id},
+        params=params,
         timeout=30,
     )
     res.raise_for_status()
     payload = res.json()
     if payload.get("status") != "success":
         raise RuntimeError(f"CricAPI match_scorecard error: {payload}")
-    return payload.get("data", {}) or {}
+    data = dict(payload.get("data") or {})
+    if include_bbb:
+        bbb, err = fetch_match_bbb(match_id)
+        if bbb is not None:
+            data["ballByBall"] = bbb
+        elif err:
+            data["ballByBallError"] = err
+    return data
 
 
 def today_ist_date_str(now_utc: datetime) -> str:
@@ -122,11 +151,17 @@ def main() -> None:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--date", help="IST date (YYYY-MM-DD). Defaults to today (IST).", default=None)
+    parser.add_argument(
+        "--bbb",
+        action="store_true",
+        help="Request BBB: pass bbb=true on match_scorecard and merge GET /match_bbb into scorecard as ballByBall (or ballByBallError).",
+    )
     args = parser.parse_args()
     if args.date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(args.date).strip()):
         raise RuntimeError(f"Invalid --date value (expected YYYY-MM-DD): {args.date!r}")
 
     sleep_s = float(os.getenv("CRICAPI_SCORECARD_SLEEP_SECONDS", "1.0"))
+    include_bbb = bool(args.bbb) or os.getenv("CRICAPI_INCLUDE_BBB", "").strip().lower() in ("1", "true", "yes")
 
     target_date = str(args.date).strip() if args.date else None
     targets = list_targets(target_date)
@@ -140,8 +175,8 @@ def main() -> None:
         match_id = f.get("api_match_id")
         if not fixture_id or not match_id:
             continue
-        print(f"[{idx}/{len(targets)}] Fetching scorecard {match_id} …")
-        sc = fetch_scorecard(match_id)
+        print(f"[{idx}/{len(targets)}] Fetching scorecard {match_id} …" + (" (with BBB)" if include_bbb else ""))
+        sc = fetch_scorecard(match_id, include_bbb=include_bbb)
         update_fixture_scorecard_and_mark_synced(fixture_id, str(match_id), sc)
         print(f"  ✅ stored scorecard + set points_synced=true for fixture_id={fixture_id}")
         updated.append(

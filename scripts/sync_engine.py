@@ -10,6 +10,8 @@ from datetime import datetime, timedelta, timezone
 # Load environment variables
 load_dotenv(os.path.join(os.path.dirname(__file__), '../.env'))
 
+from scorecard_innings_align import align_bowling_opposition_innings
+
 SUPABASE_URL = os.getenv("NEXT_PUBLIC_SUPABASE_URL")
 SUPABASE_KEY = os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY")
 SB_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or SUPABASE_KEY
@@ -315,10 +317,13 @@ async def scrape_scorecard(page, match_id, slug):
             const title = document.querySelector('h1.ds-text-title-xs')?.innerText || '';
             return { innings, status, title };
         }""")
-        
+
+        raw_innings = data.get("innings") or []
+        aligned = align_bowling_opposition_innings(raw_innings)
+
         return {
-            "match_info": { "title": data.get('title', ''), "status": data.get('status', '') },
-            "innings": data.get('innings', [])
+            "match_info": {"title": data.get("title", ""), "status": data.get("status", "")},
+            "innings": aligned,
         }
         
     except Exception as e:

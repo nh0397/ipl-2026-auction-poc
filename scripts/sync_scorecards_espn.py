@@ -6,7 +6,7 @@ import os
 import requests
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from playwright.async_api import async_playwright, Page, Locator
 from dotenv import load_dotenv
 
@@ -14,6 +14,13 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), "../.env"))
 
 import argparse
+
+from scorecard_innings_align import align_bowling_opposition_innings, squad_bowling_from_rows
+from ipl_team_registry import (
+    first_batting_team_from_toss,
+    ipl_short_for_label,
+    same_franchise,
+)
 
 try:
     from playwright_stealth import stealth  # type: ignore
@@ -188,22 +195,250 @@ def parse_teams_from_title(title: str) -> Dict[str, str]:
     return teams
 
 
+def parse_toss_cell(raw: str) -> Dict[str, str]:
+    """Split ESPN toss cell into winner + decision for match_info."""
+    s = clean(raw)
+    if not s:
+        return {"raw": "", "winner": "", "elected": ""}
+    m = re.match(r"^(.+?),\s*elected to\s+(bat|field)\s+first", s, re.I)
+    if not m:
+        return {"raw": s, "winner": "", "elected": ""}
+    return {"raw": s, "winner": clean(m.group(1)), "elected": m.group(2).lower()}
+
+
+async def scrape_match_context(page: Page) -> Dict[str, Any]:
+    """
+    Match Details toss line + innings banner lines (T: target = chase innings).
+    Used to order innings chronologically when DOM order differs.
+    """
+    script = r"""
+    () => {
+      function tossFromDom() {
+        const spans = Array.from(document.querySelectorAll("span.ds-text-overline-2"));
+        for (const s of spans) {
+          const label = (s.textContent || "").trim();
+          if (!/^Toss$/i.test(label)) continue;
+          let p = s.parentElement;
+          for (let depth = 0; depth < 6 && p; depth++) {
+            const row = p.parentElement;
+            if (row) {
+              const cand = row.querySelector(".ds-text-link-3");
+              if (cand) {
+                const txt = (cand.textContent || "").replace(/\s+/g, " ").trim();
+                if (/elected to (?:bat|field) first/i.test(txt)) return txt;
+              }
+            }
+            const sib = p.nextElementSibling;
+            if (sib) {
+              const inner = sib.querySelector(".ds-text-link-3") || sib;
+              const txt = (inner.textContent || "").replace(/\s+/g, " ").trim();
+              if (/elected to (?:bat|field) first/i.test(txt)) return txt;
+            }
+            p = p.parentElement;
+          }
+        }
+        const body = document.body.innerText || "";
+        const m = body.match(
+          /Toss\s*\n+\s*([^\n]+?elected to (?:bat|field) first[^\n]*)/i
+        );
+        return m ? m[1].replace(/\s+/g, " ").trim() : "";
+      }
+
+      const tossRaw = tossFromDom();
+
+      const banners = [];
+      const blocks = Array.from(
+        document.querySelectorAll(".ds-bg-color-primary-bg.ds-p-3")
+      );
+      for (const div of blocks) {
+        const teamEl = div.querySelector(".ds-text-title-1");
+        if (!teamEl) continue;
+        const team = (teamEl.textContent || "").replace(/\s+/g, " ").trim();
+        if (!team) continue;
+        const t = (div.innerText || "").replace(/\s+/g, " ").trim();
+        const isChase = /\(\s*T\s*:/i.test(t);
+        banners.push({ team, banner: t, isChase });
+      }
+
+      return { tossRaw, inningsBanners: banners };
+    }
+    """
+    try:
+        raw = await page.evaluate(script)
+    except Exception as e:
+        log(f"scrape_match_context evaluate failed: {e}")
+        raw = {"tossRaw": "", "inningsBanners": []}
+
+    toss_raw = clean(str(raw.get("tossRaw") or ""))
+    banners = raw.get("inningsBanners") or []
+    norm_banners: List[Dict[str, Any]] = []
+    for b in banners:
+        if not isinstance(b, dict):
+            continue
+        norm_banners.append(
+            {
+                "team": clean(str(b.get("team") or "")),
+                "banner": clean(str(b.get("banner") or "")),
+                "is_chase": bool(b.get("isChase")),
+            }
+        )
+
+    if toss_raw:
+        log(f"Match context: toss={toss_raw!r}")
+    if norm_banners:
+        log(
+            "Match context: innings banners="
+            + json.dumps(norm_banners, ensure_ascii=False)
+        )
+
+    return {"toss_raw": toss_raw, "innings_banners": norm_banners}
+
+
+def reorder_innings_chronological(
+    innings: List[Dict[str, Any]],
+    teams: Dict[str, str],
+    match_ctx: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    if len(innings) != 2:
+        return innings
+
+    home, away = teams.get("home") or "", teams.get("away") or ""
+    first_from_toss: Optional[str] = None
+    if match_ctx.get("toss_raw"):
+        first_from_toss = first_batting_team_from_toss(match_ctx["toss_raw"], home, away)
+
+    b0 = innings[0].get("batting_team") or innings[0].get("team") or ""
+    b1 = innings[1].get("batting_team") or innings[1].get("team") or ""
+
+    need_swap = False
+
+    if first_from_toss:
+        m0 = same_franchise(b0, first_from_toss)
+        m1 = same_franchise(b1, first_from_toss)
+        if m1 and not m0:
+            need_swap = True
+        elif m0 and not m1:
+            need_swap = False
+        elif m0 and m1:
+            log("Innings reorder: toss matched both sides ambiguously; skipping toss-based swap")
+    else:
+        banners: List[Dict[str, Any]] = match_ctx.get("innings_banners") or []
+        if len(banners) >= 2:
+            c0, c1 = banners[0].get("is_chase"), banners[1].get("is_chase")
+            if c0 is True and c1 is False:
+                need_swap = True
+                log("Innings reorder: banner (T:) indicates DOM chase-first; swapping")
+
+    if need_swap:
+        log("Reordering innings to chronological batting order")
+        return [innings[1], innings[0]]
+    return innings
+
+
+def is_plausible_match_result(text: str) -> bool:
+    """
+    Reject sidebar/SEO/script noise. The old full-body regex used [^\\n.]+ which could
+    capture megabytes from a single minified line before the first period.
+    """
+    t = clean(text)
+    if len(t) < 12 or len(t) > 280:
+        return False
+    tl = t.lower()
+    noise = (
+        "elected to",
+        "won the toss",
+        "privacy policy",
+        "cookie",
+        "subscribe",
+        "sign in",
+        "terms of use",
+        "javascript",
+        "function(",
+        "=>",
+        "{",
+    )
+    if any(n in tl for n in noise):
+        return False
+    if re.search(r"\bmatch\s+(tied|drawn|abandoned|called off)\b", tl):
+        return True
+    if re.match(r"no result\b", tl):
+        return True
+    if not re.search(r"\bwon\s+by\b", tl):
+        return False
+    idx = tl.find("won by")
+    tail = tl[idx + 6 : idx + 160]
+    if re.search(r"\d", tail):
+        return True
+    if re.search(r"boundary|dls|super over|eliminator|virtue|higher net", tail):
+        return True
+    return False
+
+
+def first_plausible_result_line(text: str) -> str:
+    for line in (text or "").split("\n"):
+        line = clean(line)
+        if len(line) > 280:
+            continue
+        if is_plausible_match_result(line):
+            return line
+    return ""
+
+
 async def get_result(page: Page) -> str:
     log("Extracting match result")
 
-    body = await safe_text(page.locator("body"))
-    patterns = [
-        r"([A-Za-z .&'()-]+ won by [^\n.]+)",
-        r"(Match (?:tied|drawn|abandoned|called off)[^\n.]*)",
-        r"(No result[^\n.]*)",
-    ]
+    js = r"""
+    () => {
+      const norm = (s) => (s || "").replace(/\s+/g, " ").trim();
+      const selectors = [
+        "p.ds-text-tight-m.ds-font-bold.ds-text-typo",
+        "p.ds-text-tight-s.ds-font-bold.ds-text-typo",
+        "p.ds-font-bold.ds-text-typo",
+        "h2.ds-text-title-xs",
+      ];
+      const out = [];
+      const seen = new Set();
+      for (const sel of selectors) {
+        document.querySelectorAll(sel).forEach((el) => {
+          const t = norm(el.textContent);
+          if (t.length < 12 || t.length > 280) return;
+          if (seen.has(t)) return;
+          seen.add(t);
+          out.push(t);
+        });
+      }
+      return out;
+    }
+    """
+    candidates: List[str] = []
+    try:
+        raw = await page.evaluate(js)
+        if isinstance(raw, list):
+            candidates = [str(x) for x in raw if x]
+    except Exception as e:
+        log(f"get_result DOM evaluate failed: {e}")
 
-    for pat in patterns:
-        m = re.search(pat, body, flags=re.I)
-        if m:
-            result = clean(m.group(1))
-            log(f"Result found: {result}")
-            return result
+    for c in candidates:
+        if is_plausible_match_result(c):
+            r = clean(c)
+            log(f"Result from score header: {r!r}")
+            return r
+
+    try:
+        main = page.locator("main").first
+        if await main.count() > 0:
+            hit = first_plausible_result_line(await safe_text(main))
+            if hit:
+                log(f"Result from <main> line scan: {hit!r}")
+                return hit
+    except Exception:
+        pass
+
+    body = await safe_text(page.locator("body"))
+    hit = first_plausible_result_line(body)
+    if hit:
+        log(f"Result from body line scan: {hit!r}")
+        return hit
 
     log("Result not found")
     return ""
@@ -564,6 +799,143 @@ def clean_name(name: str) -> str:
     return n.strip()
 
 
+def norm_player_match(name: str) -> str:
+    """Lowercase single-spaced key for matching to public.players.player_name."""
+    return re.sub(r"\s+", " ", clean_name(name).lower()).strip()
+
+
+def fetch_players_team_catalog() -> Dict[str, Any]:
+    """
+    Load player_name -> IPL franchise short from public.players.team.
+    Used to label team_a / team_b and innings instead of unreliable ESPN strings.
+    """
+    out: Dict[str, Any] = {"by_norm": {}, "players": []}
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        log("fetch_players_team_catalog: missing Supabase env; skipping DB team labels")
+        return out
+    url = f"{SUPABASE_URL}/rest/v1/players?select=player_name,team&limit=8000"
+    try:
+        res = requests.get(url, headers=HEADERS, timeout=45)
+        res.raise_for_status()
+        rows = res.json()
+    except Exception as e:
+        log(f"fetch_players_team_catalog failed: {e}")
+        return out
+    if not isinstance(rows, list):
+        return out
+    by_norm: Dict[str, str] = {}
+    players: List[Dict[str, str]] = []
+    for r in rows:
+        pn = (r.get("player_name") or "").strip()
+        tm = (r.get("team") or "").strip()
+        if not pn or not tm:
+            continue
+        nk = norm_player_match(pn)
+        by_norm[nk] = tm
+        players.append({"player_name": pn, "norm": nk, "team": tm})
+    out["by_norm"] = by_norm
+    out["players"] = players
+    log(f"Loaded {len(players)} players for franchise matching")
+    return out
+
+
+def resolve_franchise_for_scraped_name(scraped: str, catalog: Dict[str, Any]) -> str:
+    """Map a scorecard name to players.team (short). Empty if unknown."""
+    by_norm = catalog.get("by_norm") or {}
+    plist: List[Dict[str, str]] = catalog.get("players") or []
+    nk = norm_player_match(scraped)
+    if not nk:
+        return ""
+    if nk in by_norm:
+        return by_norm[nk]
+    hits: List[str] = []
+    if len(nk) >= 8:
+        for p in plist:
+            pn = p["norm"]
+            if nk in pn or pn in nk:
+                hits.append(p["team"])
+        if len(set(hits)) == 1 and hits:
+            return hits[0]
+    parts = nk.split()
+    if not parts:
+        return ""
+    last = parts[-1]
+    if len(last) < 3:
+        return ""
+    lhits = [
+        p["team"]
+        for p in plist
+        if p["norm"].split() and p["norm"].split()[-1] == last
+    ]
+    if len(set(lhits)) == 1 and lhits:
+        return lhits[0]
+    return ""
+
+
+def majority_franchise_for_side(
+    names: List[str], catalog: Dict[str, Any]
+) -> Tuple[str, Dict[str, int]]:
+    """Pick the IPL short with the most resolved players; require a strict winner."""
+    votes: Dict[str, int] = {}
+    for n in names:
+        f = resolve_franchise_for_scraped_name(n, catalog)
+        if f:
+            votes[f] = votes.get(f, 0) + 1
+    if not votes:
+        return "", votes
+    ranked = sorted(votes.items(), key=lambda x: (-x[1], x[0]))
+    best_n, best_c = ranked[0][0], ranked[0][1]
+    if len(ranked) > 1 and ranked[1][1] == best_c:
+        return "", votes
+    if best_c < 2:
+        return "", votes
+    return best_n, votes
+
+
+def apply_db_franchise_labels(
+    innings: List[Dict[str, Any]],
+    unique_a: List[str],
+    unique_b: List[str],
+    scraped_a: str,
+    scraped_b: str,
+    catalog: Optional[Dict[str, Any]],
+) -> Tuple[str, str, Dict[str, Any]]:
+    """
+    Override team labels using majority of players.team in our DB when both sides
+    resolve to distinct franchises.
+    """
+    meta: Dict[str, Any] = {"from_db": False}
+    if not catalog or not catalog.get("players"):
+        return scraped_a, scraped_b, meta
+
+    short_a, votes_a = majority_franchise_for_side(unique_a, catalog)
+    short_b, votes_b = majority_franchise_for_side(unique_b, catalog)
+    meta["votes_a"] = votes_a
+    meta["votes_b"] = votes_b
+    meta["short_a"] = short_a
+    meta["short_b"] = short_b
+
+    if not short_a or not short_b or short_a == short_b:
+        log(
+            f"DB franchise labels skipped or ambiguous: short_a={short_a!r} short_b={short_b!r}"
+        )
+        return scraped_a, scraped_b, meta
+
+    meta["from_db"] = True
+    log(f"DB franchise labels: {short_a} vs {short_b} (scraped was {scraped_a!r} vs {scraped_b!r})")
+
+    if len(innings) >= 1:
+        innings[0]["batting_team"] = short_a
+        innings[0]["team"] = short_a
+        innings[0]["bowling_team"] = short_b
+    if len(innings) >= 2:
+        innings[1]["batting_team"] = short_b
+        innings[1]["team"] = short_b
+        innings[1]["bowling_team"] = short_a
+
+    return short_a, short_b, meta
+
+
 def print_scraped_innings_block(
     label: str,
     batting_team: str,
@@ -582,10 +954,11 @@ def print_scraped_innings_block(
     print(flush=True)
 
 
-async def scrape(page: Page) -> Dict[str, Any]:
+async def scrape(page: Page, player_catalog: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     title = await get_title(page)
     result = await get_result(page)
     teams = parse_teams_from_title(title)
+    match_ctx = await scrape_match_context(page)
 
     candidates = await inspect_tables(page)
     chosen = choose_innings_tables(candidates)
@@ -593,10 +966,7 @@ async def scrape(page: Page) -> Dict[str, Any]:
     innings: List[Dict[str, Any]] = []
 
     # First batting side = "Team A", second batting side = "Team B" (by innings order).
-    # Innings 1: batting+DNB → A, bowling → B. Innings 2: batting+DNB → B, bowling → A.
-    team_a_players: List[str] = []
-    team_b_players: List[str] = []
-
+    # After the loop we align bowling vs batting via scorecard_innings_align (swap if dismissals don't match).
     for idx in range(0, len(chosen), 2):
         if idx + 1 >= len(chosen):
             break
@@ -631,32 +1001,6 @@ async def scrape(page: Page) -> Dict[str, Any]:
                 bowling_data,
             )
 
-        # Batting table = batting_team; bowling table = opposition. Do not merge into one "squad".
-        squad_batting = list(
-            dict.fromkeys(
-                n
-                for n in (
-                    [clean_name(b["player"]) for b in batting_data["batting"]]
-                    + [clean_name(p) for p in batting_data["yet_to_bat"]]
-                )
-                if n and n not in ("BATTING", "BOWLING")
-            )
-        )
-        squad_bowling = list(
-            dict.fromkeys(
-                n
-                for n in ([clean_name(bw["bowler"]) for bw in bowling_data])
-                if n and n not in ("BATTING", "BOWLING")
-            )
-        )
-
-        if innings_no == 1:
-            team_a_players.extend(squad_batting)
-            team_b_players.extend(squad_bowling)
-        elif innings_no == 2:
-            team_b_players.extend(squad_batting)
-            team_a_players.extend(squad_bowling)
-
         innings.append(
             {
                 "team": batting_team,
@@ -668,10 +1012,42 @@ async def scrape(page: Page) -> Dict[str, Any]:
                 "total": batting_data["total"],
                 "fall_of_wickets": batting_data["fall_of_wickets"],
                 "bowling": bowling_data,
-                "squad_batting": squad_batting,
-                "squad_bowling": squad_bowling,
             }
         )
+
+    def _refresh_bowling_team_after_swap(inn: Dict[str, Any]) -> None:
+        inn["bowling_team"] = infer_opposition_team(inn.get("batting_team") or inn.get("team") or "", teams)
+
+    innings = align_bowling_opposition_innings(
+        innings,
+        on_swapped_refresh_bowling_team=_refresh_bowling_team_after_swap,
+        log_fn=log,
+    )
+
+    innings = reorder_innings_chronological(innings, teams, match_ctx)
+
+    team_a_players = []
+    team_b_players = []
+    for innings_no, inn in enumerate(innings, start=1):
+        squad_batting = list(
+            dict.fromkeys(
+                n
+                for n in (
+                    [clean_name(b["player"]) for b in inn.get("batting", [])]
+                    + [clean_name(p) for p in inn.get("did_not_bat", [])]
+                )
+                if n and n not in ("BATTING", "BOWLING")
+            )
+        )
+        squad_bowling = squad_bowling_from_rows(inn.get("bowling") or [])
+        inn["squad_batting"] = squad_batting
+        inn["squad_bowling"] = squad_bowling
+        if innings_no == 1:
+            team_a_players.extend(squad_batting)
+            team_b_players.extend(squad_bowling)
+        elif innings_no == 2:
+            team_b_players.extend(squad_batting)
+            team_a_players.extend(squad_bowling)
 
     cleaned_title = title
     if "," in title and " vs " in title:
@@ -682,8 +1058,22 @@ async def scrape(page: Page) -> Dict[str, Any]:
     team_a_name = innings[0]["batting_team"] if len(innings) >= 1 else ""
     team_b_name = innings[1]["batting_team"] if len(innings) >= 2 else ""
 
+    toss_meta = parse_toss_cell(match_ctx.get("toss_raw") or "")
+
     unique_a = sorted({n for n in team_a_players if n})
     unique_b = sorted({n for n in team_b_players if n})
+
+    team_a_name, team_b_name, db_team_meta = apply_db_franchise_labels(
+        innings,
+        unique_a,
+        unique_b,
+        team_a_name,
+        team_b_name,
+        player_catalog,
+    )
+
+    first_bat_name = team_a_name
+    first_bat_short = ipl_short_for_label(team_a_name) if team_a_name else ""
 
     log(f"[team_a] name={team_a_name!r} unique count={len(unique_a)}")
     for n in unique_a:
@@ -705,12 +1095,20 @@ async def scrape(page: Page) -> Dict[str, Any]:
             "title": cleaned_title,
             "teams": teams,
             "result": result,
+            "status": result,
+            "toss": toss_meta,
+            "first_innings_batting_team": first_bat_name,
+            "first_innings_batting_short": first_bat_short,
+            "innings_banners": match_ctx.get("innings_banners") or [],
+            "team_franchises_db": db_team_meta,
         },
         "innings": innings,
     }
 
 
-async def run(url: str) -> Optional[Dict[str, Any]]:
+async def run(
+    url: str, player_catalog: Optional[Dict[str, Any]] = None
+) -> Optional[Dict[str, Any]]:
     log("Launching Firefox")
     async with async_playwright() as p:
         headless_env = (os.getenv("ESPN_HEADLESS") or "").strip().lower()
@@ -749,7 +1147,7 @@ async def run(url: str) -> Optional[Dict[str, Any]]:
 
             await wait_for_scorecard_signals(page)
 
-            data = await scrape(page)
+            data = await scrape(page, player_catalog)
 
             Path(OUTFILE).write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
             log(f"JSON written to {OUTFILE}")
@@ -828,6 +1226,8 @@ async def main():
         log(f"No matches found for {target_date}. Exiting.")
         return
 
+    player_catalog = fetch_players_team_catalog()
+
     now_utc = datetime.now(timezone.utc)
     updated: List[Dict[str, Any]] = []
     for f in fixtures:
@@ -852,11 +1252,12 @@ async def main():
         log(f"Identified Match: {f.get('title')}")
         log(f"Generated URL: {dynamic_url}")
 
-        data = await run(dynamic_url)
+        data = await run(dynamic_url, player_catalog)
         if not data:
             continue
 
-        status = data.get("match_info", {}).get("result", "") or (f.get("status") or "")
+        mi = data.get("match_info") or {}
+        status = clean(str(mi.get("result") or mi.get("status") or f.get("status") or ""))
         update_fixture_scorecard_and_mark_synced(f["id"], data, status)
         log("Fixture scorecard updated in Supabase (scorecard + points_synced=true).")
         updated.append(

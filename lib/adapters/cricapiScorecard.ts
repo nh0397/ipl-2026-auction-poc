@@ -7,6 +7,18 @@ function parseTeamFromInningLabel(label: string | null | undefined): string {
   return s.replace(/\s+Inning\s+\d+$/i, "").replace(/\s+Inning$/i, "").trim() || s;
 }
 
+function opponentTeamName(battingTeam: string, teams: unknown): string {
+  const list = Array.isArray(teams) ? (teams as string[]).map((t) => String(t || "").trim()).filter(Boolean) : [];
+  if (list.length !== 2) return "";
+  const b = battingTeam.trim().toLowerCase();
+  const [a, c] = list;
+  const al = a.toLowerCase();
+  const cl = c.toLowerCase();
+  if (b === al || al.includes(b) || b.includes(al.slice(0, Math.min(10, al.length)))) return c;
+  if (b === cl || cl.includes(b) || b.includes(cl.slice(0, Math.min(10, cl.length)))) return a;
+  return "";
+}
+
 /**
  * Convert CricAPI `match_scorecard` payload to the format expected by `ScorecardViewer`.
  *
@@ -20,8 +32,11 @@ export function adaptCricApiToScorecardViewer(scorecard: CricApiScorecard) {
     return scorecard;
   }
 
+  const matchTeams = scorecard?.teams;
+
   const innings = ((scorecard?.scorecard || []) as any[]).map((inn) => {
     const team = parseTeamFromInningLabel(inn?.inning);
+    const bowling_team = opponentTeamName(team, matchTeams);
 
     const batting = ((inn?.batting || []) as any[]).map((b) => ({
       player: b?.player || b?.batsman?.name || "",
@@ -61,6 +76,8 @@ export function adaptCricApiToScorecardViewer(scorecard: CricApiScorecard) {
 
     return {
       team,
+      batting_team: team,
+      bowling_team,
       batting,
       bowling,
       extras: { text: extrasText, total: extrasTotal },
