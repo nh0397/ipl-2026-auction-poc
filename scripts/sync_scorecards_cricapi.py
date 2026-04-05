@@ -1,3 +1,10 @@
+"""
+CricAPI scorecard → Supabase only (no Cricsheet dots).
+
+For the full day flow (CricAPI + Cricsheet bowler dots in one place), use:
+  scripts/run_ipl_day.py
+"""
+
 import os
 import time
 import requests

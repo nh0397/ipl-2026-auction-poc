@@ -43,14 +43,14 @@ jobs:
         run: |
           python scripts/populate_fixtures_cricapi.py
 
-      - name: Sync scorecards into fixtures_cricapi
+      - name: Sync scorecards into fixtures_cricapi (CricAPI + fresh Cricsheet zip)
         id: sync_scorecards
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_ACCESS_TOKEN }}
           NEXT_PUBLIC_CRICAPI_KEY: ${{ secrets.NEXT_PUBLIC_CRICAPI_KEY }}
         run: |
-          python scripts/sync_scorecards_cricapi.py \
+          python scripts/run_ipl_day.py \
             ${{ github.event.inputs.date_ist != '' && format('--date {0}', github.event.inputs.date_ist) || '' }}
 
       - name: Email participants (points updated)

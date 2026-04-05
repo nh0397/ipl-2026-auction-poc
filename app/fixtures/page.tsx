@@ -1,17 +1,38 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import { supabase } from "@/lib/supabase";
-import { Calendar, MapPin, Clock, ChevronDown, Trophy, Loader2, XCircle, User, Zap, ChevronRight, FileText } from "lucide-react";
+import {
+  Calendar,
+  MapPin,
+  Clock,
+  Trophy,
+  Loader2,
+  XCircle,
+  Zap,
+  Radio,
+  Database,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import ScorecardViewer from "@/components/scoreboard/ScorecardViewer";
 import { adaptCricApiToScorecardViewer } from "@/lib/adapters/cricapiScorecard";
+import { aggregateFantasyRowsFromCricApiMatchData } from "@/lib/cricapiFantasyAggregate";
+import {
+  computeEspnPjBreakdownRows,
+  type PlayerCatalogRow,
+} from "@/lib/espnPjBreakdownFromScorecard";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Badge } from "@/components/ui/badge";
+import type { PjRulesBreakdownLine } from "@/lib/scoring";
 
 interface Fixture {
   id: string;
   api_match_id: string;
-  match_no?: number;
+  /** Joins to `public.fixtures` (ESPN scrape) for scorecard + PJ breakdown. */
+  match_no?: number | null;
   title: string;
+  match_name?: string | null;
   venue: string | null;
   match_date: string;
   date_time_gmt: string;
@@ -70,31 +91,154 @@ function deriveMatchNo(f: any): number | null {
   return null;
 }
 
+/** Same as Scoreboard: only stored `match_no` links to `public.fixtures`. */
+function espnMatchNo(f: { match_no?: number | null }): number | null {
+  const n = Number(f?.match_no);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function FantasyBreakdownBlock({ title, lines }: { title: string; lines: PjRulesBreakdownLine[] }) {
+  if (!lines?.length) return null;
+  return (
+    <div className="space-y-2 min-w-0">
+      <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{title}</div>
+      <ul className="space-y-2 text-sm">
+        {lines.map((line, i) => (
+          <li
+            key={i}
+            className="flex flex-col gap-1 border-b border-slate-100 pb-2 last:border-0 sm:flex-row sm:items-start sm:justify-between sm:gap-3"
+          >
+            <span className="min-w-0 flex-1 text-slate-800 break-words leading-snug">
+              {line.label}
+              {line.detail ? (
+                <span className="text-slate-400 text-xs block sm:inline sm:ml-1">({line.detail})</span>
+              ) : null}
+            </span>
+            <span
+              className={cn(
+                "tabular-nums font-medium shrink-0 sm:text-right",
+                line.pts < 0 ? "text-rose-600" : "text-slate-900"
+              )}
+            >
+              {line.pts > 0 ? "+" : ""}
+              {line.pts}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export default function FixturesPage() {
   const [fixtures, setFixtures] = useState<Fixture[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<"all" | "upcoming" | "completed">("all");
-  const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
-  const [scorecardData, setScorecardData] = useState<any>(null);
-  const [scorecardLoading, setScorecardLoading] = useState(false);
-  
+  /** Modal: which data source + which CricAPI fixture row. */
+  const [modal, setModal] = useState<{ source: "espn" | "cricapi"; fixture: Fixture } | null>(null);
+  const [modalTab, setModalTab] = useState<"scorecard" | "fantasy">("scorecard");
+  const [espnScoreByMatchNo, setEspnScoreByMatchNo] = useState<Record<number, any | null>>({});
+  const [espnLoading, setEspnLoading] = useState<Record<number, boolean>>({});
+  /** `public.fixtures.points_synced` keyed by ESPN `match_no`. */
+  const [espnPointsSyncedByMatchNo, setEspnPointsSyncedByMatchNo] = useState<Record<number, boolean>>({});
+  const [playersCatalog, setPlayersCatalog] = useState<PlayerCatalogRow[]>([]);
+  const [modalFixtureFresh, setModalFixtureFresh] = useState<Fixture | null>(null);
+  const [modalRefreshing, setModalRefreshing] = useState(false);
+  const [expandedFantasyId, setExpandedFantasyId] = useState<string | null>(null);
+
   const today = useMemo(() => getTodayIST(), []);
 
   useEffect(() => {
-    const fetchFixtures = async () => {
-      // Old source (ESPN-driven): .from("fixtures")
-      const { data, error } = await supabase
-        .from("fixtures_cricapi")
-        .select("*")
-        // `match_no` might not exist yet; date_time_gmt is always present in CricAPI payload.
-        .order("date_time_gmt", { ascending: true });
-
-      if (error) console.error("Error fetching fixtures:", error);
-      if (data) setFixtures(data);
+    const load = async () => {
+      const [cricRes, espnSyncRes, catRes] = await Promise.all([
+        supabase.from("fixtures_cricapi").select("*").order("date_time_gmt", { ascending: true }),
+        supabase.from("fixtures").select("match_no,points_synced"),
+        supabase
+          .from("players")
+          .select("player_name, team, type, role")
+          .eq("auction_status", "sold")
+          .order("player_name", { ascending: true }),
+      ]);
+      if (cricRes.error) console.error("Error fetching fixtures:", cricRes.error);
+      if (cricRes.data) setFixtures(cricRes.data as Fixture[]);
+      if (espnSyncRes.data) {
+        const m: Record<number, boolean> = {};
+        for (const row of espnSyncRes.data as { match_no?: number | null; points_synced?: boolean | null }[]) {
+          const n = Number(row.match_no);
+          if (Number.isFinite(n)) m[n] = !!row.points_synced;
+        }
+        setEspnPointsSyncedByMatchNo(m);
+      }
+      if (catRes.data) setPlayersCatalog(catRes.data as PlayerCatalogRow[]);
       setLoading(false);
     };
-    fetchFixtures();
+    load();
   }, []);
+
+  useEffect(() => {
+    if (!modal) {
+      setModalFixtureFresh(null);
+      return;
+    }
+    let cancelled = false;
+    if (modal.source === "cricapi") {
+      setModalRefreshing(true);
+      (async () => {
+        const { data, error } = await supabase.from("fixtures_cricapi").select("*").eq("id", modal.fixture.id).maybeSingle();
+        if (cancelled) return;
+        if (!error && data) {
+          setModalFixtureFresh(data as Fixture);
+          setFixtures((prev) => prev.map((f) => (f.id === modal.fixture.id ? { ...f, ...data } : f)));
+        }
+        setModalRefreshing(false);
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }
+    if (modal.source === "espn") {
+      const mn = espnMatchNo(modal.fixture);
+      if (mn == null) return;
+      setEspnLoading((p) => ({ ...p, [mn]: true }));
+      (async () => {
+        const { data, error } = await supabase.from("fixtures").select("scorecard").eq("match_no", mn).maybeSingle();
+        if (cancelled) return;
+        if (error) setEspnScoreByMatchNo((p) => ({ ...p, [mn]: null }));
+        else setEspnScoreByMatchNo((p) => ({ ...p, [mn]: data?.scorecard ?? null }));
+        setEspnLoading((p) => ({ ...p, [mn]: false }));
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }
+  }, [modal]);
+
+  const closeModal = () => {
+    setModal(null);
+    setModalTab("scorecard");
+    setExpandedFantasyId(null);
+  };
+
+  const cricapiModalData = modal?.source === "cricapi" ? modalFixtureFresh ?? modal.fixture : null;
+  const cricapiViewer = useMemo(() => {
+    const raw = cricapiModalData?.scorecard;
+    if (!raw) return null;
+    return adaptCricApiToScorecardViewer(raw);
+  }, [cricapiModalData?.scorecard]);
+
+  const cricapiFantasyRows = useMemo(() => {
+    const raw = cricapiModalData?.scorecard as Record<string, unknown> | null | undefined;
+    if (!raw) return [];
+    return aggregateFantasyRowsFromCricApiMatchData(raw);
+  }, [cricapiModalData?.scorecard]);
+
+  const espnModalMn = modal?.source === "espn" ? espnMatchNo(modal.fixture) : null;
+  const espnModalScore = espnModalMn != null ? espnScoreByMatchNo[espnModalMn] : undefined;
+  const espnModalLoading = espnModalMn != null ? !!espnLoading[espnModalMn] : false;
+  const espnFantasyRows = useMemo(() => {
+    if (modal?.source !== "espn" || !espnModalScore?.innings?.length || !modal) return [];
+    return computeEspnPjBreakdownRows(espnModalScore, modal.fixture, playersCatalog);
+  }, [modal, espnModalScore, playersCatalog]);
 
   const filtered = useMemo(() => {
     if (filter === "upcoming") return fixtures.filter(f => f.match_date >= today);
@@ -173,14 +317,14 @@ export default function FixturesPage() {
 
           {/* Progress bar */}
           <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden mb-4">
-            <div 
+            <div
               className="h-full bg-gradient-to-r from-blue-500 to-blue-600 rounded-full transition-all duration-500"
-              style={{ width: `${(completedCount / totalMatches) * 100}%` }}
+              style={{ width: `${totalMatches > 0 ? (completedCount / totalMatches) * 100 : 0}%` }}
             />
           </div>
 
-          {/* Filter tabs */}
-          <div className="flex gap-2">
+          {/* Filter tabs — scroll on narrow screens */}
+          <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1 sm:overflow-visible sm:pb-0 sm:mx-0 sm:px-0">
             {([
               { key: "all", label: "All Matches", count: totalMatches },
               { key: "upcoming", label: "Upcoming", count: totalMatches - completedCount },
@@ -188,9 +332,10 @@ export default function FixturesPage() {
             ] as const).map(tab => (
               <button
                 key={tab.key}
+                type="button"
                 onClick={() => setFilter(tab.key)}
                 className={cn(
-                  "px-3 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all",
+                  "shrink-0 touch-manipulation px-3 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all",
                   filter === tab.key
                     ? "bg-slate-900 text-white shadow-lg"
                     : "bg-slate-100 text-slate-500 hover:bg-slate-200"
@@ -221,28 +366,30 @@ export default function FixturesPage() {
               isToday && "bg-blue-50/30 ring-1 ring-blue-100/50 shadow-inner"
             )}>
               {/* Date Divider */}
-              <div className={cn(
-                "flex items-center gap-3 mb-3 px-1",
-              )}>
-                <div className={cn(
-                  "text-[10px] font-black uppercase tracking-widest px-4 py-2 rounded-xl flex items-center gap-2",
-                  isToday 
-                    ? "bg-blue-600 text-white shadow-lg shadow-blue-200" 
-                    : isPast 
-                      ? "bg-slate-200 text-slate-500" 
-                      : "bg-slate-100 text-slate-600"
-                )}>
-                  {isToday && <Zap className="h-3 w-3 fill-current animate-pulse" />}
-                  {isToday ? "Today's Matches" : formatDate(date)}
+              <div className="flex flex-wrap items-center gap-y-2 gap-x-3 mb-3 px-1 min-w-0">
+                <div
+                  className={cn(
+                    "text-[10px] font-black uppercase tracking-widest px-3 sm:px-4 py-2 rounded-xl flex items-center gap-2 max-w-full",
+                    isToday
+                      ? "bg-blue-600 text-white shadow-lg shadow-blue-200"
+                      : isPast
+                        ? "bg-slate-200 text-slate-500"
+                        : "bg-slate-100 text-slate-600"
+                  )}
+                >
+                  {isToday && <Zap className="h-3 w-3 shrink-0 fill-current animate-pulse" />}
+                  <span className="break-words text-left leading-tight">
+                    {isToday ? "Today's Matches" : formatDate(date)}
+                  </span>
                 </div>
                 {isToday && (
-                  <span className="text-[10px] font-black text-blue-600/60 uppercase tracking-tighter">
+                  <span className="text-[10px] font-black text-blue-600/60 uppercase tracking-tighter break-words">
                     {formatDate(date)}
                   </span>
                 )}
-                <div className="flex-1 border-t border-dashed border-slate-200" />
+                <div className="hidden min-[400px]:block flex-1 border-t border-dashed border-slate-200 min-w-[2rem]" />
                 {matches.length > 1 && (
-                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">
                     {matches.length} matches
                   </span>
                 )}
@@ -269,21 +416,21 @@ export default function FixturesPage() {
                     >
                       {/* Live indicator */}
                       {isLive && (
-                        <div className="absolute top-3 right-3 flex items-center gap-1.5 bg-red-500 text-white text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-full animate-pulse">
-                          <div className="h-1.5 w-1.5 bg-white rounded-full" />
-                          LIVE
+                        <div className="absolute top-2 right-2 sm:top-3 sm:right-3 z-[1] flex items-center gap-1.5 bg-red-500 text-white text-[9px] sm:text-[10px] font-black uppercase tracking-wider px-2 py-1 sm:px-2.5 rounded-full animate-pulse max-w-[calc(100%-1rem)]">
+                          <div className="h-1.5 w-1.5 shrink-0 bg-white rounded-full" />
+                          <span className="truncate">LIVE</span>
                         </div>
                       )}
 
                       {/* Completed badge */}
                       {isCompleted && !isLive && (
-                        <div className="absolute top-3 right-3 flex items-center gap-1 text-[10px] font-black text-slate-400 uppercase tracking-wider">
-                          <Trophy className="h-3 w-3" />
-                          Completed
+                        <div className="absolute top-2 right-2 sm:top-3 sm:right-3 z-[1] flex items-start gap-1 text-[9px] sm:text-[10px] font-black text-slate-400 uppercase tracking-wider text-right max-w-[min(11rem,46%)] leading-tight">
+                          <Trophy className="h-3 w-3 shrink-0 mt-0.5" />
+                          <span className="break-words">Completed</span>
                         </div>
                       )}
 
-                      <div className="p-4 sm:p-5">
+                      <div className="p-4 sm:p-5 pt-10 sm:pt-5">
                         {/* Match number */}
                         <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">
                           Match {deriveMatchNo(match) ?? "—"}
@@ -300,22 +447,24 @@ export default function FixturesPage() {
                                 className="h-9 w-9 sm:h-10 sm:w-10 rounded-xl object-contain bg-slate-50 border border-slate-100 p-1 flex-shrink-0"
                               />
                             )}
-                            <div className="min-w-0">
-                              <div className="text-sm sm:text-base font-black uppercase tracking-tight text-slate-900 truncate">
+                            <div className="min-w-0 flex-1">
+                              <div className="text-xs sm:text-sm md:text-base font-black uppercase tracking-tight text-slate-900 leading-snug break-words hyphens-auto">
                                 {cleanShort(match.team1_short) || match.team1_name}
                               </div>
                             </div>
                           </div>
 
                           {/* VS / Score */}
-                          <div className="flex flex-col items-center gap-1 flex-shrink-0 min-w-[60px]">
+                          <div className="flex flex-col items-center gap-1 flex-shrink-0 min-w-[3.25rem] sm:min-w-[60px] px-0.5">
                             {match.scorecard?.livescore && match.scorecard.livescore !== "N/A" ? (
-                              <div className={cn(
-                                "text-sm font-black px-3 py-1.5 rounded-xl whitespace-nowrap shadow-sm border animate-in fade-in zoom-in duration-300",
-                                isLive 
-                                  ? "bg-red-50 text-red-600 border-red-100" 
-                                  : "bg-slate-900 text-white border-slate-800"
-                              )}>
+                              <div
+                                className={cn(
+                                  "max-w-[min(100%,9rem)] text-center text-[11px] sm:text-sm font-black px-2 py-1.5 sm:px-3 rounded-xl shadow-sm border animate-in fade-in zoom-in duration-300 leading-tight break-words",
+                                  isLive
+                                    ? "bg-red-50 text-red-600 border-red-100"
+                                    : "bg-slate-900 text-white border-slate-800"
+                                )}
+                              >
                                 {match.scorecard.livescore}
                               </div>
                             ) : (
@@ -334,8 +483,8 @@ export default function FixturesPage() {
 
                           {/* Team 2 */}
                           <div className="flex items-center gap-2.5 sm:gap-3 flex-1 min-w-0 justify-end text-right">
-                            <div className="min-w-0">
-                              <div className="text-sm sm:text-base font-black uppercase tracking-tight text-slate-900 truncate">
+                            <div className="min-w-0 flex-1">
+                              <div className="text-xs sm:text-sm md:text-base font-black uppercase tracking-tight text-slate-900 leading-snug break-words hyphens-auto text-right">
                                 {cleanShort(match.team2_short) || match.team2_name}
                               </div>
                             </div>
@@ -362,11 +511,11 @@ export default function FixturesPage() {
                         )}
 
                         {/* Meta info */}
-                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[10px] sm:text-xs font-bold text-slate-400">
+                        <div className="flex flex-col sm:flex-row sm:flex-wrap items-start gap-x-4 gap-y-2 text-[10px] sm:text-xs font-bold text-slate-400 min-w-0">
                           {match.date_time_gmt && (
-                            <div className="flex items-center gap-1.5 truncate">
-                              <Clock className="h-3 w-3 flex-shrink-0" />
-                              <span className="truncate">
+                            <div className="flex items-start gap-1.5 min-w-0 max-w-full">
+                              <Clock className="h-3 w-3 shrink-0 mt-0.5" />
+                              <span className="leading-snug break-words">
                                 {formatTime(match.date_time_gmt)} IST
                                 {(() => {
                                   const local = formatLocalTime(match.date_time_gmt);
@@ -376,44 +525,68 @@ export default function FixturesPage() {
                             </div>
                           )}
                           {match.venue && (
-                            <div className="flex items-center gap-1.5 truncate">
-                              <MapPin className="h-3 w-3 flex-shrink-0" />
-                              <span className="truncate">{match.venue.split(",")[0]}</span>
+                            <div className="flex items-start gap-1.5 min-w-0 max-w-full">
+                              <MapPin className="h-3 w-3 shrink-0 mt-0.5" />
+                              <span className="leading-snug break-words">{match.venue.split(",")[0]}</span>
                             </div>
                           )}
                         </div>
 
-                        {/* View Scorecard Button / Pending Status */}
-                        {match.match_ended && match.points_synced ? (
-                          <div className="mt-4 pt-4 border-t border-slate-50">
-                            <button
-                               onClick={() => {
-                                 setSelectedMatchId(match.api_match_id);
-                                 setScorecardLoading(false);
-                                 setScorecardData(adaptCricApiToScorecardViewer(match.scorecard));
-                               }}
-                               className="w-full flex items-center justify-center gap-2 py-3 bg-slate-900 hover:bg-black text-white rounded-xl text-xs font-black uppercase tracking-widest transition-all shadow-md shadow-slate-200 group"
-                            >
-                              <FileText className="h-3.5 w-3.5 text-slate-400 group-hover:text-blue-400 transition-colors" />
-                              View Full Scorecard
-                              <ChevronRight className="h-3.5 w-3.5 ml-1 opacity-50 group-hover:opacity-100 transition-opacity" />
-                            </button>
-                          </div>
-                        ) : match.match_ended && !match.points_synced ? (
-                          <div className="mt-4 pt-4 border-t border-slate-50">
-                            <div className="flex items-center justify-center gap-2 py-3 bg-blue-50/50 rounded-xl text-[10px] font-black uppercase tracking-widest text-blue-600 border border-blue-100/50 italic">
-                               <Loader2 className="h-3 w-3 animate-spin" />
-                               Processing points
-                            </div>
-                          </div>
-                        ) : (isMatchToday || isPast) && (
-                          <div className="mt-4 pt-4 border-t border-slate-50">
-                            <div className="flex items-center justify-center gap-2 py-3 bg-blue-50/50 rounded-xl text-[10px] font-black uppercase tracking-widest text-blue-600 border border-blue-100/50 italic">
-                               <Zap className="h-3 w-3 animate-pulse fill-blue-600" />
-                               Points available 30m after match
-                            </div>
-                          </div>
-                        )}
+                        {/* ESPN + CricAPI (DB-backed) */}
+                        <div className="mt-4 pt-4 border-t border-slate-50 grid grid-cols-2 gap-2 min-w-0">
+                          {(() => {
+                            const mn = espnMatchNo(match);
+                            const espnReady = mn != null && !!espnPointsSyncedByMatchNo[mn];
+                            const cricReady = !!match.points_synced;
+                            return (
+                              <>
+                                <button
+                                  type="button"
+                                  disabled={!espnReady}
+                                  onClick={() => {
+                                    if (!espnReady) return;
+                                    setModalTab("scorecard");
+                                    setExpandedFantasyId(null);
+                                    setModal({ source: "espn", fixture: match });
+                                  }}
+                                  className={cn(
+                                    "touch-manipulation min-h-[48px] flex items-center justify-center gap-1.5 py-3 px-2 rounded-xl text-[10px] sm:text-xs font-black uppercase tracking-wide sm:tracking-widest transition-all border text-center leading-tight",
+                                    espnReady
+                                      ? "bg-white border-slate-200 text-slate-800 active:bg-slate-100 hover:bg-slate-50 shadow-sm"
+                                      : "bg-slate-50 border-slate-100 text-slate-300 cursor-not-allowed"
+                                  )}
+                                >
+                                  <Radio className="h-3.5 w-3.5 shrink-0" />
+                                  <span className="break-words">ESPN</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={!cricReady}
+                                  onClick={() => {
+                                    if (!cricReady) return;
+                                    setModalTab("scorecard");
+                                    setExpandedFantasyId(null);
+                                    setModal({ source: "cricapi", fixture: match });
+                                  }}
+                                  className={cn(
+                                    "touch-manipulation min-h-[48px] flex items-center justify-center gap-1.5 py-3 px-2 rounded-xl text-[10px] sm:text-xs font-black uppercase tracking-wide sm:tracking-widest transition-all border text-center leading-tight",
+                                    cricReady
+                                      ? "bg-slate-900 text-white border-slate-900 active:bg-slate-800 hover:bg-black shadow-md"
+                                      : "bg-slate-50 border-slate-100 text-slate-300 cursor-not-allowed"
+                                  )}
+                                >
+                                  <Database className="h-3.5 w-3.5 shrink-0" />
+                                  <span className="break-words">CricAPI</span>
+                                </button>
+                              </>
+                            );
+                          })()}
+                        </div>
+                        {match.match_ended && !match.points_synced ? (
+                          <p className="mt-2 text-[10px] font-bold text-blue-600 text-center uppercase tracking-wide">
+                            CricAPI sync pending (points_synced)
+                          </p>
+                        ) : null}
                       </div>
                     </div>
                   );
@@ -431,53 +604,246 @@ export default function FixturesPage() {
         )}
       </div>
 
-      {/* Scorecard Modal */}
-      {selectedMatchId && (
-        <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-300">
-          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setSelectedMatchId(null)} />
-          
-          <div className="relative w-full max-w-4xl max-h-[90vh] bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl flex flex-col overflow-hidden animate-in slide-in-from-bottom duration-500">
-            {/* Modal Header */}
-            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-white sticky top-0 z-10">
-              <div className="flex items-center gap-4">
-                <div className="h-10 w-10 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-100">
-                  <Trophy className="h-5 w-5 text-white" />
+      {/* ESPN / CricAPI modal — Scorecard + Fantasy (DB-backed) */}
+      {modal && (
+        <div className="fixed inset-0 z-[100] flex items-stretch sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-300">
+          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={closeModal} />
+
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="fixtures-modal-title"
+            className="relative w-full max-w-4xl h-[100dvh] sm:h-auto sm:max-h-[90vh] bg-white rounded-none sm:rounded-3xl shadow-2xl flex flex-col overflow-hidden animate-in slide-in-from-bottom duration-500 min-h-0"
+          >
+            <div className="px-3 sm:px-6 py-3 sm:py-4 border-b border-slate-100 flex items-start gap-2 sm:gap-4 bg-white shrink-0">
+              <div className="flex items-start gap-2 sm:gap-4 min-w-0 flex-1">
+                <div
+                  className={cn(
+                    "h-9 w-9 sm:h-10 sm:w-10 rounded-xl flex items-center justify-center shadow-lg shrink-0 mt-0.5",
+                    modal.source === "espn" ? "bg-white border border-slate-200" : "bg-blue-600 shadow-blue-100"
+                  )}
+                >
+                  {modal.source === "espn" ? (
+                    <Radio className="h-4 w-4 sm:h-5 sm:w-5 text-slate-800" />
+                  ) : (
+                    <Trophy className="h-4 w-4 sm:h-5 sm:w-5 text-white" />
+                  )}
                 </div>
-                <div>
-                  <h2 className="text-sm sm:text-lg font-black uppercase tracking-tight text-slate-900">
-                    {scorecardData?.match_info?.title || "Full Scorecard"}
+                <div className="min-w-0 flex-1 pr-1">
+                  <h2
+                    id="fixtures-modal-title"
+                    className="text-sm sm:text-lg font-black uppercase tracking-tight text-slate-900 leading-snug break-words"
+                  >
+                    {modal.fixture.title || modal.fixture.match_name || "Match"}
                   </h2>
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                    CricAPI scorecard
+                  <p className="text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase tracking-wide sm:tracking-widest mt-1 leading-relaxed break-words">
+                    {modal.source === "espn" ? "ESPN (fixtures table)" : "CricAPI (fixtures_cricapi)"}
                   </p>
                 </div>
               </div>
-              <button 
-                onClick={() => setSelectedMatchId(null)}
-                className="p-2 hover:bg-slate-100 rounded-full transition-colors group"
+              <button
+                type="button"
+                onClick={closeModal}
+                className="p-2 -mr-1 hover:bg-slate-100 rounded-full transition-colors group shrink-0 touch-manipulation"
+                aria-label="Close"
               >
                 <XCircle className="h-6 w-6 text-slate-300 group-hover:text-slate-600" />
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-4 sm:p-8 space-y-10 no-scrollbar">
-              {scorecardLoading ? (
-                <div className="flex flex-col items-center justify-center py-20 gap-4">
-                   <Loader2 className="h-10 w-10 text-blue-600 animate-spin" />
-                   <p className="text-xs font-black text-slate-400 uppercase tracking-widest animate-pulse">Syncing Stats...</p>
-                </div>
-              ) : scorecardData?.innings ? (
-                <ScorecardViewer scorecard={scorecardData} />
-              ) : null}
-            </div>
-            
-            <div className="p-4 bg-slate-50 border-t border-slate-100 text-center">
-               <button 
-                  onClick={() => setSelectedMatchId(null)}
-                  className="px-8 py-3 bg-white border border-slate-200 text-slate-900 rounded-xl text-xs font-black uppercase tracking-widest shadow-sm"
-               >
-                 Close
-               </button>
+            <Tabs
+              value={modalTab}
+              onValueChange={(v) => setModalTab(v as "scorecard" | "fantasy")}
+              className="flex flex-col flex-1 min-h-0 overflow-hidden"
+            >
+              <div className="px-3 sm:px-6 pt-2 sm:pt-3 pb-2 border-b border-slate-100 bg-slate-50/80 shrink-0">
+                <TabsList className="w-full h-auto min-h-10 flex-wrap sm:flex-nowrap gap-1 p-1">
+                  <TabsTrigger value="scorecard" className="flex-1 min-w-[8rem] text-xs sm:text-sm py-2 touch-manipulation">
+                    Scorecard
+                  </TabsTrigger>
+                  <TabsTrigger value="fantasy" className="flex-1 min-w-[8rem] text-xs sm:text-sm py-2 touch-manipulation">
+                    <span className="hidden sm:inline">Fantasy points</span>
+                    <span className="sm:hidden">Fantasy</span>
+                  </TabsTrigger>
+                </TabsList>
+              </div>
+
+              <TabsContent value="scorecard" className="flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-6 md:p-8 mt-0 min-h-0">
+                {modal.source === "cricapi" && (
+                  <>
+                    {modalRefreshing ? (
+                      <div className="flex flex-col items-center justify-center py-20 gap-4 px-2">
+                        <Loader2 className="h-10 w-10 text-blue-600 animate-spin" />
+                        <p className="text-xs font-black text-slate-400 uppercase tracking-widest text-center leading-relaxed">
+                          Loading from database…
+                        </p>
+                      </div>
+                    ) : cricapiViewer?.innings ? (
+                      <div className="w-full min-w-0 overflow-x-auto -mx-1 px-1 sm:mx-0 sm:px-0">
+                        <ScorecardViewer scorecard={cricapiViewer} />
+                      </div>
+                    ) : (
+                      <p className="text-center text-sm font-bold text-slate-400 py-16 uppercase tracking-wide">
+                        No scorecard in DB yet for this match.
+                      </p>
+                    )}
+                  </>
+                )}
+                {modal.source === "espn" && (
+                  <>
+                    {espnModalMn == null ? (
+                      <p className="text-center text-sm font-bold text-slate-400 py-16 uppercase tracking-wide">
+                        No <code className="font-mono">match_no</code> — link this fixture to ESPN in Supabase.
+                      </p>
+                    ) : espnModalLoading ? (
+                      <div className="flex flex-col items-center justify-center py-20 gap-4">
+                        <Loader2 className="h-10 w-10 text-slate-600 animate-spin" />
+                        <p className="text-xs font-black text-slate-400 uppercase tracking-widest">Loading ESPN scorecard from database…</p>
+                      </div>
+                    ) : espnModalScore?.innings?.length ? (
+                      <div className="w-full min-w-0 overflow-x-auto -mx-1 px-1 sm:mx-0 sm:px-0">
+                        <ScorecardViewer scorecard={espnModalScore} />
+                      </div>
+                    ) : (
+                      <p className="text-center text-sm font-bold text-slate-400 py-16 uppercase tracking-wide">
+                        No ESPN scorecard stored for this match_no.
+                      </p>
+                    )}
+                  </>
+                )}
+              </TabsContent>
+
+              <TabsContent value="fantasy" className="flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-6 mt-0 min-h-0">
+                {modal.source === "cricapi" && (
+                  <>
+                    {modalRefreshing ? (
+                      <div className="flex justify-center py-16">
+                        <Loader2 className="h-8 w-8 text-blue-600 animate-spin" />
+                      </div>
+                    ) : cricapiFantasyRows.length === 0 ? (
+                      <p className="text-center text-sm font-bold text-slate-400 py-16 px-2 leading-relaxed">
+                        No fantasy rows — save a CricAPI scorecard to the DB first.
+                      </p>
+                    ) : (
+                      <div className="w-full min-w-0 overflow-x-auto rounded-lg border border-slate-100">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="w-8 sm:w-10 px-2 sm:px-4" />
+                            <TableHead className="min-w-[7rem] max-w-[40vw]">Player</TableHead>
+                            <TableHead className="min-w-[4rem]">Team</TableHead>
+                            <TableHead className="text-right whitespace-nowrap">PJ</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {cricapiFantasyRows.map((row) => {
+                            const open = expandedFantasyId === row.player_id;
+                            const { breakdown, scoring } = row;
+                            return (
+                              <React.Fragment key={row.player_id}>
+                                <TableRow
+                                  className="cursor-pointer touch-manipulation"
+                                  onClick={() => setExpandedFantasyId(open ? null : row.player_id)}
+                                >
+                                  <TableCell className="px-2 sm:px-4 align-top">{open ? "▼" : "▶"}</TableCell>
+                                  <TableCell className="max-w-[40vw] sm:max-w-none">
+                                    <div className="font-semibold text-slate-900 text-sm leading-snug break-words">
+                                      {row.player_name}
+                                    </div>
+                                    <div className="text-[10px] text-slate-500 break-words">{row.fantasy.playerRole}</div>
+                                  </TableCell>
+                                  <TableCell className="align-top">
+                                    {row.team ? (
+                                      <Badge
+                                        variant="secondary"
+                                        className="whitespace-normal text-center max-w-[6rem] sm:max-w-none break-words"
+                                      >
+                                        {row.team}
+                                      </Badge>
+                                    ) : (
+                                      "—"
+                                    )}
+                                  </TableCell>
+                                  <TableCell className="text-right font-bold tabular-nums align-top whitespace-nowrap">
+                                    {scoring.total_pts}
+                                  </TableCell>
+                                </TableRow>
+                                {open ? (
+                                  <TableRow>
+                                    <TableCell colSpan={4} className="bg-slate-50 p-3 sm:p-4">
+                                      <div className="grid gap-4 sm:grid-cols-2 text-sm min-w-0">
+                                        <FantasyBreakdownBlock title="Batting" lines={breakdown.batting} />
+                                        <FantasyBreakdownBlock title="Bowling" lines={breakdown.bowling} />
+                                        <FantasyBreakdownBlock title="Fielding" lines={breakdown.fielding} />
+                                        <FantasyBreakdownBlock title="Extras" lines={breakdown.extras} />
+                                      </div>
+                                    </TableCell>
+                                  </TableRow>
+                                ) : null}
+                              </React.Fragment>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                      </div>
+                    )}
+                  </>
+                )}
+                {modal.source === "espn" && (
+                  <>
+                    {espnModalMn == null ? (
+                      <p className="text-center text-sm font-bold text-slate-400 py-16 uppercase tracking-wide">
+                        Need <code className="font-mono">match_no</code> for ESPN PJ breakdown.
+                      </p>
+                    ) : espnModalLoading ? (
+                      <div className="flex justify-center py-16">
+                        <Loader2 className="h-8 w-8 text-slate-600 animate-spin" />
+                      </div>
+                    ) : espnFantasyRows.length === 0 ? (
+                      <p className="text-center text-sm font-bold text-slate-400 py-16">
+                        Load an ESPN scorecard from the database (Scorecard tab) to compute PJ points.
+                      </p>
+                    ) : (
+                      <div className="w-full min-w-0 overflow-x-auto rounded-lg border border-slate-100">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="min-w-[10rem]">Player</TableHead>
+                            <TableHead className="min-w-[5rem]">Team</TableHead>
+                            <TableHead className="text-right whitespace-nowrap">PJ</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {espnFantasyRows.map((row) => (
+                            <TableRow key={`${row.n}_${row.team}`}>
+                              <TableCell className="font-medium text-sm break-words max-w-[50vw] sm:max-w-none">
+                                {row.n}
+                              </TableCell>
+                              <TableCell className="align-top">
+                                <Badge variant="outline" className="whitespace-normal break-words max-w-[7rem]">
+                                  {row.team}
+                                </Badge>
+                              </TableCell>
+                              <TableCell className="text-right font-bold tabular-nums whitespace-nowrap">{row.total}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                      </div>
+                    )}
+                  </>
+                )}
+              </TabsContent>
+            </Tabs>
+
+            <div className="p-3 sm:p-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-slate-50 border-t border-slate-100 text-center shrink-0">
+              <button
+                type="button"
+                onClick={closeModal}
+                className="w-full sm:w-auto min-h-[48px] px-8 py-3 bg-white border border-slate-200 text-slate-900 rounded-xl text-xs font-black uppercase tracking-widest shadow-sm touch-manipulation active:bg-slate-50"
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>

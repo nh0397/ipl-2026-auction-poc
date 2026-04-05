@@ -8,134 +8,61 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart as BarChartRecharts, Bar, PieChart, Pie, Cell, Legend
 } from "recharts";
-import { 
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogTrigger 
-} from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { 
   Trophy, Medal, Shield, Zap, Star, Activity, 
-  ChevronRight, Lock, History, AlertCircle, TrendingUp,
+  Lock, History, AlertCircle, TrendingUp,
   Calculator, Save, RefreshCw, ChevronLeft, Search, Clock,
   Users, User, Download, LayoutGrid, ListChecks, Calendar,
-  MapPin, BarChart3, Target, Loader2, ArrowUpDown
+  MapPin, BarChart3, Target, Loader2, ArrowUpDown, Radio, Database, XCircle
 } from "lucide-react";
 import { cn, getPlayerImage, iplColors } from "@/lib/utils";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/auth/AuthProvider";
 import React from "react";
 import ScorecardViewer from "@/components/scoreboard/ScorecardViewer";
+import type { PjRulesBreakdownLine } from "@/lib/scoring";
+import { adaptCricApiToScorecardViewer } from "@/lib/adapters/cricapiScorecard";
+import { aggregateFantasyRowsFromCricApiMatchData } from "@/lib/cricapiFantasyAggregate";
 import {
-  scorePjRulesPlayer,
-  pjRulesDetailedBreakdown,
-  d11BonusMultiplierInfo,
-  d11PointsAfterMultiplier,
-  parseLbwBowledBowlerName,
-  pjResolveScoringPlayerRole,
-  type PjRulesDetailedBreakdown,
-  type D11BonusMultiplierInfo,
-} from "@/lib/scoring";
+  computeEspnPjBreakdownRows,
+  type PlayerCatalogRow,
+} from "@/lib/espnPjBreakdownFromScorecard";
 
-type PlayerCatalogRow = {
-  player_name: string;
-  team: string;
-  type: string | null;
-  role: string | null;
-};
-
-function normalizeScorecardPlayerName(raw: string) {
-  return String(raw || "")
-    .replace(/†/g, "")
-    .replace(/\(c\)/gi, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function catalogNameMatches(scorecardNorm: string, dbName: string): boolean {
-  const a = scorecardNorm.toLowerCase().replace(/\s+/g, " ").trim();
-  const b = normalizeScorecardPlayerName(dbName).toLowerCase();
-  if (a === b) return true;
-  if (a.includes(b) || b.includes(a)) return true;
-  const al = a.split(/\s+/).pop() || a;
-  const bl = b.split(/\s+/).pop() || b;
-  if (al === bl && al.length >= 3) return true;
-  return false;
-}
-
-function catalogTeamMatches(
-  scorecardTeam: string,
-  playerTeam: string,
-  match: {
-    team1_short?: string | null;
-    team1_name?: string | null;
-    team2_short?: string | null;
-    team2_name?: string | null;
-  }
-): boolean {
-  const pt = playerTeam.trim().toLowerCase();
-  if (!pt) return true;
-  const st = scorecardTeam.trim().toLowerCase();
-  if (st.includes(pt) || pt.includes(st)) return true;
-  const hints = [match.team1_short, match.team1_name, match.team2_short, match.team2_name].filter(Boolean) as string[];
-  for (const h of hints) {
-    const hl = h.toLowerCase();
-    if (hl.includes(pt) || pt.includes(hl)) return true;
-    if (st.includes(hl) || hl.includes(st)) return true;
-  }
-  return false;
-}
-
-function findPlayerCatalogRow(
-  displayName: string,
-  scorecardTeam: string,
-  catalog: PlayerCatalogRow[],
-  match: {
-    team1_short?: string | null;
-    team1_name?: string | null;
-    team2_short?: string | null;
-    team2_name?: string | null;
-  }
-): PlayerCatalogRow | null {
-  if (!catalog?.length) return null;
-  const norm = normalizeScorecardPlayerName(displayName);
-  const candidates = catalog.filter((p) => catalogNameMatches(norm, p.player_name));
-  if (candidates.length === 0) return null;
-  if (candidates.length === 1) return candidates[0];
-  const teamScoped = candidates.filter((p) => catalogTeamMatches(scorecardTeam, p.team, match));
-  return teamScoped[0] ?? candidates[0];
-}
-
-/** Cached breakdown rows may predate bonus `d11` / `pjDetail`; recompute from stats. */
-function getD11ForRow(p: {
-  d11?: D11BonusMultiplierInfo & { multipliedTotal: number };
-  r?: number;
-  w?: number;
-  total?: number;
-}): D11BonusMultiplierInfo & { multipliedTotal: number } {
-  if (p.d11) return p.d11;
-  const meta = d11BonusMultiplierInfo(p.r ?? 0, p.w ?? 0);
-  return {
-    ...meta,
-    multipliedTotal: d11PointsAfterMultiplier(p.total ?? 0, meta.appliedMultiplier),
-  };
-}
-
-function getPjDetailForRow(p: any): PjRulesDetailedBreakdown {
-  if (p.pjDetail) return p.pjDetail;
-  const pjInput = {
-    batting: { runs: p.r, balls: p.b, fours: p.f, sixes: p.s, dismissal: p.dismissal || "not out" },
-    bowling: {
-      overs: p.o,
-      maidens: p.m,
-      runs_conceded: p.r_conc,
-      wickets: p.w,
-      lbw_bowled_wickets: p.lbwB,
-      dot_balls: p.dots,
-    },
-    fielding: { catches: p.c, stumpings: p.st, runout_direct: p.ro, runout_indirect: p.roI ?? 0 },
-    in_announced_lineup: true,
-    playerRole: p.role,
-  };
-  return pjRulesDetailedBreakdown(pjInput);
+function FantasyBreakdownBlock({ title, lines }: { title: string; lines: PjRulesBreakdownLine[] }) {
+  if (!lines?.length) return null;
+  return (
+    <div className="space-y-2 min-w-0">
+      <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{title}</div>
+      <ul className="space-y-2 text-sm">
+        {lines.map((line, i) => (
+          <li
+            key={i}
+            className="flex flex-col gap-1 border-b border-slate-100 pb-2 last:border-0 sm:flex-row sm:items-start sm:justify-between sm:gap-3"
+          >
+            <span className="min-w-0 flex-1 text-slate-800 break-words leading-snug">
+              {line.label}
+              {line.detail ? (
+                <span className="text-slate-400 text-xs block sm:inline sm:ml-1">({line.detail})</span>
+              ) : null}
+            </span>
+            <span
+              className={cn(
+                "tabular-nums font-medium shrink-0 sm:text-right",
+                line.pts < 0 ? "text-rose-600" : "text-slate-900"
+              )}
+            >
+              {line.pts > 0 ? "+" : ""}
+              {line.pts}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }
 
 // ─── Fixture helpers ────────────────────────────────────────────────
@@ -247,9 +174,12 @@ export default function ScoreboardPage() {
   const [analyticsTeamId, setAnalyticsTeamId] = useState<string | null>(null);
   const [standings, setStandings] = useState<any[]>([]);
   const [allMatchPoints, setAllMatchPoints] = useState<any[]>([]);
-  const [expandedScorecardId, setExpandedScorecardId] = useState<string | null>(null);
-  const [expandedPointsId, setExpandedPointsId] = useState<string | null>(null);
-  const [showBreakdownId, setShowBreakdownId] = useState<string | null>(null);
+  /** Fixtures tab: ESPN / CricAPI modal (scorecard + fantasy tabs). */
+  const [fixtureModal, setFixtureModal] = useState<{ source: "espn" | "cricapi"; fixture: Fixture } | null>(null);
+  const [fixtureModalTab, setFixtureModalTab] = useState<"scorecard" | "fantasy">("scorecard");
+  const [modalFixtureFresh, setModalFixtureFresh] = useState<Fixture | null>(null);
+  const [modalRefreshing, setModalRefreshing] = useState(false);
+  const [expandedCricapiFantasyId, setExpandedCricapiFantasyId] = useState<string | null>(null);
 
   const [espnScorecardByMatchNo, setEspnScorecardByMatchNo] = useState<Record<number, any | null>>({});
   const [espnScorecardLoadingByMatchNo, setEspnScorecardLoadingByMatchNo] = useState<Record<number, boolean>>({});
@@ -259,382 +189,10 @@ export default function ScoreboardPage() {
   const [fixtures, setFixtures] = useState<Fixture[]>([]);
   const [fixtureFilter, setFixtureFilter] = useState<"all" | "upcoming" | "completed">("all");
 
-  type BreakdownRow = {
-    n: string;
-    team: string;
-    role: string;
-    r: number;
-    b: number;
-    f: number;
-    s: number;
-    w: number;
-    m: number;
-    o: number;
-    r_conc: number;
-    c: number;
-    st: number;
-    dots: number;
-    lbwB: number;
-    /** Direct run outs (parentheses with a single fielder). */
-    ro: number;
-    /** Indirect run outs (`run out (p1/p2)`). */
-    roI: number;
-    dismissal?: string;
-    base: number;
-    b_pts: number;
-    bw_pts: number;
-    f_pts: number;
-    sr_pts: number | null;
-    eco_pts: number | null;
-    total: number;
-    breakdownHint?: string;
-    _variant: "pjRules";
-    pjDetail?: PjRulesDetailedBreakdown;
-    /** Bonus multiplier metadata on total base points (base `total` unchanged). */
-    d11?: D11BonusMultiplierInfo & { multipliedTotal: number };
-  };
-
-  const [breakdownCache, setBreakdownCache] = useState<Record<string, BreakdownRow[]>>({});
-  const [breakdownLoadingKey, setBreakdownLoadingKey] = useState<string | null>(null);
-
-  const computeBreakdownRows = useCallback((sc: any, match: any, catalog: PlayerCatalogRow[]): BreakdownRow[] => {
-      if (!sc?.innings) return [];
-
-      const stats: Record<string, any> = {};
-
-      // Initialize registry from batting/bowling names
-      sc.innings.forEach((inn: any) => {
-        const battingTeam = inn.team;
-        const bowlingTeam = sc.innings.find((i: any) => i.team !== battingTeam)?.team || "Opponent";
-        (inn.batting || []).forEach((b: any) => {
-          const raw = b.player || "";
-          if (!raw || raw === "BATTING") return;
-          const n = normalizeScorecardPlayerName(raw);
-          const key = `${n}_${battingTeam}`;
-          if (!stats[key])
-            stats[key] = { n, team: battingTeam, r: 0, b: 0, f: 0, s: 0, w: 0, m: 0, o: 0, r_conc: 0, c: 0, st: 0, dots: 0, lbwB: 0, ro: 0, roI: 0, isDuck: false, role: "Batter" };
-        });
-        (inn.bowling || []).forEach((bw: any) => {
-          const raw = bw.bowler || "";
-          if (!raw || raw === "BOWLING") return;
-          const n = normalizeScorecardPlayerName(raw);
-          // bowling is done by opposition
-          const key = `${n}_${bowlingTeam}`;
-          if (!stats[key])
-            stats[key] = { n, team: bowlingTeam, r: 0, b: 0, f: 0, s: 0, w: 0, m: 0, o: 0, r_conc: 0, c: 0, st: 0, dots: 0, lbwB: 0, ro: 0, roI: 0, isDuck: false, role: "Bowler" };
-        });
-      });
-
-      /** Map a name (possibly partial) to a stats key for exactly one franchise — never cross teams. */
-      const findKeyForTeamRoster = (name: string, team: string) => {
-        const n = normalizeScorecardPlayerName(name);
-        const suffix = `_${team}`;
-        const exact = `${n}_${team}`;
-        if (stats[exact]) return exact;
-        const keys = Object.keys(stats).filter((k) => k.endsWith(suffix));
-        const nLower = n.toLowerCase();
-        for (const k of keys) {
-          const playerPart = k.slice(0, -suffix.length);
-          if (playerPart.toLowerCase() === nLower) return k;
-        }
-        for (const k of keys) {
-          const pl = k.slice(0, -suffix.length).toLowerCase();
-          if (pl.includes(nLower) || nLower.includes(pl)) return k;
-        }
-        const lastTok = nLower.split(/\s+/).pop() || nLower;
-        for (const k of keys) {
-          const parts = k.slice(0, -suffix.length).toLowerCase().split(/\s+/).filter(Boolean);
-          if (parts.some((part) => part === lastTok || part.startsWith(lastTok) || lastTok.startsWith(part))) return k;
-        }
-        return exact;
-      };
-
-      const ensureStatRow = (key: string, team: string, role: string, displayName?: string) => {
-        if (stats[key]) return;
-        const suffix = `_${team}`;
-        const playerName =
-          displayName ||
-          (key.endsWith(suffix) ? key.slice(0, -suffix.length) : normalizeScorecardPlayerName(String(key).split("_")[0] || ""));
-        stats[key] = {
-          n: playerName,
-          team,
-          r: 0,
-          b: 0,
-          f: 0,
-          s: 0,
-          w: 0,
-          m: 0,
-          o: 0,
-          r_conc: 0,
-          c: 0,
-          st: 0,
-          dots: 0,
-          lbwB: 0,
-          ro: 0,
-          roI: 0,
-          isDuck: false,
-          role,
-          dismissal: "",
-        };
-      };
-
-      // Accumulate
-      sc.innings.forEach((inn: any) => {
-        const currentTeam = inn.team;
-        const opposingTeam = sc.innings.find((i: any) => i.team !== currentTeam)?.team || "Opponent";
-
-        (inn.batting || []).forEach((b: any) => {
-          const rawN = b.player || "";
-          if (!rawN || rawN === "BATTING") return;
-          const key = findKeyForTeamRoster(rawN, currentTeam);
-          const dStr = (b.dismissal || b["dismissal-text"] || "").toLowerCase();
-          const sufCT = `_${currentTeam}`;
-
-          if (!stats[key])
-            stats[key] = {
-              n: key.endsWith(sufCT) ? key.slice(0, -sufCT.length) : normalizeScorecardPlayerName(rawN),
-              team: currentTeam,
-              r: 0,
-              b: 0,
-              f: 0,
-              s: 0,
-              w: 0,
-              m: 0,
-              o: 0,
-              r_conc: 0,
-              c: 0,
-              st: 0,
-              dots: 0,
-              lbwB: 0,
-              ro: 0,
-              roI: 0,
-              isDuck: false,
-              role: "Batter",
-              dismissal: "",
-            };
-          stats[key].r += Number(b.R || b.r) || 0;
-          stats[key].b += Number(b.B || b.b) || 0;
-          stats[key].f += Number(b["4s"]) || 0;
-          stats[key].s += Number(b["6s"]) || 0;
-          if (dStr) stats[key].dismissal = dStr;
-          if (rawN.includes("†")) stats[key].role = "WK";
-          else if (stats[key].role === "Fielder") stats[key].role = "Batter";
-
-          if (stats[key].r === 0 && dStr !== "not out" && dStr !== "") stats[key].isDuck = true;
-
-          // +8 LBW/bowled bonus credits the **bowler** (opposing team), not the dismissed batter.
-          const lbwBowledBy = parseLbwBowledBowlerName(b.dismissal || b["dismissal-text"] || "");
-          if (lbwBowledBy) {
-            const bKey = findKeyForTeamRoster(lbwBowledBy, opposingTeam);
-            ensureStatRow(bKey, opposingTeam, "Bowler", lbwBowledBy);
-            stats[bKey].lbwB += 1;
-          }
-        });
-
-        (inn.bowling || []).forEach((bw: any) => {
-          const rawN = bw.bowler;
-          if (!rawN || rawN === "BOWLING") return;
-          const key = findKeyForTeamRoster(rawN, opposingTeam);
-          const sufOpp = `_${opposingTeam}`;
-
-          if (!stats[key])
-            stats[key] = {
-              n: key.endsWith(sufOpp) ? key.slice(0, -sufOpp.length) : normalizeScorecardPlayerName(rawN),
-              team: opposingTeam,
-              r: 0,
-              b: 0,
-              f: 0,
-              s: 0,
-              r_conc: 0,
-              w: 0,
-              m: 0,
-              o: 0,
-              c: 0,
-              st: 0,
-              dots: 0,
-              lbwB: 0,
-              ro: 0,
-              roI: 0,
-              isDuck: false,
-              role: "Bowler",
-            };
-          stats[key].w += Number(bw.W || bw.w) || 0;
-          stats[key].m += Number(bw.M || bw.m) || 0;
-          stats[key].r_conc += Number(bw.R || bw.r) || 0;
-          stats[key].o += Number(bw.O || bw.o) || 0;
-          stats[key].dots += Number(bw["0s"] || 0);
-
-          if (stats[key].role === "Batter" || stats[key].role === "WK") stats[key].role = stats[key].role === "WK" ? "WK/Bowler" : "All-Rounder";
-          else if (stats[key].role === "Fielder") stats[key].role = "Bowler";
-        });
-
-        (inn.catching || []).forEach((c: any) => {
-          const rawN = typeof c.catcher === "string" ? c.catcher : c.catcher?.name;
-          if (!rawN) return;
-          const key = findKeyForTeamRoster(rawN, opposingTeam);
-          ensureStatRow(key, opposingTeam, "Fielder", rawN);
-          stats[key].c += Number(c.catch || 0);
-          stats[key].st += Number(c.stumped || 0);
-        });
-
-        (inn.batting || []).forEach((b: any) => {
-          const d = (b.dismissal || b["dismissal-text"] || "").toLowerCase();
-          if (!d) return;
-
-          // Bowling side (Team B when Team A bats): c & b, c, st, run out — map partial names only to opposingTeam.
-          if (/\bc\s*&\s*b\s+/i.test(d)) {
-            const m = d.match(/\bc\s*&\s*b\s+([a-zA-Z .''-]+)/i);
-            if (m?.[1]) {
-              const nRaw = m[1].trim();
-              const key = findKeyForTeamRoster(nRaw, opposingTeam);
-              ensureStatRow(key, opposingTeam, "Fielder", nRaw);
-              stats[key].c += 1;
-              // c&b: catch points only (no separate bowled/LBW +8).
-            }
-            return;
-          }
-
-          if (d.startsWith("c ") || d.startsWith("st ")) {
-            const parts = d.split(" b ");
-            let nRaw = parts[0].replace(/^(?:c|st)\s+(?:†)?/, "").trim();
-            if (nRaw && !["sub", "batting", "retired"].includes(nRaw)) {
-              const key = findKeyForTeamRoster(nRaw, opposingTeam);
-              ensureStatRow(key, opposingTeam, "Fielder", nRaw);
-              if (d.startsWith("c ")) stats[key].c += 1;
-              if (d.startsWith("st ")) stats[key].st += 1;
-            }
-          }
-
-          if (d.includes("run out")) {
-            const roMatch = d.match(/\(([^)]+)\)/);
-            if (roMatch?.[1]) {
-              const inner = roMatch[1].trim();
-              // Direct: run out (p1). Indirect: (p1/p2) or (p1, p2) — two fielders, +6 each.
-              let parts: string[];
-              const bySlash = inner.split(/\s*\/\s*/).map((s: string) => s.trim()).filter(Boolean);
-              if (bySlash.length >= 2) parts = bySlash;
-              else {
-                const byComma = inner.split(/\s*,\s*/).map((s: string) => s.trim()).filter(Boolean);
-                parts = byComma.length >= 2 ? byComma : [inner];
-              }
-              const indirect = parts.length >= 2;
-              for (const nRaw of parts) {
-                if (!nRaw || /^sub$/i.test(nRaw)) continue;
-                const key = findKeyForTeamRoster(nRaw, opposingTeam);
-                ensureStatRow(key, opposingTeam, "Fielder", nRaw);
-                if (indirect) stats[key].roI += 1;
-                else stats[key].ro += 1;
-              }
-            }
-          }
-        });
-      });
-
-      const base = 4;
-
-      const rows: BreakdownRow[] = Object.values(stats).map((p: any) => {
-        const cat = findPlayerCatalogRow(p.n, p.team, catalog, match);
-        const resolvedRole = pjResolveScoringPlayerRole(cat?.type, cat?.role, p.role);
-        const pjInput = {
-          batting: { runs: p.r, balls: p.b, fours: p.f, sixes: p.s, dismissal: p.dismissal || "not out" },
-          bowling: {
-            overs: p.o,
-            maidens: p.m,
-            runs_conceded: p.r_conc,
-            wickets: p.w,
-            lbw_bowled_wickets: p.lbwB,
-            dot_balls: p.dots,
-          },
-          fielding: { catches: p.c, stumpings: p.st, runout_direct: p.ro, runout_indirect: p.roI ?? 0 },
-          in_announced_lineup: true,
-          playerRole: resolvedRole,
-        };
-        const scored = scorePjRulesPlayer(pjInput);
-        const pjDetail = pjRulesDetailedBreakdown(pjInput);
-        const totalPts = base + scored.total_pts - 4;
-        const d11Meta = d11BonusMultiplierInfo(p.r, p.w);
-        return {
-          ...p,
-          role: resolvedRole,
-          _variant: "pjRules" as const,
-          base,
-          b_pts: scored.batting_pts,
-          bw_pts: scored.bowling_pts,
-          f_pts: scored.fielding_pts,
-          sr_pts: scored.sr_pts ?? null,
-          eco_pts: scored.eco_pts ?? null,
-          total: totalPts,
-          breakdownHint: "PJ Rules (T20)",
-          pjDetail,
-          d11: {
-            ...d11Meta,
-            multipliedTotal: d11PointsAfterMultiplier(totalPts, d11Meta.appliedMultiplier),
-          },
-        };
-      });
-
-      return rows.sort((a: any, b: any) => (b.total || 0) - (a.total || 0));
-    },
-    [playersCatalog]
-  );
-
-  useEffect(() => {
-    setBreakdownCache({});
-  }, [playersCatalog]);
-
-  useEffect(() => {
-    if (!expandedPointsId) return;
-    const match = fixtures.find((m) => m.api_match_id === expandedPointsId);
-    if (!match) return;
-
-    const mn = espnMatchNo(match);
-    const espn = mn != null ? espnScorecardByMatchNo[mn] : null;
-    const espnLoading = mn != null ? !!espnScorecardLoadingByMatchNo[mn] : false;
-    const pointsSynced = mn != null ? !!fixturePointsSyncedByMatchNo[mn] : false;
-
-    const key = expandedPointsId;
-
-    if (mn == null || !pointsSynced) {
-      setBreakdownLoadingKey(null);
-      return;
-    }
-    if (espnLoading) {
-      setBreakdownLoadingKey(null);
-      return;
-    }
-
-    if (breakdownCache[key]) {
-      setBreakdownLoadingKey(null);
-      return;
-    }
-
-    if (!espn?.innings?.length) {
-      setBreakdownCache((prev) => ({ ...prev, [key]: [] }));
-      setBreakdownLoadingKey(null);
-      return;
-    }
-
-    setBreakdownLoadingKey(key);
-    const t = setTimeout(() => {
-      try {
-        const rows = computeBreakdownRows(espn, match, playersCatalog);
-        setBreakdownCache((prev) => ({ ...prev, [key]: rows }));
-      } finally {
-        setBreakdownLoadingKey((cur) => (cur === key ? null : cur));
-      }
-    }, 0);
-
-    return () => clearTimeout(t);
-  }, [
-    expandedPointsId,
-    fixtures,
-    breakdownCache,
-    espnScorecardByMatchNo,
-    espnScorecardLoadingByMatchNo,
-    fixturePointsSyncedByMatchNo,
-    computeBreakdownRows,
-    playersCatalog,
-  ]);
+  const [subLoading, setSubLoading] = useState(false);
+  const [tabLoading, setTabLoading] = useState(false);
+  /** Which auction franchise’s score sheet is shown (sub-tabs under Sheets). */
+  const [sheetFranchiseId, setSheetFranchiseId] = useState<string | null>(null);
 
   const fetchEspnScorecardForMatchNo = useCallback(async (matchNo: number) => {
     if (!matchNo || matchNo <= 0) return;
@@ -661,10 +219,66 @@ export default function ScoreboardPage() {
       setEspnScorecardLoadingByMatchNo((prev) => ({ ...prev, [matchNo]: false }));
     }
   }, [espnScorecardByMatchNo, espnScorecardLoadingByMatchNo]);
-  const [subLoading, setSubLoading] = useState(false);
-  const [tabLoading, setTabLoading] = useState(false);
-  /** Which auction franchise’s score sheet is shown (sub-tabs under Sheets). */
-  const [sheetFranchiseId, setSheetFranchiseId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!fixtureModal) {
+      setModalFixtureFresh(null);
+      return;
+    }
+    let cancelled = false;
+    if (fixtureModal.source === "cricapi") {
+      setModalRefreshing(true);
+      (async () => {
+        const { data, error } = await supabase
+          .from("fixtures_cricapi")
+          .select("*")
+          .eq("id", fixtureModal.fixture.id)
+          .maybeSingle();
+        if (cancelled) return;
+        if (!error && data) {
+          setModalFixtureFresh(data as Fixture);
+          setFixtures((prev) => prev.map((f) => (f.id === fixtureModal.fixture.id ? { ...f, ...data } : f)));
+        }
+        setModalRefreshing(false);
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }
+    if (fixtureModal.source === "espn") {
+      const mn = espnMatchNo(fixtureModal.fixture);
+      if (mn == null) return;
+      void fetchEspnScorecardForMatchNo(mn);
+    }
+  }, [fixtureModal, fetchEspnScorecardForMatchNo]);
+
+  const closeFixtureModal = useCallback(() => {
+    setFixtureModal(null);
+    setFixtureModalTab("scorecard");
+    setExpandedCricapiFantasyId(null);
+  }, []);
+
+  const cricapiModalData = fixtureModal?.source === "cricapi" ? modalFixtureFresh ?? fixtureModal.fixture : null;
+  const cricapiViewer = useMemo(() => {
+    const raw = cricapiModalData?.scorecard;
+    if (!raw) return null;
+    return adaptCricApiToScorecardViewer(raw);
+  }, [cricapiModalData?.scorecard]);
+
+  const cricapiFantasyRows = useMemo(() => {
+    const raw = cricapiModalData?.scorecard as Record<string, unknown> | null | undefined;
+    if (!raw) return [];
+    return aggregateFantasyRowsFromCricApiMatchData(raw);
+  }, [cricapiModalData?.scorecard]);
+
+  const espnModalMn = fixtureModal?.source === "espn" ? espnMatchNo(fixtureModal.fixture) : null;
+  const espnModalScore = espnModalMn != null ? espnScorecardByMatchNo[espnModalMn] : undefined;
+  const espnModalLoading = espnModalMn != null ? !!espnScorecardLoadingByMatchNo[espnModalMn] : false;
+  const espnModalPjRows = useMemo(() => {
+    if (fixtureModal?.source !== "espn" || !espnModalScore?.innings?.length || !fixtureModal) return [];
+    return computeEspnPjBreakdownRows(espnModalScore, fixtureModal.fixture, playersCatalog);
+  }, [fixtureModal, espnModalScore, playersCatalog]);
+
   const today = useMemo(() => getTodayIST(), []);
 
   const matchByNo = useMemo(() => {
@@ -1106,8 +720,16 @@ export default function ScoreboardPage() {
                    {matches.map(match => {
                       const isToday = match.match_date === today;
                       const mnRow = espnMatchNo(match);
-                      const pointsSynced = mnRow != null ? !!fixturePointsSyncedByMatchNo[mnRow] : false;
-                      const breakdownReady = pointsSynced;
+                      const espnPointsSynced = mnRow != null ? !!fixturePointsSyncedByMatchNo[mnRow] : false;
+                      const cricapiPointsSynced = !!match.points_synced;
+                      const espnReady = mnRow != null && espnPointsSynced;
+                      const cricReady = cricapiPointsSynced;
+                      const syncStatusLine = (() => {
+                        if (espnReady && cricReady) return null;
+                        if (!espnReady && !cricReady) return "ESPN and CricAPI data not ready yet";
+                        if (!espnReady) return "ESPN points pending";
+                        return "CricAPI sync pending";
+                      })();
                       return (
                       <div key={match.id} className="space-y-2">
                         {isToday && (
@@ -1127,8 +749,8 @@ export default function ScoreboardPage() {
                                <img src={getPlayerImage(match.team2_img) || ""} className="h-10 w-10 object-contain rounded-xl bg-slate-50 border p-1" />
                             </div>
                          </div>
-                         <div className="flex items-center justify-between mt-4 pt-4 border-t border-slate-50">
-                            <div className="text-[10px] font-bold text-slate-400 uppercase">
+                         <div className="flex flex-col gap-3 mt-4 pt-4 border-t border-slate-50 min-w-0">
+                            <div className="text-[10px] font-bold text-slate-400 uppercase min-w-0 break-words leading-snug">
                               {(() => {
                                 const ist = `${formatTime(match.date_time_gmt)} IST`;
                                 const local = formatLocalTime(match.date_time_gmt);
@@ -1137,355 +759,308 @@ export default function ScoreboardPage() {
                                 return `${ist}${localPart}${venue}`;
                               })()}
                             </div>
-                            {breakdownReady ? (
-                              <div className="flex gap-2">
-                                 <Button
-                                   variant="outline"
-                                   size="sm"
-                                   onClick={() => {
-                                     const mn = espnMatchNo(match);
-                                     if (mn != null) fetchEspnScorecardForMatchNo(mn);
-                                     setExpandedScorecardId(match.api_match_id);
-                                   }}
-                                   className="h-8 text-[9px] font-black uppercase shadow-none border-slate-200"
-                                 >
-                                   Scorecard
-                                 </Button>
-                                 <Button
-                                   variant="outline"
-                                   size="sm"
-                                   onClick={() => {
-                                     const mn = espnMatchNo(match);
-                                     if (mn != null) fetchEspnScorecardForMatchNo(mn);
-                                     setExpandedPointsId(match.api_match_id);
-                                   }}
-                                   className="h-8 text-[9px] font-black uppercase border-amber-200 text-amber-600 bg-amber-50/50 shadow-none"
-                                 >
-                                   Breakdown
-                                 </Button>
-                              </div>
-                            ) : match.match_ended && !pointsSynced ? (
-                              <span className="text-[9px] font-black text-blue-600 bg-blue-50 px-2 py-1 rounded uppercase">Points will be updated soon.</span>
-                            ) : (
-                              <span className="text-[9px] font-black text-amber-500 bg-amber-50 px-2 py-1 rounded uppercase">Live Soon</span>
-                            )}
+                            <div className="grid grid-cols-2 gap-2 w-full sm:max-w-sm sm:ml-auto">
+                              <button
+                                type="button"
+                                disabled={!espnReady}
+                                onClick={() => {
+                                  if (!espnReady) return;
+                                  const mn = espnMatchNo(match);
+                                  if (mn != null) void fetchEspnScorecardForMatchNo(mn);
+                                  setFixtureModalTab("scorecard");
+                                  setExpandedCricapiFantasyId(null);
+                                  setFixtureModal({ source: "espn", fixture: match });
+                                }}
+                                className={cn(
+                                  "touch-manipulation min-h-10 flex items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl text-[9px] sm:text-[10px] font-black uppercase tracking-wide transition-all border text-center leading-tight",
+                                  espnReady
+                                    ? "bg-white border-slate-200 text-slate-800 active:bg-slate-100 hover:bg-slate-50 shadow-sm"
+                                    : "bg-slate-50 border-slate-100 text-slate-300 cursor-not-allowed"
+                                )}
+                              >
+                                <Radio className="h-3.5 w-3.5 shrink-0" />
+                                ESPN
+                              </button>
+                              <button
+                                type="button"
+                                disabled={!cricReady}
+                                onClick={() => {
+                                  if (!cricReady) return;
+                                  setFixtureModalTab("scorecard");
+                                  setExpandedCricapiFantasyId(null);
+                                  setFixtureModal({ source: "cricapi", fixture: match });
+                                }}
+                                className={cn(
+                                  "touch-manipulation min-h-10 flex items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl text-[9px] sm:text-[10px] font-black uppercase tracking-wide transition-all border text-center leading-tight",
+                                  cricReady
+                                    ? "bg-slate-900 text-white border-slate-900 active:bg-slate-800 hover:bg-black shadow-md"
+                                    : "bg-slate-50 border-slate-100 text-slate-300 cursor-not-allowed"
+                                )}
+                              >
+                                <Database className="h-3.5 w-3.5 shrink-0" />
+                                CricAPI
+                              </button>
+                            </div>
+                            {syncStatusLine ? (
+                              <p className="text-[9px] font-bold text-slate-500 text-center sm:text-right uppercase tracking-wide leading-snug">
+                                {syncStatusLine}
+                              </p>
+                            ) : null}
+                            {!espnReady && !cricReady && !match.match_ended ? (
+                              <p className="text-[9px] font-black text-amber-600 bg-amber-50 px-2 py-1 rounded uppercase text-center sm:text-right w-fit sm:ml-auto">
+                                Live soon
+                              </p>
+                            ) : null}
                          </div>
-
-                         {/* Scorecard Modal */}
-                         <Dialog open={expandedScorecardId === match.api_match_id} onOpenChange={(o) => setExpandedScorecardId(o ? match.api_match_id : null)}>
-                            <DialogContent className="max-w-[95vw] sm:max-w-4xl bg-[#F8FAFC] border-0 p-0 rounded-[2rem] overflow-hidden">
-                               <div className="bg-slate-900 p-8 text-white flex flex-col gap-1">
-                                 <DialogTitle className="text-2xl font-black uppercase italic">Match Statistics</DialogTitle>
-                                 <p className="text-[10px] font-black uppercase tracking-widest text-white/60">ESPNcricinfo</p>
-                               </div>
-                               <div className="p-4 sm:p-8 max-h-[75vh] min-h-[60vh] overflow-y-auto no-scrollbar">
-                                 {expandedScorecardId === match.api_match_id ? (() => {
-                                   const mn = espnMatchNo(match);
-                                   const espn = mn != null ? espnScorecardByMatchNo[mn] : null;
-                                   const espnLoading = mn != null ? !!espnScorecardLoadingByMatchNo[mn] : false;
-                                   const pointsSyncedModal = mn != null ? !!fixturePointsSyncedByMatchNo[mn] : false;
-
-                                   if (mn == null) {
-                                     return (
-                                       <div className="px-2 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
-                                         Score not available for this category.
-                                       </div>
-                                     );
-                                   }
-                                   if (espnLoading) {
-                                     return (
-                                       <div className="px-2 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
-                                         Loading ESPN scorecard…
-                                       </div>
-                                     );
-                                   }
-                                   if (!pointsSyncedModal) {
-                                     return (
-                                       <div className="px-2 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
-                                         Score not available for this category.
-                                       </div>
-                                     );
-                                   }
-                                   return <ScorecardViewer scorecard={(espn ?? {}) as any} />;
-                                 })() : null}
-                               </div>
-                            </DialogContent>
-                         </Dialog>
-
-                         {/* Points Modal - Team-Aware Calculation */}
-                         <Dialog open={expandedPointsId === match.api_match_id} onOpenChange={(o) => { setExpandedPointsId(o ? match.api_match_id : null); setShowBreakdownId(null); }}>
-                            <DialogContent className="max-w-[95vw] sm:max-w-3xl bg-white border-0 p-0 rounded-[2rem] overflow-hidden">
-                               <div className="bg-gradient-to-br from-indigo-600 to-blue-700 p-8 text-white">
-                                  <DialogTitle className="text-2xl font-black uppercase tracking-tight leading-none">Scoring Intelligence</DialogTitle>
-                                  <p className="text-[9px] font-black uppercase opacity-90 mt-1.5 leading-none">
-                                    {match.team1_short} vs {match.team2_short} • ESPN scorecard • PJ Rules
-                                  </p>
-                               </div>
-                               <div className="p-2 sm:p-8 max-h-[75vh] min-h-[60vh] overflow-y-auto no-scrollbar">
-                                  <table className="w-full text-left">
-                                     <thead className="bg-slate-50 border-b">
-                                        <tr><th className="px-4 py-4 text-[9px] font-black uppercase opacity-30">Selection</th><th className="px-3 py-4 text-[9px] font-black opacity-30 text-center uppercase">Contribution</th><th className="px-4 py-4 text-[11px] font-black text-right uppercase">Final Points</th></tr>
-                                     </thead>
-                                     <tbody className="divide-y divide-slate-100">
-                                        {expandedPointsId === match.api_match_id ? (() => {
-                                          const mn = espnMatchNo(match);
-                                          const key = match.api_match_id;
-                                          const rows = breakdownCache[key];
-                                          const isLoading = breakdownLoadingKey === key;
-                                          const pointsSyncedRow = mn != null ? !!fixturePointsSyncedByMatchNo[mn] : false;
-                                          const espnLoadingRow = mn != null ? !!espnScorecardLoadingByMatchNo[mn] : false;
-
-                                          if (mn == null) {
-                                            return (
-                                              <tr>
-                                                <td colSpan={3} className="px-6 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
-                                                  Score not available for this category.
-                                                </td>
-                                              </tr>
-                                            );
-                                          }
-                                          if (!pointsSyncedRow) {
-                                            return (
-                                              <tr>
-                                                <td colSpan={3} className="px-6 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
-                                                  Score not available for this category.
-                                                </td>
-                                              </tr>
-                                            );
-                                          }
-                                          if (espnLoadingRow) {
-                                            return (
-                                              <tr>
-                                                <td colSpan={3} className="px-6 py-10 text-center text-[11px] font-black uppercase tracking-widest text-slate-400">
-                                                  Loading ESPN scorecard…
-                                                </td>
-                                              </tr>
-                                            );
-                                          }
-
-                                          if (isLoading) {
-                                            return (
-                                              <tr>
-                                                <td colSpan={3} className="px-6 py-10 text-center">
-                                                  <div className="inline-flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400">
-                                                    <Loader2 className="h-4 w-4 animate-spin" />
-                                                    Computing scores…
-                                                  </div>
-                                                </td>
-                                              </tr>
-                                            );
-                                          }
-
-                                          if (!rows) {
-                                            return (
-                                              <tr>
-                                                <td colSpan={3} className="px-6 py-10 text-center">
-                                                  <div className="inline-flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-slate-400">
-                                                    <Loader2 className="h-4 w-4 animate-spin" />
-                                                    Computing scores…
-                                                  </div>
-                                                </td>
-                                              </tr>
-                                            );
-                                          }
-
-                                          return rows.map((p: any) => {
-                                            const d11 = getD11ForRow(p);
-                                            return (
-                                              <React.Fragment key={`${p.n}_${p.team}`}>
-                                                <tr
-                                                  onClick={() => setShowBreakdownId(showBreakdownId === `${p.n}_${p.team}` ? null : `${p.n}_${p.team}`)}
-                                                  className={cn("hover:bg-slate-50 cursor-pointer transition-all", showBreakdownId === `${p.n}_${p.team}` ? "bg-slate-50" : "")}
-                                                >
-                                                  <td className="px-4 py-4">
-                                                    <div className="flex items-center gap-1.5">
-                                                      <span className="text-xs font-black uppercase text-slate-800 leading-none">{p.n}</span>
-                                                      <ChevronRight size={10} className={cn("text-indigo-500", showBreakdownId === `${p.n}_${p.team}` ? "rotate-90" : "")} />
-                                                    </div>
-                                                    <p className="text-[7px] font-black uppercase text-slate-400 mt-1">
-                                                      {p.team} • {p.role}
-                                                    </p>
-                                                  </td>
-                                                  <td className="px-3 py-4 text-center">
-                                                    <div className="text-[9px] font-black text-slate-900 leading-none">
-                                                      {p.r}R • {p.w}W • {p.c}C
-                                                    </div>
-                                                  </td>
-                                                  <td className="px-4 py-4 text-right">
-                                                    <div className="text-sm font-black text-slate-900">{Math.round(p.total)}</div>
-                                                    {d11.appliedMultiplier > 1 ? (
-                                                      <div className="text-[8px] font-bold text-indigo-600 mt-1 leading-tight">
-                                                        Bonus multiplier {d11.multipliedTotal.toFixed(1)} pts
-                                                        <span className="text-indigo-400"> · {d11.appliedMultiplier}×</span>
-                                                      </div>
-                                                    ) : null}
-                                                  </td>
-                                                </tr>
-                                                {showBreakdownId === `${p.n}_${p.team}` && (
-                                                  <tr className="bg-slate-50/50 border-none">
-                                                    <td colSpan={3} className="px-4 pb-6 pt-2 border-none">
-                                                      <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-inner max-w-xl animate-in slide-in-from-top-2">
-                                                        <div className="space-y-4">
-                                                          <h4 className="text-[8px] font-black uppercase text-indigo-600 tracking-widest border-b border-slate-100 pb-2">
-                                                            PJ Rules Breakdown ({p.team})
-                                                          </h4>
-                                                          {(() => {
-                                                            const d = getPjDetailForRow(p);
-                                                            const sumL = (lines: { pts: number }[]) =>
-                                                              lines.reduce((a, l) => a + l.pts, 0);
-                                                            const fmt = (n: number) =>
-                                                              `${n >= 0 ? "+" : "−"}${Math.abs(n).toFixed(1)}`;
-                                                            const Block = ({
-                                                              title,
-                                                              lines,
-                                                              subtotal,
-                                                            }: {
-                                                              title: string;
-                                                              lines: { label: string; pts: number; detail?: string }[];
-                                                              subtotal: number;
-                                                            }) => (
-                                                              <div className="space-y-1.5">
-                                                                <div className="flex justify-between items-baseline gap-2">
-                                                                  <span className="text-[9px] font-black uppercase tracking-wider text-slate-500">
-                                                                    {title}
-                                                                  </span>
-                                                                  <span className="text-[10px] font-black text-slate-800 tabular-nums">
-                                                                    {fmt(subtotal)}
-                                                                  </span>
-                                                                </div>
-                                                                <ul className="space-y-1 border-l-2 border-slate-100 pl-3">
-                                                                  {lines.length === 0 ? (
-                                                                    <li className="text-[9px] text-slate-400 italic">No points in this category</li>
-                                                                  ) : (
-                                                                    lines.map((line, i) => (
-                                                                      <li key={`${title}-${i}`} className="text-[9px] leading-snug">
-                                                                        <div className="flex justify-between gap-3">
-                                                                          <span className="text-slate-600 font-medium">{line.label}</span>
-                                                                          <span
-                                                                            className={cn(
-                                                                              "font-mono font-bold tabular-nums shrink-0",
-                                                                              line.pts >= 0 ? "text-emerald-700" : "text-rose-600"
-                                                                            )}
-                                                                          >
-                                                                            {fmt(line.pts)}
-                                                                          </span>
-                                                                        </div>
-                                                                        {line.detail ? (
-                                                                          <p className="text-[7px] text-slate-400 mt-0.5 font-medium uppercase tracking-tight">
-                                                                            {line.detail}
-                                                                          </p>
-                                                                        ) : null}
-                                                                      </li>
-                                                                    ))
-                                                                  )}
-                                                                </ul>
-                                                              </div>
-                                                            );
-                                                            return (
-                                                              <>
-                                                                <Block
-                                                                  title="Entry & playing XI"
-                                                                  lines={d.extras}
-                                                                  subtotal={sumL(d.extras)}
-                                                                />
-                                                                <Block
-                                                                  title="Batting"
-                                                                  lines={d.batting}
-                                                                  subtotal={sumL(d.batting)}
-                                                                />
-                                                                <Block
-                                                                  title="Bowling"
-                                                                  lines={d.bowling}
-                                                                  subtotal={sumL(d.bowling)}
-                                                                />
-                                                                <Block
-                                                                  title="Fielding"
-                                                                  lines={d.fielding}
-                                                                  subtotal={sumL(d.fielding)}
-                                                                />
-                                                                <div className="border-t border-slate-200 pt-3 flex justify-between items-center gap-2">
-                                                                  <span className="text-[11px] font-black uppercase text-slate-900">
-                                                                    Final total (base PJ)
-                                                                  </span>
-                                                                  <span className="text-sm font-black text-slate-900 tabular-nums">
-                                                                    {fmt(Number(p.total || 0))}
-                                                                  </span>
-                                                                </div>
-                                                                <div className="rounded-xl bg-indigo-50/80 border border-indigo-100 p-3 space-y-2">
-                                                                  <div className="text-[8px] font-black uppercase tracking-widest text-indigo-700 border-b border-indigo-100 pb-1.5">
-                                                                    Bonus multiplier (on total base points)
-                                                                  </div>
-                                                                  <div className="space-y-1 text-[9px]">
-                                                                    <div className="flex justify-between gap-2">
-                                                                      <span className="text-slate-600 font-semibold">Runs tier</span>
-                                                                      <span className="font-mono font-bold text-slate-800">
-                                                                        {d11.runMultiplier}×
-                                                                      </span>
-                                                                    </div>
-                                                                    <p className="text-[7px] text-slate-500 uppercase tracking-tight leading-tight">
-                                                                      {d11.runTierLabel}
-                                                                    </p>
-                                                                    <div className="flex justify-between gap-2 pt-1">
-                                                                      <span className="text-slate-600 font-semibold">Wickets tier</span>
-                                                                      <span className="font-mono font-bold text-slate-800">
-                                                                        {d11.wicketMultiplier}×
-                                                                      </span>
-                                                                    </div>
-                                                                    <p className="text-[7px] text-slate-500 uppercase tracking-tight leading-tight">
-                                                                      {d11.wicketTierLabel}
-                                                                    </p>
-                                                                    <div className="flex justify-between gap-2 pt-2 border-t border-indigo-100 items-baseline">
-                                                                      <span className="text-indigo-900 font-black uppercase text-[9px]">
-                                                                        Applied (max)
-                                                                      </span>
-                                                                      <span className="text-sm font-black text-indigo-700 tabular-nums">
-                                                                        {d11.appliedMultiplier}×
-                                                                      </span>
-                                                                    </div>
-                                                                    <p className="text-[7px] text-indigo-600/90 font-bold uppercase tracking-tight">
-                                                                      {d11.appliedSource === "none" && "No bonus tier — 1×"}
-                                                                      {d11.appliedSource === "runs" &&
-                                                                        "Higher multiplier from runs"}
-                                                                      {d11.appliedSource === "wickets" &&
-                                                                        "Higher multiplier from wickets"}
-                                                                      {d11.appliedSource === "both" &&
-                                                                        "Runs & wickets tie on same multiplier"}
-                                                                    </p>
-                                                                    <div className="flex justify-between gap-2 pt-1 border-t border-indigo-100">
-                                                                      <span className="text-slate-800 font-black uppercase text-[10px]">
-                                                                        Points after bonus multiplier
-                                                                      </span>
-                                                                      <span className="text-sm font-black text-indigo-800 tabular-nums">
-                                                                        {fmt(d11.multipliedTotal)}
-                                                                      </span>
-                                                                    </div>
-                                                                    <p className="text-[7px] text-slate-500 leading-relaxed normal-case font-medium">
-                                                                      {Number(p.total || 0).toFixed(1)} base × {d11.appliedMultiplier} ={" "}
-                                                                      {d11.multipliedTotal.toFixed(1)}
-                                                                    </p>
-                                                                  </div>
-                                                                </div>
-                                                              </>
-                                                            );
-                                                          })()}
-                                                        </div>
-                                                      </div>
-                                                        </td></tr>
-                                                     )}
-                                                  </React.Fragment>
-                                               );
-                                            });
-                                        })() : null}
-                                     </tbody>
-                                  </table>
-                               </div>
-                            </DialogContent>
-                         </Dialog>
                       </div>
                       </div>
                    )})}
                 </div>
              ))}
+          {fixtureModal && (
+            <div className="fixed inset-0 z-[100] flex items-stretch sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-300">
+              <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={closeFixtureModal} />
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="scoreboard-fixture-modal-title"
+                className="relative w-full max-w-4xl h-[100dvh] sm:h-auto sm:max-h-[90vh] bg-white rounded-none sm:rounded-3xl shadow-2xl flex flex-col overflow-hidden animate-in slide-in-from-bottom duration-500 min-h-0"
+              >
+                <div className="px-3 sm:px-6 py-3 sm:py-4 border-b border-slate-100 flex items-start gap-2 sm:gap-4 bg-white shrink-0">
+                  <div className="flex items-start gap-2 sm:gap-4 min-w-0 flex-1">
+                    <div
+                      className={cn(
+                        "h-9 w-9 sm:h-10 sm:w-10 rounded-xl flex items-center justify-center shadow-lg shrink-0 mt-0.5",
+                        fixtureModal.source === "espn" ? "bg-white border border-slate-200" : "bg-blue-600 shadow-blue-100"
+                      )}
+                    >
+                      {fixtureModal.source === "espn" ? (
+                        <Radio className="h-4 w-4 sm:h-5 sm:w-5 text-slate-800" />
+                      ) : (
+                        <Trophy className="h-4 w-4 sm:h-5 sm:w-5 text-white" />
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1 pr-1">
+                      <h2
+                        id="scoreboard-fixture-modal-title"
+                        className="text-sm sm:text-lg font-black uppercase tracking-tight text-slate-900 leading-snug break-words"
+                      >
+                        {fixtureModal.fixture.title || "Match"}
+                      </h2>
+                      <p className="text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase tracking-wide sm:tracking-widest mt-1 leading-relaxed break-words">
+                        {fixtureModal.source === "espn" ? "ESPN (fixtures table)" : "CricAPI (fixtures_cricapi)"}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={closeFixtureModal}
+                    className="p-2 -mr-1 hover:bg-slate-100 rounded-full transition-colors group shrink-0 touch-manipulation"
+                    aria-label="Close"
+                  >
+                    <XCircle className="h-6 w-6 text-slate-300 group-hover:text-slate-600" />
+                  </button>
+                </div>
+
+                <Tabs
+                  value={fixtureModalTab}
+                  onValueChange={(v) => setFixtureModalTab(v as "scorecard" | "fantasy")}
+                  className="flex flex-col flex-1 min-h-0 overflow-hidden"
+                >
+                  <div className="px-3 sm:px-6 pt-2 sm:pt-3 pb-2 border-b border-slate-100 bg-slate-50/80 shrink-0">
+                    <TabsList className="w-full h-auto min-h-10 flex-wrap sm:flex-nowrap gap-1 p-1">
+                      <TabsTrigger value="scorecard" className="flex-1 min-w-[8rem] text-xs sm:text-sm py-2 touch-manipulation">
+                        Scorecard
+                      </TabsTrigger>
+                      <TabsTrigger value="fantasy" className="flex-1 min-w-[8rem] text-xs sm:text-sm py-2 touch-manipulation">
+                        <span className="hidden sm:inline">Fantasy points</span>
+                        <span className="sm:hidden">Fantasy</span>
+                      </TabsTrigger>
+                    </TabsList>
+                  </div>
+
+                  <TabsContent value="scorecard" className="flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-6 md:p-8 mt-0 min-h-0">
+                    {fixtureModal.source === "cricapi" && (
+                      <>
+                        {modalRefreshing ? (
+                          <div className="flex flex-col items-center justify-center py-20 gap-4 px-2">
+                            <Loader2 className="h-10 w-10 text-blue-600 animate-spin" />
+                            <p className="text-xs font-black text-slate-400 uppercase tracking-widest text-center leading-relaxed">
+                              Loading from database…
+                            </p>
+                          </div>
+                        ) : cricapiViewer?.innings ? (
+                          <div className="w-full min-w-0 overflow-x-auto -mx-1 px-1 sm:mx-0 sm:px-0">
+                            <ScorecardViewer scorecard={cricapiViewer} />
+                          </div>
+                        ) : (
+                          <p className="text-center text-sm font-bold text-slate-400 py-16 uppercase tracking-wide">
+                            No scorecard in DB yet for this match.
+                          </p>
+                        )}
+                      </>
+                    )}
+                    {fixtureModal.source === "espn" && (
+                      <>
+                        {espnModalMn == null ? (
+                          <p className="text-center text-sm font-bold text-slate-400 py-16 uppercase tracking-wide">
+                            No <code className="font-mono">match_no</code> — link this fixture to ESPN in Supabase.
+                          </p>
+                        ) : espnModalLoading ? (
+                          <div className="flex flex-col items-center justify-center py-20 gap-4">
+                            <Loader2 className="h-10 w-10 text-slate-600 animate-spin" />
+                            <p className="text-xs font-black text-slate-400 uppercase tracking-widest">
+                              Loading ESPN scorecard from database…
+                            </p>
+                          </div>
+                        ) : espnModalScore?.innings?.length ? (
+                          <div className="w-full min-w-0 overflow-x-auto -mx-1 px-1 sm:mx-0 sm:px-0">
+                            <ScorecardViewer scorecard={espnModalScore} />
+                          </div>
+                        ) : (
+                          <p className="text-center text-sm font-bold text-slate-400 py-16 uppercase tracking-wide">
+                            No ESPN scorecard stored for this match_no.
+                          </p>
+                        )}
+                      </>
+                    )}
+                  </TabsContent>
+
+                  <TabsContent value="fantasy" className="flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-6 mt-0 min-h-0">
+                    {fixtureModal.source === "cricapi" && (
+                      <>
+                        {modalRefreshing ? (
+                          <div className="flex justify-center py-16">
+                            <Loader2 className="h-8 w-8 text-blue-600 animate-spin" />
+                          </div>
+                        ) : cricapiFantasyRows.length === 0 ? (
+                          <p className="text-center text-sm font-bold text-slate-400 py-16 px-2 leading-relaxed">
+                            No fantasy rows — save a CricAPI scorecard to the DB first.
+                          </p>
+                        ) : (
+                          <div className="w-full min-w-0 overflow-x-auto rounded-lg border border-slate-100">
+                            <Table>
+                              <TableHeader>
+                                <TableRow>
+                                  <TableHead className="w-8 sm:w-10 px-2 sm:px-4" />
+                                  <TableHead className="min-w-[7rem] max-w-[40vw]">Player</TableHead>
+                                  <TableHead className="min-w-[4rem]">Team</TableHead>
+                                  <TableHead className="text-right whitespace-nowrap">PJ</TableHead>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {cricapiFantasyRows.map((row) => {
+                                  const open = expandedCricapiFantasyId === row.player_id;
+                                  const { breakdown, scoring } = row;
+                                  return (
+                                    <React.Fragment key={row.player_id}>
+                                      <TableRow
+                                        className="cursor-pointer touch-manipulation"
+                                        onClick={() => setExpandedCricapiFantasyId(open ? null : row.player_id)}
+                                      >
+                                        <TableCell className="px-2 sm:px-4 align-top">{open ? "▼" : "▶"}</TableCell>
+                                        <TableCell className="max-w-[40vw] sm:max-w-none">
+                                          <div className="font-semibold text-slate-900 text-sm leading-snug break-words">
+                                            {row.player_name}
+                                          </div>
+                                          <div className="text-[10px] text-slate-500 break-words">{row.fantasy.playerRole}</div>
+                                        </TableCell>
+                                        <TableCell className="align-top">
+                                          {row.team ? (
+                                            <Badge
+                                              variant="secondary"
+                                              className="whitespace-normal text-center max-w-[6rem] sm:max-w-none break-words"
+                                            >
+                                              {row.team}
+                                            </Badge>
+                                          ) : (
+                                            "—"
+                                          )}
+                                        </TableCell>
+                                        <TableCell className="text-right font-bold tabular-nums align-top whitespace-nowrap">
+                                          {scoring.total_pts}
+                                        </TableCell>
+                                      </TableRow>
+                                      {open ? (
+                                        <TableRow>
+                                          <TableCell colSpan={4} className="bg-slate-50 p-3 sm:p-4">
+                                            <div className="grid gap-4 sm:grid-cols-2 text-sm min-w-0">
+                                              <FantasyBreakdownBlock title="Batting" lines={breakdown.batting} />
+                                              <FantasyBreakdownBlock title="Bowling" lines={breakdown.bowling} />
+                                              <FantasyBreakdownBlock title="Fielding" lines={breakdown.fielding} />
+                                              <FantasyBreakdownBlock title="Extras" lines={breakdown.extras} />
+                                            </div>
+                                          </TableCell>
+                                        </TableRow>
+                                      ) : null}
+                                    </React.Fragment>
+                                  );
+                                })}
+                              </TableBody>
+                            </Table>
+                          </div>
+                        )}
+                      </>
+                    )}
+                    {fixtureModal.source === "espn" && (
+                      <>
+                        {espnModalMn == null ? (
+                          <p className="text-center text-sm font-bold text-slate-400 py-16 uppercase tracking-wide">
+                            Need <code className="font-mono">match_no</code> for ESPN PJ breakdown.
+                          </p>
+                        ) : espnModalLoading ? (
+                          <div className="flex justify-center py-16">
+                            <Loader2 className="h-8 w-8 text-slate-600 animate-spin" />
+                          </div>
+                        ) : espnModalPjRows.length === 0 ? (
+                          <p className="text-center text-sm font-bold text-slate-400 py-16">
+                            Load an ESPN scorecard from the database (Scorecard tab) to compute PJ points.
+                          </p>
+                        ) : (
+                          <div className="w-full min-w-0 overflow-x-auto rounded-lg border border-slate-100">
+                            <Table>
+                              <TableHeader>
+                                <TableRow>
+                                  <TableHead className="min-w-[10rem]">Player</TableHead>
+                                  <TableHead className="min-w-[5rem]">Team</TableHead>
+                                  <TableHead className="text-right whitespace-nowrap">PJ</TableHead>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {espnModalPjRows.map((row) => (
+                                  <TableRow key={`${row.n}_${row.team}`}>
+                                    <TableCell className="font-medium text-sm break-words max-w-[50vw] sm:max-w-none">
+                                      {row.n}
+                                    </TableCell>
+                                    <TableCell className="align-top">
+                                      <Badge variant="outline" className="whitespace-normal break-words max-w-[7rem]">
+                                        {row.team}
+                                      </Badge>
+                                    </TableCell>
+                                    <TableCell className="text-right font-bold tabular-nums whitespace-nowrap">{row.total}</TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </TabsContent>
+                </Tabs>
+
+                <div className="p-3 sm:p-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-slate-50 border-t border-slate-100 text-center shrink-0">
+                  <button
+                    type="button"
+                    onClick={closeFixtureModal}
+                    className="w-full sm:w-auto min-h-[48px] px-8 py-3 bg-white border border-slate-200 text-slate-900 rounded-xl text-xs font-black uppercase tracking-widest shadow-sm touch-manipulation active:bg-slate-50"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
           </div>
         )}
 

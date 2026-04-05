@@ -33,8 +33,9 @@ export function adaptCricApiToScorecardViewer(scorecard: CricApiScorecard) {
   }
 
   const matchTeams = scorecard?.teams;
+  const scoreLines = (scorecard?.score || []) as any[];
 
-  const innings = ((scorecard?.scorecard || []) as any[]).map((inn) => {
+  const innings = ((scorecard?.scorecard || []) as any[]).map((inn, idx) => {
     const team = parseTeamFromInningLabel(inn?.inning);
     const bowling_team = opponentTeamName(team, matchTeams);
 
@@ -69,10 +70,12 @@ export function adaptCricApiToScorecardViewer(scorecard: CricApiScorecard) {
           .join(", ")
       : "";
 
-    const totalRuns = inn?.totals?.r ?? "";
-    const totalWkts = inn?.totals?.w ?? "";
-    const totalOvers = inn?.totals?.o ?? "";
-    const totalScore = totalRuns !== "" && totalWkts !== "" ? `${totalRuns}/${totalWkts}` : "";
+    const line = scoreLines[idx] as { r?: number; w?: number; o?: number } | undefined;
+    const totalRuns = inn?.totals?.r ?? line?.r ?? "";
+    const totalWkts = inn?.totals?.w ?? line?.w ?? "";
+    const totalOvers = inn?.totals?.o ?? line?.o ?? "";
+    const totalScore =
+      totalRuns !== "" && totalWkts !== "" ? `${totalRuns}/${totalWkts}` : "";
 
     return {
       team,
