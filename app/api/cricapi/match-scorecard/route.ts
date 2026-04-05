@@ -22,9 +22,13 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Missing query parameter: id or matchId" }, { status: 400 });
   }
 
-  const key = process.env.CRICAPI_KEY || process.env.NEXT_PUBLIC_CRICAPI_KEY;
+  const key =
+    process.env.NEXT_PUBLIC_CRICAPI_KEY || process.env.CRICAPI_KEY;
   if (!key) {
-    return NextResponse.json({ error: "Server missing CRICAPI_KEY (or NEXT_PUBLIC_CRICAPI_KEY)" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Server missing NEXT_PUBLIC_CRICAPI_KEY (or CRICAPI_KEY)" },
+      { status: 500 },
+    );
   }
 
   const url = new URL(CRICAPI_BASE);

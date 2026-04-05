@@ -39,4 +39,12 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-scripts/scrapper
+
+# Python / local script output (never commit)
+scripts/__pycache__/
+scripts/.cache/
+scripts/**/*.pyc
+scripts/ipl_fantasy_output.json
+scripts/scraped_scorecard.json
+scripts/cricapi_scorecard_snapshots/*.json
+scripts/scrapper/

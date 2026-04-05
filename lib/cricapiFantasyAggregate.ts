@@ -1,7 +1,8 @@
 /**
  * Build per-player PJ fantasy stats from a raw CricAPI `match_scorecard.data` object
  * (same shape as https://api.cricapi.com/v1/match_scorecard).
- * Mirrors `scripts/ipl_fantasy.py` `transform()` (without Cricsheet dot-ball enrichment).
+ * Mirrors `scripts/ipl_fantasy.py` `transform()` including `dot_balls` / `0s` on bowling rows
+ * (populate those via Cricsheet merge before storing the scorecard in Supabase).
  */
 
 import {
@@ -196,6 +197,9 @@ export function aggregateFantasyRowsFromCricApiMatchData(data: Record<string, un
       p.bowling.maidens += Number(b.m ?? 0) || 0;
       p.bowling.runs_conceded += Number(b.r ?? 0) || 0;
       p.bowling.wickets += Number(b.w ?? 0) || 0;
+      let dotsRow = b.dot_balls;
+      if (dotsRow == null) dotsRow = b["0s"];
+      p.bowling.dot_balls += Number(dotsRow ?? 0) || 0;
     }
 
     for (const c of inning.catching || []) {

@@ -256,7 +256,8 @@ export default function ScorecardAuditPage() {
       players[pId].stats.runsConceded = bw.r;
       players[pId].stats.economyRate = bw.eco;
       players[pId].stats.oversMoved = bw.o;
-      players[pId].stats.dotBalls = bw.dots || 0;
+      players[pId].stats.dotBalls =
+        Number(bw["0s"] ?? bw.dot_balls ?? bw.dots ?? 0) || 0;
     });
     if (inning.catching) {
         inning.catching.forEach((c: any) => {

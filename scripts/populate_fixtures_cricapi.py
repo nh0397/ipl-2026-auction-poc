@@ -16,8 +16,8 @@ SB_SERVICE_KEY = (
     or SUPABASE_KEY
 )
 
-# Your env var may be named either `CRICAPI_KEY` or `NEXT_PUBLIC_CRICAPI_KEY`.
-CRICAPI_KEY = os.getenv("CRICAPI_KEY") or os.getenv("NEXT_PUBLIC_CRICAPI_KEY")
+# Prefer NEXT_PUBLIC_CRICAPI_KEY (Next.js .env); CRICAPI_KEY is a fallback.
+CRICAPI_KEY = os.getenv("NEXT_PUBLIC_CRICAPI_KEY") or os.getenv("CRICAPI_KEY")
 CRICAPI_BASE_URL = "https://api.cricapi.com/v1"
 
 IPL_2026_SERIES_ID = "87c62aac-bc3c-4738-ab93-19da0690488f"
@@ -46,7 +46,7 @@ def parse_match_no(match_name: str) -> Optional[int]:
 
 def fetch_series_matches(series_id: str) -> List[Dict[str, Any]]:
     if not CRICAPI_KEY:
-        raise RuntimeError("Missing CRICAPI_KEY in .env")
+        raise RuntimeError("Missing NEXT_PUBLIC_CRICAPI_KEY (or CRICAPI_KEY) in .env")
 
     res = requests.get(
         f"{CRICAPI_BASE_URL}/series_info",

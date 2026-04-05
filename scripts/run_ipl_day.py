@@ -3,8 +3,9 @@
 One entrypoint for a calendar day (IST):
 
   fixtures_cricapi where match_date = 'YYYY-MM-DD' (same as: select * … where match_date = $day) → api_match_id → …
-  → Cricsheet ipl_json.zip (readme.txt → match id → {id}.json) → bowler dot balls
+  → Cricsheet ipl_json.zip → merge dot balls onto each scorecard bowling row (+ aggregate map)
   → Supabase PATCH scorecard + points_synced + fixtureapi_points
+  → Upsert public.match_points (needs fixtures_cricapi.match_no + public.matches + name match on players)
 
 Everything lives in this file until you outgrow it.
 
@@ -13,7 +14,7 @@ Usage:
   python3 scripts/run_ipl_day.py                      # today (IST)
 
 Env: .env with NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY (or anon),
-     CRICAPI_KEY or NEXT_PUBLIC_CRICAPI_KEY.
+     NEXT_PUBLIC_CRICAPI_KEY or CRICAPI_KEY.
 Optional: CRICAPI_SCORECARD_SLEEP_SECONDS (default 1.0)
 
 Cricsheet: always downloads a fresh ipl_json.zip each run (URL updates often; CI runners are clean anyway).
@@ -22,7 +23,6 @@ Cricsheet: always downloads a fresh ipl_json.zip each run (URL updates often; CI
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import tempfile
@@ -41,7 +41,7 @@ load_dotenv(os.path.join(_HERE, "../.env"))
 SUPABASE_URL = os.getenv("NEXT_PUBLIC_SUPABASE_URL")
 SUPABASE_KEY = os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY")
 SB_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ACCESS_TOKEN") or SUPABASE_KEY
-CRICAPI_KEY = os.getenv("CRICAPI_KEY") or os.getenv("NEXT_PUBLIC_CRICAPI_KEY")
+CRICAPI_KEY = os.getenv("NEXT_PUBLIC_CRICAPI_KEY") or os.getenv("CRICAPI_KEY")
 CRICAPI_BASE = "https://api.cricapi.com/v1"
 FIXTURES_TABLE = "fixtures_cricapi"
 CRICSHEET_ZIP_URL = "https://cricsheet.org/downloads/ipl_json.zip"
@@ -227,66 +227,6 @@ def find_cricsheet_match_id(
     return None, None
 
 
-def bowler_dots_from_cricsheet_json(data: Dict[str, Any]) -> Dict[str, int]:
-    """
-    Legal deliveries with total runs 0 (no wide / no-ball) → +1 dot for that bowler.
-    Aligns with scripts/ipl_fantasy.py BBB index logic.
-    """
-    dots: Dict[str, int] = {}
-    for inning in data.get("innings", []) or []:
-        for over in inning.get("overs", []) or []:
-            for delivery in over.get("deliveries", []) or []:
-                runs = delivery.get("runs") or {}
-                extras = delivery.get("extras") or {}
-                bowler = (delivery.get("bowler") or "").strip()
-                if not bowler:
-                    continue
-                total = int(runs.get("total", 0) or 0)
-                if "wides" in extras or "noballs" in extras:
-                    continue
-                if total == 0:
-                    dots[bowler] = dots.get(bowler, 0) + 1
-    return dots
-
-
-def load_dots_for_cricsheet_id(zip_path: str, cricsheet_id: str) -> Dict[str, int]:
-    name = f"{cricsheet_id}.json"
-    with zipfile.ZipFile(zip_path, "r") as zf:
-        # zip may nest files in a folder
-        candidates = [n for n in zf.namelist() if n.endswith("/" + name) or n.endswith(name)]
-        if not candidates:
-            raise FileNotFoundError(f"{name} not found in zip")
-        raw = zf.read(candidates[0])
-    data = json.loads(raw.decode("utf-8"))
-    return bowler_dots_from_cricsheet_json(data)
-
-
-def enrich_scorecard_with_cricsheet(
-    cricapi_data: Dict[str, Any],
-    match_date: str,
-    team1_name: str,
-    team2_name: str,
-    zip_path: str,
-) -> Dict[str, Any]:
-    """Merge dot counts + ids into the blob we store (extra keys; CricAPI adapter ignores unknown fields)."""
-    out = dict(cricapi_data)
-    cid, line = find_cricsheet_match_id(zip_path, match_date, team1_name, team2_name)
-    if not cid:
-        out["cricsheet_enrichment_error"] = (
-            f"No readme row for {match_date} with teams {team1_name!r} vs {team2_name!r}"
-        )
-        return out
-    try:
-        dots = load_dots_for_cricsheet_id(zip_path, cid)
-    except Exception as e:
-        out["cricsheet_enrichment_error"] = str(e)
-        return out
-    out["cricsheet_match_id"] = cid
-    out["cricsheet_readme_line"] = line
-    out["cricsheet_bowler_dots"] = dots
-    return out
-
-
 # ── main ────────────────────────────────────────────────────────────────────
 
 
@@ -294,7 +234,7 @@ def main() -> None:
     if not SUPABASE_URL or not SB_SERVICE_KEY:
         raise SystemExit("Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env")
     if not CRICAPI_KEY:
-        raise SystemExit("Missing CRICAPI_KEY or NEXT_PUBLIC_CRICAPI_KEY in .env")
+        raise SystemExit("Missing NEXT_PUBLIC_CRICAPI_KEY (or CRICAPI_KEY) in .env")
 
     ap = argparse.ArgumentParser(
         description="Select fixtures_cricapi by match_date, then CricAPI scorecard + optional Cricsheet dots."
@@ -304,6 +244,11 @@ def main() -> None:
         "--skip-cricsheet",
         action="store_true",
         help="Only CricAPI scorecard (no zip / readme / dots).",
+    )
+    ap.add_argument(
+        "--skip-match-points",
+        action="store_true",
+        help="Do not upsert public.match_points after saving the scorecard.",
     )
     args = ap.parse_args()
     if args.date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(args.date).strip()):
@@ -324,6 +269,16 @@ def main() -> None:
         except Exception as e:
             print(f"  WARNING: cricsheet zip unavailable ({e}); continuing without dots.")
 
+    players_by_name: Dict[str, str] = {}
+    if not args.skip_match_points:
+        try:
+            from cricapi_match_points import fetch_players_name_map
+
+            players_by_name = fetch_players_name_map()
+            print(f"  [match_points] loaded {len(players_by_name)} player name(s) for catalog match")
+        except Exception as e:
+            print(f"  WARNING: match_points disabled (could not load players): {e}")
+
     updated: List[Dict[str, Any]] = []
     try:
         for i, fx in enumerate(fixtures, start=1):
@@ -338,15 +293,37 @@ def main() -> None:
             sc = fetch_cricapi_scorecard(str(api_mid))
 
             if zip_ready and zip_path and not args.skip_cricsheet:
-                sc = enrich_scorecard_with_cricsheet(sc, str(md), str(t1), str(t2), zip_path)
-                if sc.get("cricsheet_bowler_dots") is not None:
-                    n = len(sc["cricsheet_bowler_dots"])
-                    print(f"  cricsheet match {sc.get('cricsheet_match_id')} — bowler dot map: {n} bowlers")
-                else:
-                    print(f"  cricsheet: {sc.get('cricsheet_enrichment_error', 'unknown')}")
+                from merge_cricsheet_dots_into_scorecard import merge_dots_into_scorecard_data
+
+                sc, dot_meta = merge_dots_into_scorecard_data(sc, str(md), zip_path)
+                if dot_meta.get("cricsheet_match_id"):
+                    print(
+                        f"  cricsheet {dot_meta['cricsheet_match_id']} — "
+                        f"dots on bowling rows + aggregate map"
+                    )
+                for err in dot_meta.get("errors") or []:
+                    print(f"  [dots] {err}")
 
             update_fixture_and_sync_flag(str(fid), str(api_mid), sc)
             print(f"  stored + synced fixture_id={fid}")
+
+            if not args.skip_match_points and players_by_name:
+                from cricapi_match_points import persist_match_points_from_scorecard
+
+                n_pts, skipped, mp_err = persist_match_points_from_scorecard(
+                    str(api_mid), sc, fx.get("match_no"), players_by_name
+                )
+                if mp_err:
+                    print(f"  [match_points] {mp_err}")
+                elif n_pts:
+                    print(f"  [match_points] upserted {n_pts} row(s)")
+                    if skipped:
+                        print(f"  [match_points] {len(skipped)} name(s) not in players table")
+                elif skipped:
+                    print(
+                        f"  [match_points] 0 rows — no catalog match for scorecard names "
+                        f"(sample: {skipped[:5]})"
+                    )
             updated.append(
                 {
                     "api_match_id": api_mid,

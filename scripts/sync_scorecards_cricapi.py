@@ -1,11 +1,13 @@
 """
-CricAPI scorecard → Supabase only (no Cricsheet dots).
+CricAPI scorecard → Supabase, with Cricsheet dot balls merged onto each bowling row
+(same logic as merge_cricsheet_dots_into_scorecard.py / run_ipl_day).
 
-For the full day flow (CricAPI + Cricsheet bowler dots in one place), use:
+For a full-day fixtures pass (all rows on a date), prefer:
   scripts/run_ipl_day.py
 """
 
 import os
+import tempfile
 import time
 import requests
 from typing import Any, Dict, List, Optional, Tuple
@@ -20,8 +22,8 @@ SUPABASE_URL = os.getenv("NEXT_PUBLIC_SUPABASE_URL")
 SUPABASE_KEY = os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY")
 SB_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ACCESS_TOKEN") or SUPABASE_KEY
 
-# Your env var may be named either `CRICAPI_KEY` or `NEXT_PUBLIC_CRICAPI_KEY`.
-CRICAPI_KEY = os.getenv("CRICAPI_KEY") or os.getenv("NEXT_PUBLIC_CRICAPI_KEY")
+# Prefer NEXT_PUBLIC_CRICAPI_KEY (Next.js .env); CRICAPI_KEY is a fallback.
+CRICAPI_KEY = os.getenv("NEXT_PUBLIC_CRICAPI_KEY") or os.getenv("CRICAPI_KEY")
 CRICAPI_BASE_URL = "https://api.cricapi.com/v1"
 
 FIXTURES_TABLE = "fixtures_cricapi"
@@ -31,6 +33,25 @@ HEADERS = {
     "Authorization": f"Bearer {SB_SERVICE_KEY}",
     "Content-Type": "application/json",
 }
+
+CRICSHEET_ZIP_URL = "https://cricsheet.org/downloads/ipl_json.zip"
+
+
+def download_cricsheet_zip_to_temp() -> str:
+    r = requests.get(CRICSHEET_ZIP_URL, timeout=120)
+    r.raise_for_status()
+    tf = tempfile.NamedTemporaryFile(prefix="ipl_json_", suffix=".zip", delete=False)
+    try:
+        tf.write(r.content)
+        tf.close()
+        return tf.name
+    except Exception:
+        tf.close()
+        try:
+            os.unlink(tf.name)
+        except OSError:
+            pass
+        raise
 
 
 def fetch_match_bbb(match_id: str) -> Tuple[Optional[Any], Optional[str]]:
@@ -101,7 +122,7 @@ def list_targets(match_date_ist: Optional[str]) -> List[Dict[str, Any]]:
     # Use params so requests handles encoding correctly (PostgREST interprets "+" as space otherwise).
     url = f"{SUPABASE_URL}/rest/v1/{FIXTURES_TABLE}"
     base_params = {
-        "select": "id,api_match_id,match_date,date_time_gmt,match_ended,scorecard,title,match_name,team1_short,team2_short",
+        "select": "id,api_match_id,match_no,match_date,date_time_gmt,match_ended,scorecard,title,match_name,team1_short,team2_short",
         "match_ended": "eq.true",
         "points_synced": "eq.false",
         "scorecard": "is.null",
@@ -154,7 +175,7 @@ def main() -> None:
     if not SUPABASE_URL or not SB_SERVICE_KEY:
         raise RuntimeError("Missing Supabase env vars (NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY).")
     if not CRICAPI_KEY:
-        raise RuntimeError("Missing CricAPI key (NEXT_PUBLIC_CRICAPI_KEY or CRICAPI_KEY).")
+        raise RuntimeError("Missing CricAPI key (set NEXT_PUBLIC_CRICAPI_KEY or CRICAPI_KEY).")
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--date", help="IST date (YYYY-MM-DD). Defaults to today (IST).", default=None)
@@ -162,6 +183,16 @@ def main() -> None:
         "--bbb",
         action="store_true",
         help="Request BBB: pass bbb=true on match_scorecard and merge GET /match_bbb into scorecard as ballByBall (or ballByBallError).",
+    )
+    parser.add_argument(
+        "--skip-cricsheet-dots",
+        action="store_true",
+        help="Store raw CricAPI scorecard only (no Cricsheet zip / per-row dot merge).",
+    )
+    parser.add_argument(
+        "--skip-match-points",
+        action="store_true",
+        help="Do not upsert public.match_points after saving each scorecard.",
     )
     args = parser.parse_args()
     if args.date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(args.date).strip()):
@@ -177,25 +208,79 @@ def main() -> None:
 
     updated: List[Dict[str, Any]] = []
 
-    for idx, f in enumerate(targets, start=1):
-        fixture_id = f.get("id")
-        match_id = f.get("api_match_id")
-        if not fixture_id or not match_id:
-            continue
-        print(f"[{idx}/{len(targets)}] Fetching scorecard {match_id} …" + (" (with BBB)" if include_bbb else ""))
-        sc = fetch_scorecard(match_id, include_bbb=include_bbb)
-        update_fixture_scorecard_and_mark_synced(fixture_id, str(match_id), sc)
-        print(f"  ✅ stored scorecard + set points_synced=true for fixture_id={fixture_id}")
-        updated.append(
-            {
-                "api_match_id": match_id,
-                "match_date": f.get("match_date") or "",
-                "title": f.get("title") or f.get("match_name") or "",
-                "team1_short": f.get("team1_short") or "",
-                "team2_short": f.get("team2_short") or "",
-            }
-        )
-        time.sleep(sleep_s)
+    players_by_name: Dict[str, str] = {}
+    if targets and not args.skip_match_points:
+        try:
+            from cricapi_match_points import fetch_players_name_map
+
+            players_by_name = fetch_players_name_map()
+            print(f"  [match_points] loaded {len(players_by_name)} player name(s)")
+        except Exception as e:
+            print(f"  WARNING: match_points disabled (could not load players): {e}")
+
+    cr_zip: Optional[str] = None
+    if targets and not args.skip_cricsheet_dots:
+        try:
+            print("  [cricsheet] downloading ipl_json.zip for dot merge …")
+            cr_zip = download_cricsheet_zip_to_temp()
+        except Exception as e:
+            print(f"  [cricsheet] zip failed ({e}); storing scorecards without dot merge")
+
+    try:
+        for idx, f in enumerate(targets, start=1):
+            fixture_id = f.get("id")
+            match_id = f.get("api_match_id")
+            if not fixture_id or not match_id:
+                continue
+            print(f"[{idx}/{len(targets)}] Fetching scorecard {match_id} …" + (" (with BBB)" if include_bbb else ""))
+            sc = fetch_scorecard(match_id, include_bbb=include_bbb)
+            if cr_zip and not args.skip_cricsheet_dots:
+                from merge_cricsheet_dots_into_scorecard import merge_dots_into_scorecard_data
+
+                md = str(sc.get("date") or f.get("match_date") or "").strip()
+                if len(md) >= 10 and re.match(r"^\d{4}-\d{2}-\d{2}", md):
+                    md = md[:10]
+                    sc, dm = merge_dots_into_scorecard_data(sc, md, cr_zip)
+                    if dm.get("cricsheet_match_id"):
+                        print(f"  merged Cricsheet dots (match {dm['cricsheet_match_id']})")
+                    for err in dm.get("errors") or []:
+                        print(f"  [dots] {err}")
+            update_fixture_scorecard_and_mark_synced(fixture_id, str(match_id), sc)
+            print(f"  ✅ stored scorecard + set points_synced=true for fixture_id={fixture_id}")
+
+            if not args.skip_match_points and players_by_name:
+                from cricapi_match_points import persist_match_points_from_scorecard
+
+                n_pts, skipped, mp_err = persist_match_points_from_scorecard(
+                    str(match_id), sc, f.get("match_no"), players_by_name
+                )
+                if mp_err:
+                    print(f"  [match_points] {mp_err}")
+                elif n_pts:
+                    print(f"  [match_points] upserted {n_pts} row(s)")
+                    if skipped:
+                        print(f"  [match_points] {len(skipped)} name(s) not in players table")
+                elif skipped:
+                    print(
+                        f"  [match_points] 0 rows — no catalog match "
+                        f"(sample: {skipped[:5]})"
+                    )
+            updated.append(
+                {
+                    "api_match_id": match_id,
+                    "match_date": f.get("match_date") or "",
+                    "title": f.get("title") or f.get("match_name") or "",
+                    "team1_short": f.get("team1_short") or "",
+                    "team2_short": f.get("team2_short") or "",
+                }
+            )
+            time.sleep(sleep_s)
+    finally:
+        if cr_zip and os.path.isfile(cr_zip):
+            try:
+                os.unlink(cr_zip)
+            except OSError:
+                pass
 
     # Expose outputs for GitHub Actions (used to decide whether to email participants)
     gh_out = os.getenv("GITHUB_OUTPUT")
