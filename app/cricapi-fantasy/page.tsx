@@ -11,8 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { ChevronDown, ChevronUp, Loader2 } from "lucide-react";
-import { cn } from "@/lib/utils";
-import type { PjRulesBreakdownLine } from "@/lib/scoring";
+import { FantasyPjBreakdownPanel } from "@/components/fantasy/FantasyPjBreakdownPanel";
 
 type CricApiEnvelope = {
   status?: string;
@@ -20,29 +19,6 @@ type CricApiEnvelope = {
   info?: { hitsToday?: number; hitsLimit?: number };
   error?: string;
 };
-
-function BreakdownBlock({ title, lines }: { title: string; lines: PjRulesBreakdownLine[] }) {
-  if (!lines?.length) return null;
-  return (
-    <div className="space-y-2">
-      <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</div>
-      <ul className="space-y-1 text-sm">
-        {lines.map((line, i) => (
-          <li key={i} className="flex justify-between gap-4 border-b border-border/40 pb-1 last:border-0">
-            <span className="text-foreground/90">
-              {line.label}
-              {line.detail ? <span className="text-muted-foreground text-xs ml-1">({line.detail})</span> : null}
-            </span>
-            <span className={cn("tabular-nums font-medium", line.pts < 0 ? "text-rose-600" : "text-foreground")}>
-              {line.pts > 0 ? "+" : ""}
-              {line.pts}
-            </span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
 
 export default function CricApiFantasyPage() {
   const searchParams = useSearchParams();
@@ -171,13 +147,14 @@ export default function CricApiFantasyPage() {
                   <TableHead className="w-10" />
                   <TableHead>Player</TableHead>
                   <TableHead>Team</TableHead>
-                  <TableHead className="text-right">Total</TableHead>
+                  <TableHead className="text-right">PJ (after ×)</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {fantasyRows.map((row) => {
                   const open = expanded === row.player_id;
-                  const { breakdown, scoring } = row;
+                  const { breakdown, scoring, d11 } = row;
+                  const mult = d11.appliedMultiplier;
                   return (
                     <React.Fragment key={row.player_id}>
                       <TableRow className="cursor-pointer" onClick={() => setExpanded(open ? null : row.player_id)}>
@@ -191,31 +168,21 @@ export default function CricApiFantasyPage() {
                         <TableCell>
                           {row.team ? <Badge variant="secondary">{row.team}</Badge> : <span className="text-muted-foreground">—</span>}
                         </TableCell>
-                        <TableCell className="text-right tabular-nums font-semibold">{scoring.total_pts}</TableCell>
+                        <TableCell className="text-right">
+                          <div className="tabular-nums font-semibold">
+                            {d11.multipliedTotal % 1 === 0 ? d11.multipliedTotal : d11.multipliedTotal.toFixed(2)}
+                          </div>
+                          {mult > 1 ? (
+                            <div className="text-xs text-amber-800">×{mult} on {scoring.total_pts} base</div>
+                          ) : (
+                            <div className="text-xs text-muted-foreground">Base (1×)</div>
+                          )}
+                        </TableCell>
                       </TableRow>
                       {open ? (
                         <TableRow>
-                          <TableCell colSpan={4} className="bg-muted/30 p-6">
-                            <div className="grid gap-6 md:grid-cols-2">
-                              <BreakdownBlock title="Batting" lines={breakdown.batting} />
-                              <BreakdownBlock title="Bowling" lines={breakdown.bowling} />
-                              <BreakdownBlock title="Fielding" lines={breakdown.fielding} />
-                              <BreakdownBlock title="Extras" lines={breakdown.extras} />
-                            </div>
-                            <div className="mt-4 flex flex-wrap gap-x-6 gap-y-1 border-t pt-3 text-xs text-muted-foreground">
-                              <span>
-                                Batting pts: <strong className="text-foreground">{scoring.batting_pts}</strong>
-                              </span>
-                              <span>
-                                Bowling: <strong className="text-foreground">{scoring.bowling_pts}</strong>
-                              </span>
-                              <span>
-                                Fielding: <strong className="text-foreground">{scoring.fielding_pts}</strong>
-                              </span>
-                              <span>
-                                Extras (XI / sub): <strong className="text-foreground">{scoring.extra_pts}</strong>
-                              </span>
-                            </div>
+                          <TableCell colSpan={4} className="bg-muted/30 p-4 sm:p-6">
+                            <FantasyPjBreakdownPanel breakdown={breakdown} scoring={scoring} d11={d11} />
                           </TableCell>
                         </TableRow>
                       ) : null}

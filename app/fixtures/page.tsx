@@ -24,7 +24,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import type { PjRulesBreakdownLine } from "@/lib/scoring";
+import { FantasyPjBreakdownPanel } from "@/components/fantasy/FantasyPjBreakdownPanel";
 
 interface Fixture {
   id: string;
@@ -97,39 +97,6 @@ function espnMatchNo(f: { match_no?: number | null }): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-function FantasyBreakdownBlock({ title, lines }: { title: string; lines: PjRulesBreakdownLine[] }) {
-  if (!lines?.length) return null;
-  return (
-    <div className="space-y-2 min-w-0">
-      <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{title}</div>
-      <ul className="space-y-2 text-sm">
-        {lines.map((line, i) => (
-          <li
-            key={i}
-            className="flex flex-col gap-1 border-b border-slate-100 pb-2 last:border-0 sm:flex-row sm:items-start sm:justify-between sm:gap-3"
-          >
-            <span className="min-w-0 flex-1 text-slate-800 break-words leading-snug">
-              {line.label}
-              {line.detail ? (
-                <span className="text-slate-400 text-xs block sm:inline sm:ml-1">({line.detail})</span>
-              ) : null}
-            </span>
-            <span
-              className={cn(
-                "tabular-nums font-medium shrink-0 sm:text-right",
-                line.pts < 0 ? "text-rose-600" : "text-slate-900"
-              )}
-            >
-              {line.pts > 0 ? "+" : ""}
-              {line.pts}
-            </span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
 export default function FixturesPage() {
   const [fixtures, setFixtures] = useState<Fixture[]>([]);
   const [loading, setLoading] = useState(true);
@@ -145,6 +112,7 @@ export default function FixturesPage() {
   const [modalFixtureFresh, setModalFixtureFresh] = useState<Fixture | null>(null);
   const [modalRefreshing, setModalRefreshing] = useState(false);
   const [expandedFantasyId, setExpandedFantasyId] = useState<string | null>(null);
+  const [expandedEspnFantasyKey, setExpandedEspnFantasyKey] = useState<string | null>(null);
 
   const today = useMemo(() => getTodayIST(), []);
 
@@ -217,6 +185,7 @@ export default function FixturesPage() {
     setModal(null);
     setModalTab("scorecard");
     setExpandedFantasyId(null);
+    setExpandedEspnFantasyKey(null);
   };
 
   const cricapiModalData = modal?.source === "cricapi" ? modalFixtureFresh ?? modal.fixture : null;
@@ -297,7 +266,7 @@ export default function FixturesPage() {
   const todayMatches = fixtures.filter(f => f.match_date === today);
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen min-w-0 bg-slate-50">
       {/* Header */}
       <div className="bg-white border-b border-slate-100">
         <div className="max-w-3xl mx-auto px-4 py-5 sm:py-8">
@@ -613,7 +582,7 @@ export default function FixturesPage() {
             role="dialog"
             aria-modal="true"
             aria-labelledby="fixtures-modal-title"
-            className="relative w-full max-w-4xl h-[100dvh] sm:h-auto sm:max-h-[90vh] bg-white rounded-none sm:rounded-3xl shadow-2xl flex flex-col overflow-hidden animate-in slide-in-from-bottom duration-500 min-h-0"
+            className="relative box-border flex min-h-0 w-full max-w-4xl flex-col overflow-hidden rounded-none bg-white shadow-2xl animate-in slide-in-from-bottom duration-500 h-[100dvh] max-h-[100dvh] pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] sm:h-auto sm:max-h-[min(90vh,calc(100dvh-2rem))] sm:rounded-3xl sm:pt-0 sm:pb-0"
           >
             <div className="px-3 sm:px-6 py-3 sm:py-4 border-b border-slate-100 flex items-start gap-2 sm:gap-4 bg-white shrink-0">
               <div className="flex items-start gap-2 sm:gap-4 min-w-0 flex-1">
@@ -738,7 +707,8 @@ export default function FixturesPage() {
                         <TableBody>
                           {cricapiFantasyRows.map((row) => {
                             const open = expandedFantasyId === row.player_id;
-                            const { breakdown, scoring } = row;
+                            const { breakdown, scoring, d11 } = row;
+                            const mult = d11.appliedMultiplier;
                             return (
                               <React.Fragment key={row.player_id}>
                                 <TableRow
@@ -764,19 +734,23 @@ export default function FixturesPage() {
                                       "—"
                                     )}
                                   </TableCell>
-                                  <TableCell className="text-right font-bold tabular-nums align-top whitespace-nowrap">
-                                    {scoring.total_pts}
+                                  <TableCell className="text-right align-top whitespace-nowrap">
+                                    <div className="font-bold tabular-nums text-slate-900">
+                                      {d11.multipliedTotal % 1 === 0 ? d11.multipliedTotal : d11.multipliedTotal.toFixed(2)}
+                                    </div>
+                                    {mult > 1 ? (
+                                      <div className="text-[10px] font-medium text-amber-800">
+                                        ×{mult} on {scoring.total_pts} base
+                                      </div>
+                                    ) : (
+                                      <div className="text-[10px] text-slate-500">Base (1×)</div>
+                                    )}
                                   </TableCell>
                                 </TableRow>
                                 {open ? (
                                   <TableRow>
                                     <TableCell colSpan={4} className="bg-slate-50 p-3 sm:p-4">
-                                      <div className="grid gap-4 sm:grid-cols-2 text-sm min-w-0">
-                                        <FantasyBreakdownBlock title="Batting" lines={breakdown.batting} />
-                                        <FantasyBreakdownBlock title="Bowling" lines={breakdown.bowling} />
-                                        <FantasyBreakdownBlock title="Fielding" lines={breakdown.fielding} />
-                                        <FantasyBreakdownBlock title="Extras" lines={breakdown.extras} />
-                                      </div>
+                                      <FantasyPjBreakdownPanel breakdown={breakdown} scoring={scoring} d11={d11} />
                                     </TableCell>
                                   </TableRow>
                                 ) : null}
@@ -814,19 +788,61 @@ export default function FixturesPage() {
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {espnFantasyRows.map((row) => (
-                            <TableRow key={`${row.n}_${row.team}`}>
-                              <TableCell className="font-medium text-sm break-words max-w-[50vw] sm:max-w-none">
-                                {row.n}
-                              </TableCell>
-                              <TableCell className="align-top">
-                                <Badge variant="outline" className="whitespace-normal break-words max-w-[7rem]">
-                                  {row.team}
-                                </Badge>
-                              </TableCell>
-                              <TableCell className="text-right font-bold tabular-nums whitespace-nowrap">{row.total}</TableCell>
-                            </TableRow>
-                          ))}
+                          {espnFantasyRows.map((row) => {
+                            const key = `${row.n}_${row.team}`;
+                            const open = expandedEspnFantasyKey === key;
+                            const d11 = row.d11;
+                            const mult = d11?.appliedMultiplier ?? 1;
+                            const pj = row.pjDetail;
+                            const sc = row.pjScoring;
+                            return (
+                              <React.Fragment key={key}>
+                                <TableRow
+                                  className="cursor-pointer touch-manipulation"
+                                  onClick={() => setExpandedEspnFantasyKey(open ? null : key)}
+                                >
+                                  <TableCell className="align-top font-medium text-sm">
+                                    <span className="mr-2 inline-block w-4 text-slate-400">{open ? "▼" : "▶"}</span>
+                                    <span className="break-words max-w-[50vw] sm:max-w-none">{row.n}</span>
+                                  </TableCell>
+                                  <TableCell className="align-top">
+                                    <Badge variant="outline" className="whitespace-normal break-words max-w-[7rem]">
+                                      {row.team}
+                                    </Badge>
+                                  </TableCell>
+                                  <TableCell className="text-right whitespace-nowrap">
+                                    <div className="font-bold tabular-nums text-slate-900">
+                                      {d11
+                                        ? d11.multipliedTotal % 1 === 0
+                                          ? d11.multipliedTotal
+                                          : d11.multipliedTotal.toFixed(2)
+                                        : row.total}
+                                    </div>
+                                    {d11 && mult > 1 ? (
+                                      <div className="text-[10px] font-medium text-amber-800">
+                                        ×{mult} on {row.total} base
+                                      </div>
+                                    ) : (
+                                      <div className="text-[10px] text-slate-500">Base (1×)</div>
+                                    )}
+                                  </TableCell>
+                                </TableRow>
+                                {open && pj && sc ? (
+                                  <TableRow>
+                                    <TableCell colSpan={3} className="bg-slate-50 p-3 sm:p-4">
+                                      <FantasyPjBreakdownPanel breakdown={pj} scoring={sc} d11={d11} />
+                                    </TableCell>
+                                  </TableRow>
+                                ) : open ? (
+                                  <TableRow>
+                                    <TableCell colSpan={3} className="bg-slate-50 p-4 text-sm text-slate-500">
+                                      Breakdown not available for this row.
+                                    </TableCell>
+                                  </TableRow>
+                                ) : null}
+                              </React.Fragment>
+                            );
+                          })}
                         </TableBody>
                       </Table>
                       </div>

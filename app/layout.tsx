@@ -5,7 +5,7 @@ import { Footer } from "@/components/layout/Footer";
 import { FloatingChat } from "@/components/chat/FloatingChat";
 import { AuthProvider } from "@/components/auth/AuthProvider";
 import { createClient } from "@/lib/supabase/server";
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -20,6 +20,12 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "IPL 2026 Auction POC",
   description: "Sign in to participate",
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
 };
 
 export default async function RootLayout({
@@ -47,7 +53,7 @@ export default async function RootLayout({
       >
         <AuthProvider initialSession={session} initialProfile={profile}>
           <Navbar />
-          <main>{children}</main>
+          <main className="min-w-0">{children}</main>
           <Footer />
           <FloatingChat />
         </AuthProvider>

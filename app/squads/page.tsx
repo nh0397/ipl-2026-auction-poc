@@ -269,7 +269,7 @@ export default function SquadsOverview() {
                  </div>
 
                  {/* Table */}
-                 <div className="flex-1 overflow-x-auto p-6 md:p-8">
+                 <div className="min-w-0 flex-1 overflow-x-auto overscroll-x-contain touch-pan-x [-webkit-overflow-scrolling:touch] p-6 md:p-8">
                    {activeSquad.length === 0 ? (
                       <div className="h-48 flex items-center justify-center text-center text-slate-400 font-black uppercase tracking-widest bg-slate-50 rounded-2xl border border-slate-100 border-dashed">
                          No players acquired yet

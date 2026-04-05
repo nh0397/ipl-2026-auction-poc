@@ -372,8 +372,8 @@ export default function Dashboard() {
                   </div>
                 </div>
                 {mySquad.length > 0 ? (
-                  <div className="max-h-[300px] overflow-y-auto bg-white rounded-xl overflow-hidden mt-4">
-                    <table className="w-full text-left border-collapse min-w-max">
+                  <div className="mt-4 max-h-[300px] overflow-x-auto overflow-y-auto overscroll-x-contain touch-pan-x rounded-xl bg-white [-webkit-overflow-scrolling:touch]">
+                    <table className="w-full min-w-max border-collapse text-left">
                       <thead className="bg-slate-100 text-[10px] font-black uppercase text-slate-500 tracking-widest sticky top-0 z-20">
                         <tr>
                           <th className="px-3 py-2">Player</th>

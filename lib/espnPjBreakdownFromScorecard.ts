@@ -50,6 +50,7 @@ export type EspnPjBreakdownRow = {
   breakdownHint?: string;
   _variant: "pjRules";
   pjDetail?: PjRulesDetailedBreakdown;
+  pjScoring?: ReturnType<typeof scorePjRulesPlayer>;
   d11?: D11BonusMultiplierInfo & { multipliedTotal: number };
 };
 
@@ -386,6 +387,7 @@ export function computeEspnPjBreakdownRows(
       total: totalPts,
       breakdownHint: "PJ Rules (T20)",
       pjDetail,
+      pjScoring: scored,
       d11: {
         ...d11Meta,
         multipliedTotal: d11PointsAfterMultiplier(totalPts, d11Meta.appliedMultiplier),
@@ -393,5 +395,9 @@ export function computeEspnPjBreakdownRows(
     };
   });
 
-  return rows.sort((a, b) => (b.total || 0) - (a.total || 0));
+  return rows.sort((a, b) => {
+    const bt = b.d11?.multipliedTotal ?? b.total ?? 0;
+    const at = a.d11?.multipliedTotal ?? a.total ?? 0;
+    return bt - at;
+  });
 }

@@ -24,46 +24,13 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/auth/AuthProvider";
 import React from "react";
 import ScorecardViewer from "@/components/scoreboard/ScorecardViewer";
-import type { PjRulesBreakdownLine } from "@/lib/scoring";
 import { adaptCricApiToScorecardViewer } from "@/lib/adapters/cricapiScorecard";
 import { aggregateFantasyRowsFromCricApiMatchData } from "@/lib/cricapiFantasyAggregate";
 import {
   computeEspnPjBreakdownRows,
   type PlayerCatalogRow,
 } from "@/lib/espnPjBreakdownFromScorecard";
-
-function FantasyBreakdownBlock({ title, lines }: { title: string; lines: PjRulesBreakdownLine[] }) {
-  if (!lines?.length) return null;
-  return (
-    <div className="space-y-2 min-w-0">
-      <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{title}</div>
-      <ul className="space-y-2 text-sm">
-        {lines.map((line, i) => (
-          <li
-            key={i}
-            className="flex flex-col gap-1 border-b border-slate-100 pb-2 last:border-0 sm:flex-row sm:items-start sm:justify-between sm:gap-3"
-          >
-            <span className="min-w-0 flex-1 text-slate-800 break-words leading-snug">
-              {line.label}
-              {line.detail ? (
-                <span className="text-slate-400 text-xs block sm:inline sm:ml-1">({line.detail})</span>
-              ) : null}
-            </span>
-            <span
-              className={cn(
-                "tabular-nums font-medium shrink-0 sm:text-right",
-                line.pts < 0 ? "text-rose-600" : "text-slate-900"
-              )}
-            >
-              {line.pts > 0 ? "+" : ""}
-              {line.pts}
-            </span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
+import { FantasyPjBreakdownPanel } from "@/components/fantasy/FantasyPjBreakdownPanel";
 
 // ─── Fixture helpers ────────────────────────────────────────────────
 interface Fixture {
@@ -143,6 +110,73 @@ function sortSquadByTeamThenName(players: any[]) {
   });
 }
 
+/** Map `players.team` (short or full IPL name) to a canonical short code (CSK, MI, …). */
+const IPL_TEAM_HINTS: [RegExp, string][] = [
+  [/chennai super kings|chennai|^csk$/i, "CSK"],
+  [/mumbai indians|^mi$/i, "MI"],
+  [/royal challengers|bengaluru|^rcb$/i, "RCB"],
+  [/kolkata knight|^kkr$/i, "KKR"],
+  [/delhi capitals|^dc$/i, "DC"],
+  [/gujarat titans|^gt$/i, "GT"],
+  [/lucknow super giants|^lsg$/i, "LSG"],
+  [/punjab kings|^pbks$/i, "PBKS"],
+  [/rajasthan royals|^rr$/i, "RR"],
+  [/sunrisers hyderabad|^srh$/i, "SRH"],
+];
+
+function resolvePlayerTeamToShort(team: string | null | undefined): string | null {
+  if (!team) return null;
+  const t = team.trim();
+  if (!t) return null;
+  const upper = t.toUpperCase().replace(/W$/, "");
+  for (const code of Object.keys(iplColors)) {
+    if (upper === code) return code;
+  }
+  for (const [re, code] of IPL_TEAM_HINTS) {
+    if (re.test(t)) return code;
+  }
+  return null;
+}
+
+type IplScheduleRow = {
+  match_no: number | null;
+  team1_short: string | null;
+  team2_short: string | null;
+  date_time_gmt: string | null;
+};
+
+/** Per IPL team: league `match_no` values in chronological order (that team’s 1st, 2nd, … game). */
+function buildTeamSchedules(rows: IplScheduleRow[]): Map<string, number[]> {
+  const byTeam = new Map<string, { mn: number; t: string }[]>();
+  for (const r of rows) {
+    const mn = Number(r.match_no);
+    if (!Number.isFinite(mn) || mn <= 0) continue;
+    const dt = String(r.date_time_gmt ?? "");
+    for (const raw of [r.team1_short, r.team2_short]) {
+      const s = cleanShort(raw);
+      if (!s) continue;
+      if (!byTeam.has(s)) byTeam.set(s, []);
+      byTeam.get(s)!.push({ mn, t: dt });
+    }
+  }
+  const out = new Map<string, number[]>();
+  for (const [team, list] of byTeam) {
+    list.sort((a, b) => a.t.localeCompare(b.t));
+    const seen = new Set<number>();
+    const ordered: number[] = [];
+    for (const x of list) {
+      if (!seen.has(x.mn)) {
+        seen.add(x.mn);
+        ordered.push(x.mn);
+      }
+    }
+    out.set(team, ordered);
+  }
+  return out;
+}
+
+const SHEET_GAME_SLOTS = 17;
+
 // ─── Constants ───
 const TEAM_COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899", "#ef4444", "#06b6d4", "#f97316"];
 
@@ -164,6 +198,8 @@ export default function ScoreboardPage() {
   }, [user, authLoading, router]);
 
   const [allMatches, setAllMatches] = useState<any[]>([]);
+  /** IPL schedule from `fixtures_cricapi` — used so sheet columns G1… = each team’s 1st, 2nd, … match. */
+  const [iplScheduleRows, setIplScheduleRows] = useState<IplScheduleRow[]>([]);
   const [selectedMatchId, setSelectedMatchId] = useState<string>("");
   const [allNominations, setAllNominations] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -180,6 +216,7 @@ export default function ScoreboardPage() {
   const [modalFixtureFresh, setModalFixtureFresh] = useState<Fixture | null>(null);
   const [modalRefreshing, setModalRefreshing] = useState(false);
   const [expandedCricapiFantasyId, setExpandedCricapiFantasyId] = useState<string | null>(null);
+  const [expandedEspnFantasyKey, setExpandedEspnFantasyKey] = useState<string | null>(null);
 
   const [espnScorecardByMatchNo, setEspnScorecardByMatchNo] = useState<Record<number, any | null>>({});
   const [espnScorecardLoadingByMatchNo, setEspnScorecardLoadingByMatchNo] = useState<Record<number, boolean>>({});
@@ -256,6 +293,7 @@ export default function ScoreboardPage() {
     setFixtureModal(null);
     setFixtureModalTab("scorecard");
     setExpandedCricapiFantasyId(null);
+    setExpandedEspnFantasyKey(null);
   }, []);
 
   const cricapiModalData = fixtureModal?.source === "cricapi" ? modalFixtureFresh ?? fixtureModal.fixture : null;
@@ -290,6 +328,8 @@ export default function ScoreboardPage() {
     return map;
   }, [allMatches]);
 
+  const teamSchedules = useMemo(() => buildTeamSchedules(iplScheduleRows), [iplScheduleRows]);
+
   const effectivePointsByPlayerMatch = useMemo(() => {
     const map = new Map<string, number>();
     (allMatchPoints || []).forEach((pt: any) => {
@@ -303,11 +343,16 @@ export default function ScoreboardPage() {
     return map;
   }, [allMatchPoints, pendingEdits]);
 
-  const getEffectivePointsForPlayerMatchNo = (playerId: string, matchNo: number) => {
-    const m = matchByNo.get(matchNo);
+  /** Points for this player in their IPL team’s *n*th match of the season (not league round number). */
+  const getEffectivePointsForPlayerTeamGame = (playerId: string, playerTeam: string | null | undefined, slot: number) => {
+    const short = resolvePlayerTeamToShort(playerTeam);
+    if (!short) return 0;
+    const sched = teamSchedules.get(short);
+    const leagueMn = sched?.[slot - 1];
+    if (leagueMn == null) return 0;
+    const m = matchByNo.get(leagueMn);
     if (!m?.id) return 0;
-    const key = `${playerId}_${m.id}`;
-    return effectivePointsByPlayerMatch.get(key) ?? 0;
+    return effectivePointsByPlayerMatch.get(`${playerId}_${m.id}`) ?? 0;
   };
 
   useEffect(() => { if (authProfile) setProfile(authProfile); }, [authProfile]);
@@ -356,15 +401,20 @@ export default function ScoreboardPage() {
   const fetchInitialData = async () => {
     try {
       setLoading(true);
-      const [teamsRes, matchesRes, playersCatRes] = await Promise.all([
+      const [teamsRes, matchesRes, scheduleRes, playersCatRes] = await Promise.all([
         supabase.from("profiles").select("*").neq("role", "Viewer").order("team_name", { ascending: true }),
         supabase.from("matches").select("*").order("match_no", { ascending: true }),
+        supabase
+          .from("fixtures_cricapi")
+          .select("match_no,team1_short,team2_short,date_time_gmt")
+          .order("date_time_gmt", { ascending: true }),
         supabase
           .from("players")
           .select("player_name, team, type, role")
           .eq("auction_status", "sold")
           .order("player_name", { ascending: true }),
       ]);
+      if (scheduleRes.data) setIplScheduleRows(scheduleRes.data as IplScheduleRow[]);
       const teamsData = teamsRes.data || [];
       setFranchises(teamsData);
       if (matchesRes.data) {
@@ -382,9 +432,13 @@ export default function ScoreboardPage() {
   const fetchSheetsData = async () => {
     setSubLoading(true);
     try {
-      const [playersRes, pointsRes] = await Promise.all([
+      const [playersRes, pointsRes, schedRes] = await Promise.all([
         supabase.from("players").select("*").eq("auction_status", "sold").order("player_name", { ascending: true }),
         supabase.from("match_points").select("*"),
+        supabase
+          .from("fixtures_cricapi")
+          .select("match_no,team1_short,team2_short,date_time_gmt")
+          .order("date_time_gmt", { ascending: true }),
       ]);
       const pl = playersRes.data || [];
       setAllPlayers(pl);
@@ -397,6 +451,7 @@ export default function ScoreboardPage() {
         }))
       );
       setAllMatchPoints(pointsRes.data || []);
+      if (schedRes.data?.length) setIplScheduleRows(schedRes.data as IplScheduleRow[]);
     } finally {
       setSubLoading(false);
     }
@@ -500,13 +555,15 @@ export default function ScoreboardPage() {
     setAllNominations(data || []);
   };
 
-  const updateSeasonPoint = async (pId: string, mNo: number, val: string) => {
+  const updateSeasonPoint = async (pId: string, teamGameSlot: number, val: string) => {
     if (!profile?.id || sheetFranchiseId !== profile.id) return;
     const fr = franchises.find((f) => f.id === sheetFranchiseId);
     const player = allPlayers.find((p) => p.id === pId);
     if (!fr || !player || (player.sold_to_id !== fr.id && player.sold_to !== fr.team_name)) return;
     const pts = parseFloat(val) || 0;
-    const match = allMatches.find((m) => m.match_no === mNo);
+    const short = resolvePlayerTeamToShort(player.team);
+    const leagueMn = short ? teamSchedules.get(short)?.[teamGameSlot - 1] : undefined;
+    const match = leagueMn != null ? allMatches.find((m) => m.match_no === leagueMn) : undefined;
     if (!match) return;
     setPendingEdits((prev) => ({ ...prev, [`${pId}_${match.id}`]: { player_id: pId, match_id: match.id, points: pts } }));
   };
@@ -545,7 +602,7 @@ export default function ScoreboardPage() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 p-3 sm:p-8 font-sans">
-      <div className="max-w-7xl mx-auto space-y-6">
+      <div className="max-w-7xl mx-auto min-w-0 space-y-6">
         
         {/* Header */}
         <div className="flex items-center gap-4 bg-white p-6 rounded-[2rem] border border-slate-200 shadow-xl">
@@ -574,33 +631,40 @@ export default function ScoreboardPage() {
 
         {/* ─── TAB: STANDINGS ─── */}
         {activeTab === "standings" && (
-          <div className="space-y-6 animate-in fade-in duration-500">
+          <div className="min-w-0 space-y-6 animate-in fade-in duration-500">
              {(() => {
-                const maxGames = Math.max(...standings.map(s => s.matchesPlayed), 0);
-                const gameLabels = Array.from({ length: maxGames }, (_, i) => `G${i+1}`);
-                const cumulativeData = gameLabels.map((gl, gIdx) => {
-                  const data: any = { game: gl };
-                  standings.forEach(team => {
-                    const teamPlayers = allPlayers.filter(p => p.sold_to_id === team.id || p.sold_to === team.team_name);
-                    const matchObj = allMatches.find(m => m.match_no === gIdx + 1);
-                    if (matchObj) {
-                       let sum = 0;
-                       teamPlayers.forEach(tp => {
-                         const key = `${tp.id}_${matchObj.id}`;
-                         sum += effectivePointsByPlayerMatch.get(key) || 0;
-                       });
-                       data[team.team_name] = (gIdx > 0 ? (cumulativeData[gIdx - 1] as any)[team.team_name] : 0) + sum;
-                    }
+                /** Same axes as score sheets: G1 = IPL team’s 1st match, … — cumulative = running sum of franchise column totals. */
+                const gameLabels = Array.from({ length: SHEET_GAME_SLOTS }, (_, i) => `G${i + 1}`);
+                const cumulativeData = gameLabels.reduce((acc: any[], gl, gIdx) => {
+                  const slot = gIdx + 1;
+                  const prev = gIdx > 0 ? acc[gIdx - 1] : null;
+                  const data: Record<string, unknown> = { game: gl };
+                  standings.forEach((team) => {
+                    const teamPlayers = allPlayers.filter(
+                      (p) => p.sold_to_id === team.id || p.sold_to === team.team_name
+                    );
+                    let colSum = 0;
+                    teamPlayers.forEach((tp) => {
+                      colSum += getEffectivePointsForPlayerTeamGame(tp.id, tp.team, slot);
+                    });
+                    const prior = prev ? Number((prev as Record<string, number>)[team.team_name]) || 0 : 0;
+                    data[team.team_name] = prior + colSum;
                   });
-                  return data;
-                });
+                  acc.push(data);
+                  return acc;
+                }, []);
 
                 const currentAnalyticsTeam = analyticsTeamId ? franchises.find(f => f.id === analyticsTeamId) : standings[0];
-                const playerPointsList = allPlayers.filter(p => p.sold_to_id === currentAnalyticsTeam?.id || p.sold_to === currentAnalyticsTeam?.team_name).map(p => ({
-                   name: p.player_name,
-                   points: allMatches.reduce((acc, m) => acc + (effectivePointsByPlayerMatch.get(`${p.id}_${m.id}`) || 0), 0),
-                   role: p.role
-                })).sort((a,b) => b.points - a.points);
+                const playerPointsList = allPlayers
+                  .filter((p) => p.sold_to_id === currentAnalyticsTeam?.id || p.sold_to === currentAnalyticsTeam?.team_name)
+                  .map((p) => ({
+                    name: p.player_name,
+                    points: Array.from({ length: SHEET_GAME_SLOTS }, (_, i) =>
+                      getEffectivePointsForPlayerTeamGame(p.id, p.team, i + 1)
+                    ).reduce((a, b) => a + b, 0),
+                    role: p.role,
+                  }))
+                  .sort((a, b) => b.points - a.points);
 
                 const contributorData = playerPointsList.slice(0, 5).map(p => ({ name: p.name.split(' ')[0], value: Math.round(p.points) }));
                 const roleData = ["Batter", "Bowler", "All-Rounder", "WK"].map(r => ({ name: r, value: Math.round(playerPointsList.filter(p => p.role === r).reduce((a,b) => a + b.points, 0)) })).filter(d => d.value > 0);
@@ -609,8 +673,11 @@ export default function ScoreboardPage() {
                   <>
                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div className="bg-white rounded-[2rem] p-6 border shadow-sm h-80">
-                           <h3 className="text-sm font-black uppercase italic mb-4">Points Progression</h3>
-                           <ResponsiveContainer width="100%" height="90%"><AreaChart data={cumulativeData}><CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" /><XAxis dataKey="game" tick={{fontSize:10, fontWeight:700}} /><YAxis tick={{fontSize:10, fontWeight:700}} /><Tooltip contentStyle={{borderRadius:12, border:"none", boxShadow:"0 5px 15px rgba(0,0,0,0.1)"}} />{standings.map((t, i) => <Area key={t.id} type="monotone" dataKey={t.team_name} stroke={TEAM_COLORS[i % TEAM_COLORS.length]} fill="none" strokeWidth={3} />)}</AreaChart></ResponsiveContainer>
+                           <h3 className="text-sm font-black uppercase italic">Points Progression</h3>
+                           <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wide mb-3 leading-snug">
+                             Cumulative franchise points after each sheet column (sum of G1…Gk column totals for that squad).
+                           </p>
+                           <ResponsiveContainer width="100%" height="82%"><AreaChart data={cumulativeData}><CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" /><XAxis dataKey="game" tick={{fontSize:10, fontWeight:700}} /><YAxis tick={{fontSize:10, fontWeight:700}} /><Tooltip contentStyle={{borderRadius:12, border:"none", boxShadow:"0 5px 15px rgba(0,0,0,0.1)"}} />{standings.map((t, i) => <Area key={t.id} type="monotone" dataKey={t.team_name} stroke={TEAM_COLORS[i % TEAM_COLORS.length]} fill="none" strokeWidth={3} />)}</AreaChart></ResponsiveContainer>
                         </div>
                         <div className="bg-slate-900 rounded-[2rem] p-6 shadow-xl h-80">
                            <div className="flex justify-between mb-4">
@@ -664,10 +731,10 @@ export default function ScoreboardPage() {
                            </div>
                         </div>
                      </div>
-                     <Card className="rounded-[2.5rem] overflow-hidden border-none shadow-2xl relative">
+                     <Card className="relative min-w-0 overflow-hidden rounded-[2.5rem] border-none shadow-2xl">
                         {tabLoading && <div className="absolute inset-0 bg-white/60 backdrop-blur-md z-50 flex items-center justify-center"><Loader2 className="animate-spin text-slate-900" /></div>}
                         <CardHeader className="bg-slate-50/50 p-8 border-b"><CardTitle className="text-xl font-black uppercase italic text-slate-900">Season Standings</CardTitle></CardHeader>
-                        <CardContent className="p-0 overflow-x-auto"><table className="w-full text-left min-w-[800px]"><thead className="bg-slate-50"><tr><th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400">Rank</th><th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400">Franchise</th><th className="px-6 py-5 text-center text-[10px] font-black text-slate-400">Squad</th><th className="px-6 py-5 text-center text-[10px] font-black text-slate-400">Games</th><th className="px-8 py-5 text-right text-[10px] font-black text-slate-900">Total Points</th></tr></thead><tbody>{standings.map((t, idx) => (<tr key={t.id} className="border-b hover:bg-slate-50 transition-colors"><td className="px-8 py-6"><span className={cn("h-10 w-10 flex items-center justify-center rounded-2xl font-black", idx === 0 ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-400")}>{idx + 1}</span></td><td className="px-8 py-6"><div className="font-black italic uppercase text-slate-900">{t.team_name}</div></td><td className="px-6 py-6 text-center font-black text-slate-500">{t.squadSize}</td><td className="px-6 py-6 text-center font-black text-slate-500">{t.matchesPlayed}</td><td className="px-8 py-6 text-right font-black italic text-2xl text-slate-900">{Math.floor(t.totalPoints)}</td></tr>))}</tbody></table></CardContent>
+                        <CardContent className="min-w-0 overflow-x-auto overscroll-x-contain touch-pan-x p-0 [-webkit-overflow-scrolling:touch]"><table className="w-full min-w-[800px] text-left"><thead className="bg-slate-50"><tr><th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400">Rank</th><th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400">Franchise</th><th className="px-6 py-5 text-center text-[10px] font-black text-slate-400">Squad</th><th className="px-6 py-5 text-center text-[10px] font-black text-slate-400">Games</th><th className="px-8 py-5 text-right text-[10px] font-black text-slate-900">Total Points</th></tr></thead><tbody>{standings.map((t, idx) => (<tr key={t.id} className="border-b hover:bg-slate-50 transition-colors"><td className="px-8 py-6"><span className={cn("h-10 w-10 flex items-center justify-center rounded-2xl font-black", idx === 0 ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-400")}>{idx + 1}</span></td><td className="px-8 py-6"><div className="font-black italic uppercase text-slate-900">{t.team_name}</div></td><td className="px-6 py-6 text-center font-black text-slate-500">{t.squadSize}</td><td className="px-6 py-6 text-center font-black text-slate-500">{t.matchesPlayed}</td><td className="px-8 py-6 text-right font-black italic text-2xl text-slate-900">{Math.floor(t.totalPoints)}</td></tr>))}</tbody></table></CardContent>
                      </Card>
                   </>
                 );
@@ -677,7 +744,7 @@ export default function ScoreboardPage() {
 
         {/* ─── TAB: FIXTURES ─── */}
         {activeTab === "fixtures" && (
-          <div className="space-y-6 animate-in fade-in duration-500">
+          <div className="min-w-0 space-y-6 animate-in fade-in duration-500">
             {tabLoading ? (
               <div className="space-y-5">
                 <div className="h-4 w-40 rounded-lg bg-slate-200 animate-pulse" />
@@ -824,7 +891,7 @@ export default function ScoreboardPage() {
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby="scoreboard-fixture-modal-title"
-                className="relative w-full max-w-4xl h-[100dvh] sm:h-auto sm:max-h-[90vh] bg-white rounded-none sm:rounded-3xl shadow-2xl flex flex-col overflow-hidden animate-in slide-in-from-bottom duration-500 min-h-0"
+                className="relative box-border flex min-h-0 w-full max-w-4xl flex-col overflow-hidden rounded-none bg-white shadow-2xl animate-in slide-in-from-bottom duration-500 h-[100dvh] max-h-[100dvh] pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] sm:h-auto sm:max-h-[min(90vh,calc(100dvh-2rem))] sm:rounded-3xl sm:pt-0 sm:pb-0"
               >
                 <div className="px-3 sm:px-6 py-3 sm:py-4 border-b border-slate-100 flex items-start gap-2 sm:gap-4 bg-white shrink-0">
                   <div className="flex items-start gap-2 sm:gap-4 min-w-0 flex-1">
@@ -951,7 +1018,8 @@ export default function ScoreboardPage() {
                               <TableBody>
                                 {cricapiFantasyRows.map((row) => {
                                   const open = expandedCricapiFantasyId === row.player_id;
-                                  const { breakdown, scoring } = row;
+                                  const { breakdown, scoring, d11 } = row;
+                                  const mult = d11.appliedMultiplier;
                                   return (
                                     <React.Fragment key={row.player_id}>
                                       <TableRow
@@ -977,19 +1045,23 @@ export default function ScoreboardPage() {
                                             "—"
                                           )}
                                         </TableCell>
-                                        <TableCell className="text-right font-bold tabular-nums align-top whitespace-nowrap">
-                                          {scoring.total_pts}
+                                        <TableCell className="text-right align-top whitespace-nowrap">
+                                          <div className="font-bold tabular-nums text-slate-900">
+                                            {d11.multipliedTotal % 1 === 0 ? d11.multipliedTotal : d11.multipliedTotal.toFixed(2)}
+                                          </div>
+                                          {mult > 1 ? (
+                                            <div className="text-[10px] font-medium text-amber-800">
+                                              ×{mult} on {scoring.total_pts} base
+                                            </div>
+                                          ) : (
+                                            <div className="text-[10px] text-slate-500">Base (1×)</div>
+                                          )}
                                         </TableCell>
                                       </TableRow>
                                       {open ? (
                                         <TableRow>
                                           <TableCell colSpan={4} className="bg-slate-50 p-3 sm:p-4">
-                                            <div className="grid gap-4 sm:grid-cols-2 text-sm min-w-0">
-                                              <FantasyBreakdownBlock title="Batting" lines={breakdown.batting} />
-                                              <FantasyBreakdownBlock title="Bowling" lines={breakdown.bowling} />
-                                              <FantasyBreakdownBlock title="Fielding" lines={breakdown.fielding} />
-                                              <FantasyBreakdownBlock title="Extras" lines={breakdown.extras} />
-                                            </div>
+                                            <FantasyPjBreakdownPanel breakdown={breakdown} scoring={scoring} d11={d11} />
                                           </TableCell>
                                         </TableRow>
                                       ) : null}
@@ -1027,19 +1099,61 @@ export default function ScoreboardPage() {
                                 </TableRow>
                               </TableHeader>
                               <TableBody>
-                                {espnModalPjRows.map((row) => (
-                                  <TableRow key={`${row.n}_${row.team}`}>
-                                    <TableCell className="font-medium text-sm break-words max-w-[50vw] sm:max-w-none">
-                                      {row.n}
-                                    </TableCell>
-                                    <TableCell className="align-top">
-                                      <Badge variant="outline" className="whitespace-normal break-words max-w-[7rem]">
-                                        {row.team}
-                                      </Badge>
-                                    </TableCell>
-                                    <TableCell className="text-right font-bold tabular-nums whitespace-nowrap">{row.total}</TableCell>
-                                  </TableRow>
-                                ))}
+                                {espnModalPjRows.map((row) => {
+                                  const key = `${row.n}_${row.team}`;
+                                  const open = expandedEspnFantasyKey === key;
+                                  const d11 = row.d11;
+                                  const mult = d11?.appliedMultiplier ?? 1;
+                                  const pj = row.pjDetail;
+                                  const sc = row.pjScoring;
+                                  return (
+                                    <React.Fragment key={key}>
+                                      <TableRow
+                                        className="cursor-pointer touch-manipulation"
+                                        onClick={() => setExpandedEspnFantasyKey(open ? null : key)}
+                                      >
+                                        <TableCell className="align-top font-medium text-sm">
+                                          <span className="mr-2 inline-block w-4 text-slate-400">{open ? "▼" : "▶"}</span>
+                                          <span className="break-words max-w-[50vw] sm:max-w-none">{row.n}</span>
+                                        </TableCell>
+                                        <TableCell className="align-top">
+                                          <Badge variant="outline" className="whitespace-normal break-words max-w-[7rem]">
+                                            {row.team}
+                                          </Badge>
+                                        </TableCell>
+                                        <TableCell className="text-right whitespace-nowrap">
+                                          <div className="font-bold tabular-nums text-slate-900">
+                                            {d11
+                                              ? d11.multipliedTotal % 1 === 0
+                                                ? d11.multipliedTotal
+                                                : d11.multipliedTotal.toFixed(2)
+                                              : row.total}
+                                          </div>
+                                          {d11 && mult > 1 ? (
+                                            <div className="text-[10px] font-medium text-amber-800">
+                                              ×{mult} on {row.total} base
+                                            </div>
+                                          ) : (
+                                            <div className="text-[10px] text-slate-500">Base (1×)</div>
+                                          )}
+                                        </TableCell>
+                                      </TableRow>
+                                      {open && pj && sc ? (
+                                        <TableRow>
+                                          <TableCell colSpan={3} className="bg-slate-50 p-3 sm:p-4">
+                                            <FantasyPjBreakdownPanel breakdown={pj} scoring={sc} d11={d11} />
+                                          </TableCell>
+                                        </TableRow>
+                                      ) : open ? (
+                                        <TableRow>
+                                          <TableCell colSpan={3} className="bg-slate-50 p-4 text-sm text-slate-500">
+                                            Breakdown not available for this row.
+                                          </TableCell>
+                                        </TableRow>
+                                      ) : null}
+                                    </React.Fragment>
+                                  );
+                                })}
                               </TableBody>
                             </Table>
                           </div>
@@ -1066,7 +1180,7 @@ export default function ScoreboardPage() {
 
         {/* ─── TAB: SCORE SHEETS (4 franchise tabs; edit only your own) ─── */}
         {activeTab === "sheets" && (
-           <div className="space-y-8 animate-in fade-in duration-500">
+           <div className="min-w-0 space-y-8 animate-in fade-in duration-500">
               <div className="flex flex-col gap-4">
                  <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-center justify-between">
                     <div className="relative w-full sm:w-80">
@@ -1100,6 +1214,7 @@ export default function ScoreboardPage() {
                  </div>
                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">
                     Rows are ordered by IPL team name, then player. Row tint follows IPL franchise (CSK, MI, RCB, etc.), matching the auction room and dashboard.
+                    Each game column G1–G{SHEET_GAME_SLOTS} is that player’s IPL team’s 1st, 2nd, … match of the season (not the league schedule round). If CSK have played twice, only G1–G2 apply for CSK players.
                  </p>
                  <div className="flex flex-wrap gap-2 items-center bg-white/80 p-3 rounded-xl border border-slate-100">
                     <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 mr-1">IPL legend</span>
@@ -1165,7 +1280,7 @@ export default function ScoreboardPage() {
                 const noSearchHits = q && visible.length === 0;
 
                 return (
-                  <div className="bg-white rounded-[2rem] border border-slate-200 overflow-hidden shadow-xl">
+                  <div className="min-w-0 overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-xl">
                     <div className={cn("px-6 py-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3", "bg-slate-900 text-white")}>
                       <div>
                         <h2 className="text-sm font-black uppercase italic tracking-tight">{franchise.team_name || franchise.full_name}</h2>
@@ -1187,7 +1302,9 @@ export default function ScoreboardPage() {
                           {(() => {
                             const teamTotal = squad.reduce((sum, sp) => {
                               let t = 0;
-                              for (let i = 1; i <= 17; i++) t += getEffectivePointsForPlayerMatchNo(sp.id, i);
+                              for (let i = 1; i <= SHEET_GAME_SLOTS; i++) {
+                                t += getEffectivePointsForPlayerTeamGame(sp.id, sp.team, i);
+                              }
                               return sum + t;
                             }, 0);
                             return String(teamTotal % 1 === 0 ? teamTotal : teamTotal.toFixed(1));
@@ -1204,34 +1321,40 @@ export default function ScoreboardPage() {
                         No players match your search.
                       </div>
                     ) : (
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-left min-w-[1200px]">
+                    <>
+                    <p className="border-b border-slate-100 bg-slate-50 px-4 py-2 text-[10px] font-bold uppercase tracking-wide text-slate-500 sm:hidden">
+                      Swipe sideways to see all game columns (G1–G17).
+                    </p>
+                    <div className="min-w-0 w-full overflow-x-auto overscroll-x-contain touch-pan-x [-webkit-overflow-scrolling:touch]">
+                      <table className="w-full min-w-[1200px] text-left">
                         <thead className="bg-slate-50">
                           <tr>
-                            <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 sticky left-0 bg-slate-50 z-10 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.08)]">Squad Player</th>
-                            {[...Array(17)].map((_, i) => (
-                              <th key={i} className="px-3 py-5 text-center text-[10px] font-black text-slate-400">G{i + 1}</th>
+                            <th className="bg-slate-50 px-3 py-4 text-[10px] font-black uppercase text-slate-400 sm:px-8 sm:py-5 static z-auto sm:sticky sm:left-0 sm:z-10 sm:shadow-[4px_0_8px_-4px_rgba(0,0,0,0.08)]">Squad Player</th>
+                            {[...Array(SHEET_GAME_SLOTS)].map((_, i) => (
+                              <th key={i} className="px-1.5 py-4 text-center text-[10px] font-black text-slate-400 sm:px-3 sm:py-5">G{i + 1}</th>
                             ))}
-                            <th className="px-8 py-5 text-right text-[10px] font-black text-slate-900 sticky right-0 bg-slate-50 z-10 shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)]">Total</th>
+                            <th className="bg-slate-50 px-3 py-4 text-right text-[10px] font-black text-slate-900 sm:px-8 sm:py-5 static z-auto sm:sticky sm:right-0 sm:z-10 sm:shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)]">Total</th>
                           </tr>
                         </thead>
                         <tbody>
                           {visible.map((p) => {
                             const teamStyle = getIplTeamStyle(p.team);
-                            const pts = Array.from({ length: 17 }, (_, idx) => getEffectivePointsForPlayerMatchNo(p.id, idx + 1));
+                            const pts = Array.from({ length: SHEET_GAME_SLOTS }, (_, idx) =>
+                              getEffectivePointsForPlayerTeamGame(p.id, p.team, idx + 1)
+                            );
                             const total = pts.reduce((a, b) => a + b, 0);
 
                             return (
                               <tr key={p.id} className={cn("border-b border-slate-200/80 transition-colors", teamStyle.bg)}>
                                 <td
                                   className={cn(
-                                    "px-8 py-4 sticky left-0 z-10 border-l-4 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.06)]",
+                                    "border-l-4 px-3 py-3 sm:px-8 sm:py-4 static z-auto sm:sticky sm:left-0 sm:z-10 max-sm:shadow-none sm:shadow-[4px_0_8px_-4px_rgba(0,0,0,0.06)]",
                                     teamStyle.bg,
                                     teamStyle.border
                                   )}
                                 >
-                                  <div className="flex items-center gap-4">
-                                    <div className="h-9 w-9 rounded-xl bg-white/60 overflow-hidden shrink-0 border border-white/80 italic flex items-center justify-center">
+                                  <div className="flex items-center gap-2 sm:gap-4">
+                                    <div className="h-8 w-8 sm:h-9 sm:w-9 rounded-xl bg-white/60 overflow-hidden shrink-0 border border-white/80 italic flex items-center justify-center">
                                       {p.image_url ? (
                                         <img src={getPlayerImage(p.image_url)!} className="w-full h-full object-cover object-top" alt="" />
                                       ) : (
@@ -1252,10 +1375,14 @@ export default function ScoreboardPage() {
                                   </div>
                                 </td>
                                 {pts.map((score, i) => {
-                                  const mObj = allMatches.find((m) => m.match_no === i + 1);
+                                  const short = resolvePlayerTeamToShort(p.team);
+                                  const leagueMn =
+                                    short != null ? teamSchedules.get(short)?.[i] : undefined;
+                                  const mObj =
+                                    leagueMn != null ? matchByNo.get(leagueMn) : undefined;
                                   const isDirty = mObj && pendingEdits[`${p.id}_${mObj.id}`] !== undefined;
                                   return (
-                                    <td key={i} className={cn("px-3 py-4 text-center", teamStyle.bg)}>
+                                    <td key={i} className={cn("px-1.5 py-3 text-center sm:px-3 sm:py-4", teamStyle.bg)}>
                                       <Input
                                         type="number"
                                         step="0.5"
@@ -1266,7 +1393,7 @@ export default function ScoreboardPage() {
                                           updateSeasonPoint(p.id, i + 1, e.target.value);
                                         }}
                                         className={cn(
-                                          "h-8 w-14 mx-auto text-[10px] font-black text-center border-none rounded-lg",
+                                          "h-8 w-11 sm:w-14 mx-auto text-[10px] font-black text-center border-none rounded-lg",
                                           isDirty ? "bg-amber-100 text-amber-900 ring-1 ring-amber-300" : "bg-white/70 text-slate-900",
                                           !canEdit && "cursor-not-allowed opacity-85"
                                         )}
@@ -1277,7 +1404,7 @@ export default function ScoreboardPage() {
                                 })}
                                 <td
                                   className={cn(
-                                    "px-8 py-4 text-right font-black italic text-sm sticky right-0 z-10 shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.06)]",
+                                    "px-3 py-3 sm:px-8 sm:py-4 text-right font-black italic text-sm static z-auto sm:sticky sm:right-0 sm:z-10 max-sm:shadow-none sm:shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.06)]",
                                     teamStyle.bg
                                   )}
                                 >
@@ -1287,22 +1414,24 @@ export default function ScoreboardPage() {
                             );
                           })}
                           {(() => {
-                            const teamGameTotals = Array(17).fill(0);
+                            const teamGameTotals = Array(SHEET_GAME_SLOTS).fill(0);
                             squad.forEach((sp) => {
-                              for (let i = 1; i <= 17; i++) teamGameTotals[i - 1] += getEffectivePointsForPlayerMatchNo(sp.id, i);
+                              for (let i = 1; i <= SHEET_GAME_SLOTS; i++) {
+                                teamGameTotals[i - 1] += getEffectivePointsForPlayerTeamGame(sp.id, sp.team, i);
+                              }
                             });
                             const teamGrandTotal = teamGameTotals.reduce((a, b) => a + b, 0);
                             return (
                               <tr className="bg-slate-900 text-white">
-                                <td className="px-8 py-5 sticky left-0 z-10 bg-slate-900 font-black uppercase tracking-widest text-[10px] shadow-[4px_0_8px_-4px_rgba(0,0,0,0.3)]">
+                                <td className="bg-slate-900 px-3 py-4 sm:px-8 sm:py-5 static z-auto font-black uppercase tracking-widest text-[10px] sm:sticky sm:left-0 sm:z-10 max-sm:shadow-none sm:shadow-[4px_0_8px_-4px_rgba(0,0,0,0.3)]">
                                   Grand Total
                                 </td>
                                 {teamGameTotals.map((v, idx) => (
-                                  <td key={idx} className="px-3 py-5 text-center text-[10px] font-black tabular-nums">
+                                  <td key={idx} className="px-1.5 py-4 text-center text-[10px] font-black tabular-nums sm:px-3 sm:py-5">
                                     {v ? (v % 1 === 0 ? v : v.toFixed(1)) : ""}
                                   </td>
                                 ))}
-                                <td className="px-8 py-5 text-right sticky right-0 z-10 bg-slate-900 font-black italic text-sm shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.3)]">
+                                <td className="bg-slate-900 px-3 py-4 text-right font-black italic text-sm static z-auto sm:sticky sm:right-0 sm:z-10 sm:px-8 sm:py-5 max-sm:shadow-none sm:shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.3)]">
                                   {teamGrandTotal % 1 === 0 ? teamGrandTotal : teamGrandTotal.toFixed(1)}
                                 </td>
                               </tr>
@@ -1311,6 +1440,7 @@ export default function ScoreboardPage() {
                         </tbody>
                       </table>
                     </div>
+                    </>
                     )}
                   </div>
                 );
@@ -1322,7 +1452,9 @@ export default function ScoreboardPage() {
       </div>
 
       {activeTab === "sheets" && profile?.id && sheetFranchiseId === profile.id && Object.keys(pendingEdits).length > 0 && (
-         <div className="fixed bottom-6 right-6 z-50"><Button onClick={handleBulkSave} disabled={saving} className="bg-emerald-600 hover:bg-emerald-700 text-white rounded-full px-8 py-7 shadow-2xl flex gap-3 items-center font-black uppercase text-xs">{saving ? <Loader2 className="animate-spin" /> : <Save />} Save Changes ({Object.keys(pendingEdits).length})</Button></div>
+         <div className="fixed z-50 bottom-[max(1.25rem,env(safe-area-inset-bottom))] right-[max(1.25rem,env(safe-area-inset-right))] max-w-[calc(100vw-2rem)]">
+           <Button onClick={handleBulkSave} disabled={saving} className="bg-emerald-600 hover:bg-emerald-700 text-white rounded-full px-6 py-6 sm:px-8 sm:py-7 shadow-2xl flex gap-2 sm:gap-3 items-center font-black uppercase text-[10px] sm:text-xs w-full sm:w-auto justify-center">{saving ? <Loader2 className="animate-spin" /> : <Save />} Save ({Object.keys(pendingEdits).length})</Button>
+         </div>
       )}
     </div>
   );

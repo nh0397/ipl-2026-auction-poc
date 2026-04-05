@@ -7,8 +7,11 @@
 
 import {
   type IplFantasyPlayerForScoring,
+  d11BonusMultiplierInfo,
+  d11PointsAfterMultiplier,
   pjRulesDetailedBreakdown,
   scorePjRulesPlayer,
+  type D11BonusMultiplierInfo,
 } from "@/lib/scoring";
 
 export type CricApiFantasyPlayerRow = {
@@ -18,6 +21,7 @@ export type CricApiFantasyPlayerRow = {
   fantasy: IplFantasyPlayerForScoring;
   scoring: ReturnType<typeof scorePjRulesPlayer>;
   breakdown: ReturnType<typeof pjRulesDetailedBreakdown>;
+  d11: D11BonusMultiplierInfo & { multipliedTotal: number };
 };
 
 function oversToFloat(raw: unknown): number {
@@ -230,16 +234,24 @@ export function aggregateFantasyRowsFromCricApiMatchData(data: Record<string, un
       is_playing_substitute: false,
       playerRole: role,
     };
+    const scoring = scorePjRulesPlayer(fantasy);
+    const r = Number(p.batting.runs ?? 0) || 0;
+    const w = Number(p.bowling.wickets ?? 0) || 0;
+    const d11Meta = d11BonusMultiplierInfo(r, w);
     out.push({
       player_id: p.player_id,
       player_name: p.player_name,
       team: p.team,
       fantasy,
-      scoring: scorePjRulesPlayer(fantasy),
+      scoring,
       breakdown: pjRulesDetailedBreakdown(fantasy),
+      d11: {
+        ...d11Meta,
+        multipliedTotal: d11PointsAfterMultiplier(scoring.total_pts, d11Meta.appliedMultiplier),
+      },
     });
   }
 
-  out.sort((a, b) => b.scoring.total_pts - a.scoring.total_pts);
+  out.sort((a, b) => b.d11.multipliedTotal - a.d11.multipliedTotal);
   return out;
 }

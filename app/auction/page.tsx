@@ -1470,7 +1470,7 @@ export default function AuctionPage() {
 
                       {/* Squad Table - With Fixed Height & Scroll */}
                       <div className="flex-1 p-6 md:p-8 flex flex-col min-h-0 overflow-hidden">
-                        <div className="flex-1 overflow-y-auto pr-2 no-scrollbar">
+                        <div className="flex-1 overflow-auto overscroll-x-contain touch-pan-x [-webkit-overflow-scrolling:touch] pr-2 no-scrollbar">
                         {teamPlayers.length === 0 ? (
                            <div className="h-48 flex items-center justify-center text-center text-slate-400 font-black uppercase tracking-widest bg-slate-50 rounded-2xl border border-slate-100 border-dashed">
                               No players acquired yet
@@ -1595,8 +1595,8 @@ export default function AuctionPage() {
                   <p className="text-slate-400 font-bold uppercase text-[10px] tracking-widest max-w-[200px] leading-relaxed">The auction history will populate as players are sold on the block.</p>
                 </div>
               ) : (
-                <div className="flex-1 overflow-y-auto no-scrollbar rounded-2xl border border-slate-200 shadow-sm bg-white">
-                  <table className="w-full text-left border-collapse whitespace-nowrap">
+                <div className="flex-1 overflow-auto overscroll-x-contain touch-pan-x [-webkit-overflow-scrolling:touch] no-scrollbar rounded-2xl border border-slate-200 bg-white shadow-sm">
+                  <table className="w-full border-collapse text-left whitespace-nowrap">
                     <thead className="bg-slate-100 sticky top-0 z-10">
                       <tr>
                         <th className="px-6 py-5 text-[10px] font-black uppercase text-slate-500 tracking-widest pl-8">Player</th>
