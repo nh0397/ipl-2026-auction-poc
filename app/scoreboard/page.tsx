@@ -4,9 +4,15 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { supabase } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card";
-import { 
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  BarChart as BarChartRecharts, Bar, PieChart, Pie, Cell, Legend
+import {
+  BarChart as BarChartRecharts,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  Legend,
 } from "recharts";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -31,14 +37,18 @@ import {
   type PlayerCatalogRow,
 } from "@/lib/espnPjBreakdownFromScorecard";
 import { FantasyPjBreakdownPanel } from "@/components/fantasy/FantasyPjBreakdownPanel";
+import { FranchiseBoosterPanel } from "@/components/scoreboard/FranchiseBoosterPanel";
 import { FranchiseCvcPanel } from "@/components/scoreboard/FranchiseCvcPanel";
 import { FranchiseIconPanel } from "@/components/scoreboard/FranchiseIconPanel";
 import {
   activeCvcForMatchDate,
-  franchiseFantasyMultiplier,
+  franchiseMatchSheetDisplay,
   matchDateKeyIST,
+  storedPointsFromFranchiseSheetDisplay,
+  type FranchiseBoosterRow,
   type FranchiseCvcRow,
   type FranchiseIconRow,
+  type FranchiseMatchSheetBreakdown,
 } from "@/lib/franchiseCvc";
 
 // ─── Fixture helpers ────────────────────────────────────────────────
@@ -189,6 +199,20 @@ const SHEET_GAME_SLOTS = 17;
 // ─── Constants ───
 const TEAM_COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899", "#ef4444", "#06b6d4", "#f97316"];
 
+/** Map DB `players.role` into chart buckets (pie used strict equality and missed most rows). */
+function normalizePlayerRoleForChart(role: string | null | undefined): string {
+  const r = String(role ?? "").toLowerCase();
+  if (r.includes("wk") || r.includes("wicket") || r.includes("keeper")) return "WK";
+  if (r.includes("bowl")) return "Bowler";
+  if (r.includes("all")) return "All-Rounder";
+  if (r.includes("bat")) return "Batter";
+  return "Other";
+}
+
+function fmtHaulTier(n: number): string {
+  return String(Math.round(n * 100) / 100);
+}
+
 // ─── Main page ──────────────────────────────────────────────────────
 export default function ScoreboardPage() {
   const { user, profile: authProfile, isLoading: authLoading } = useAuth();
@@ -223,6 +247,7 @@ export default function ScoreboardPage() {
   const [allMatchPoints, setAllMatchPoints] = useState<any[]>([]);
   const [franchiseCvcRows, setFranchiseCvcRows] = useState<FranchiseCvcRow[]>([]);
   const [franchiseIconRows, setFranchiseIconRows] = useState<FranchiseIconRow[]>([]);
+  const [franchiseBoosterRows, setFranchiseBoosterRows] = useState<FranchiseBoosterRow[]>([]);
   /** Fixtures tab: ESPN / CricAPI modal (scorecard + fantasy tabs). */
   const [fixtureModal, setFixtureModal] = useState<{ source: "espn" | "cricapi"; fixture: Fixture } | null>(null);
   const [fixtureModalTab, setFixtureModalTab] = useState<"scorecard" | "fantasy">("scorecard");
@@ -367,32 +392,34 @@ export default function ScoreboardPage() {
     return map;
   }, [allMatchPoints, pendingEdits]);
 
-  /** `base_points` from DB (before performance multipliers); used under the cell total. */
-  const matchPointsBasePointsMap = useMemo(() => {
-    const map = new Map<string, number | null>();
+  /**
+   * Per match_points row: PJ base (before haul), and haul tiers (batting runs / bowling wickets / max).
+   * Not merged from pending edits — still shown while a cell is dirty so the haul line stays visible.
+   */
+  const matchPointsDetailByKey = useMemo(() => {
+    const map = new Map<
+      string,
+      { base: number | null; haulRun: number | null; haulWick: number | null; haulApp: number | null }
+    >();
     (allMatchPoints || []).forEach((pt: any) => {
       if (!pt?.player_id || !pt?.match_id) return;
       const key = `${pt.player_id}_${pt.match_id}`;
-      const raw = pt.base_points;
-      if (raw === null || raw === undefined) map.set(key, null);
-      else map.set(key, Number(raw));
+      const bp = pt.base_points;
+      const base = bp === null || bp === undefined ? null : Number(bp);
+      const hr = pt.haul_run_mult;
+      const hw = pt.haul_wicket_mult;
+      const ha = pt.haul_applied_mult;
+      map.set(key, {
+        base: Number.isFinite(base as number) ? (base as number) : null,
+        haulRun: hr === null || hr === undefined ? null : Number(hr),
+        haulWick: hw === null || hw === undefined ? null : Number(hw),
+        haulApp: ha === null || ha === undefined ? null : Number(ha),
+      });
     });
     return map;
   }, [allMatchPoints]);
 
-  /** Stored fantasy total (base × multipliers) × franchise Icon or C/VC for this match day. */
-  const getFranchiseFantasyMult = useCallback(
-    (franchiseId: string, playerId: string, mObj: { id: string; date_time?: string } | null | undefined) => {
-      if (!mObj?.date_time) return { mult: 1, tag: null as "icon" | "c" | "vc" | null };
-      const d = matchDateKeyIST(mObj.date_time);
-      const active = activeCvcForMatchDate(franchiseCvcRows, franchiseId, d);
-      const iconId = franchiseIconRows.find((r) => r.team_id === franchiseId)?.player_id ?? null;
-      return franchiseFantasyMultiplier(playerId, iconId, active);
-    },
-    [franchiseCvcRows, franchiseIconRows]
-  );
-
-  /** Sheet total: stored fantasy points × franchise multiplier (Icon / C / VC). */
+  /** Sheet total: booster day → base × 3 (or × 6 franchise Icon); else stored × Icon / C / VC. */
   const getFranchiseSheetPoints = useCallback(
     (playerId: string, playerTeam: string | null | undefined, slot: number, franchiseId: string) => {
       const short = resolvePlayerTeamToShort(playerTeam);
@@ -407,27 +434,31 @@ export default function ScoreboardPage() {
       const v = matchPointsCellMap.get(key);
       if (v === null) return 0;
       const raw = Number(v) || 0;
-      const { mult } = getFranchiseFantasyMult(franchiseId, playerId, m);
-      return Math.round(raw * mult * 100) / 100;
+      const d = matchDateKeyIST(m.date_time);
+      const iconId = franchiseIconRows.find((r) => r.team_id === franchiseId)?.player_id ?? null;
+      const active = activeCvcForMatchDate(franchiseCvcRows, franchiseId, d);
+      const basePts = matchPointsDetailByKey.get(key)?.base ?? undefined;
+      return franchiseMatchSheetDisplay({
+        storedPoints: raw,
+        basePoints: basePts,
+        franchiseId,
+        playerId,
+        franchiseIconPlayerId: iconId,
+        matchDateKeyIST: d,
+        boosterRows: franchiseBoosterRows,
+        activeCvc: active,
+      }).display;
     },
-    [teamSchedules, matchByNo, matchPointsCellMap, getFranchiseFantasyMult]
+    [
+      teamSchedules,
+      matchByNo,
+      matchPointsCellMap,
+      matchPointsDetailByKey,
+      franchiseCvcRows,
+      franchiseIconRows,
+      franchiseBoosterRows,
+    ]
   );
-
-  /** Numeric points for totals (DNP and empty cell = 0). */
-  const getEffectivePointsForPlayerTeamGame = (playerId: string, playerTeam: string | null | undefined, slot: number) => {
-    const short = resolvePlayerTeamToShort(playerTeam);
-    if (!short) return 0;
-    const sched = teamSchedules.get(short);
-    const leagueMn = sched?.[slot - 1];
-    if (leagueMn == null) return 0;
-    const m = matchByNo.get(leagueMn);
-    if (!m?.id) return 0;
-    const key = `${playerId}_${m.id}`;
-    if (!matchPointsCellMap.has(key)) return 0;
-    const v = matchPointsCellMap.get(key);
-    if (v === null) return 0;
-    return v;
-  };
 
   /** Match considered “played” for DNP / empty semantics (sheet UX). */
   const isMatchPlayed = useCallback((m: { date_time?: string; is_locked?: boolean } | null | undefined) => {
@@ -509,7 +540,7 @@ export default function ScoreboardPage() {
   const fetchInitialData = async () => {
     try {
       setLoading(true);
-      const [teamsRes, matchesRes, scheduleRes, playersCatRes, cvcRes, iconRes] = await Promise.all([
+      const [teamsRes, matchesRes, scheduleRes, playersCatRes, cvcRes, iconRes, boosterRes] = await Promise.all([
         supabase.from("profiles").select("*").neq("role", "Viewer").order("team_name", { ascending: true }),
         supabase.from("matches").select("*").order("match_no", { ascending: true }),
         supabase
@@ -523,6 +554,7 @@ export default function ScoreboardPage() {
           .order("player_name", { ascending: true }),
         supabase.from("franchise_cvc_selections").select("*"),
         supabase.from("franchise_icon_selection").select("*"),
+        supabase.from("franchise_booster_days").select("*"),
       ]);
       if (scheduleRes.data) setIplScheduleRows(scheduleRes.data as IplScheduleRow[]);
       const teamsData = teamsRes.data || [];
@@ -537,6 +569,7 @@ export default function ScoreboardPage() {
       }
       if (cvcRes.data) setFranchiseCvcRows(cvcRes.data as FranchiseCvcRow[]);
       if (iconRes.data) setFranchiseIconRows(iconRes.data as FranchiseIconRow[]);
+      if (boosterRes.data) setFranchiseBoosterRows(boosterRes.data as FranchiseBoosterRow[]);
     } finally { setTimeout(() => setLoading(false), 300); }
   };
 
@@ -544,7 +577,7 @@ export default function ScoreboardPage() {
   const fetchSheetsData = async () => {
     setSubLoading(true);
     try {
-      const [playersRes, pointsRes, schedRes, cvcRes, iconRes] = await Promise.all([
+      const [playersRes, pointsRes, schedRes, cvcRes, iconRes, boosterRes] = await Promise.all([
         supabase.from("players").select("*").eq("auction_status", "sold").order("player_name", { ascending: true }),
         supabase.from("match_points").select("*"),
         supabase
@@ -553,6 +586,7 @@ export default function ScoreboardPage() {
           .order("date_time_gmt", { ascending: true }),
         supabase.from("franchise_cvc_selections").select("*"),
         supabase.from("franchise_icon_selection").select("*"),
+        supabase.from("franchise_booster_days").select("*"),
       ]);
       const pl = playersRes.data || [];
       setAllPlayers(pl);
@@ -568,6 +602,7 @@ export default function ScoreboardPage() {
       if (schedRes.data?.length) setIplScheduleRows(schedRes.data as IplScheduleRow[]);
       if (cvcRes.data) setFranchiseCvcRows(cvcRes.data as FranchiseCvcRow[]);
       if (iconRes.data) setFranchiseIconRows(iconRes.data as FranchiseIconRow[]);
+      if (boosterRes.data) setFranchiseBoosterRows(boosterRes.data as FranchiseBoosterRow[]);
     } finally {
       setSubLoading(false);
     }
@@ -577,7 +612,8 @@ export default function ScoreboardPage() {
     setTabLoading(true);
     try {
       // Must include `team` (IPL side) or G-column mapping and charts read 0 for every cell.
-      const [{ data: soldPlayers }, { data: pts }, { data: schedRes }, { data: cvcRows }, { data: iconRows }] = await Promise.all([
+      const [{ data: soldPlayers }, { data: pts }, { data: schedRes }, { data: cvcRows }, { data: iconRows }, { data: boosterRows }] =
+        await Promise.all([
         supabase.from("players").select("*").eq("auction_status", "sold").order("player_name", { ascending: true }),
         supabase.from("match_points").select("*"),
         supabase
@@ -586,34 +622,18 @@ export default function ScoreboardPage() {
           .order("date_time_gmt", { ascending: true }),
         supabase.from("franchise_cvc_selections").select("*"),
         supabase.from("franchise_icon_selection").select("*"),
+        supabase.from("franchise_booster_days").select("*"),
       ]);
       setAllPlayers(soldPlayers || []);
       setAllMatchPoints(pts || []);
       if (schedRes?.length) setIplScheduleRows(schedRes as IplScheduleRow[]);
       if (cvcRows) setFranchiseCvcRows(cvcRows as FranchiseCvcRow[]);
       if (iconRows) setFranchiseIconRows(iconRows as FranchiseIconRow[]);
+      if (boosterRows) setFranchiseBoosterRows(boosterRows as FranchiseBoosterRow[]);
     } finally {
       setTabLoading(false);
     }
   };
-
-  /** Standings: numeric totals only (DNP → 0). */
-  const buildPointsMap = useCallback((points: any[]) => {
-    const map = new Map<string, number>();
-    (points || []).forEach((pt: any) => {
-      if (!pt?.player_id || !pt?.match_id) return;
-      const raw = pt.points;
-      const n = raw === null || raw === undefined ? 0 : Number(raw) || 0;
-      map.set(`${pt.player_id}_${pt.match_id}`, n);
-    });
-    Object.values(pendingEdits || {}).forEach((ed: any) => {
-      if (!ed?.player_id || !ed?.match_id) return;
-      const raw = ed.points;
-      const n = raw === null || raw === undefined ? 0 : Number(raw) || 0;
-      map.set(`${ed.player_id}_${ed.match_id}`, n);
-    });
-    return map;
-  }, [pendingEdits]);
 
   const playerBelongsToTeam = useCallback((p: any, team: any) => {
     if (p.sold_to_id && team.id && p.sold_to_id === team.id) return true;
@@ -628,7 +648,25 @@ export default function ScoreboardPage() {
   const calculateStandings = useCallback(
     (players: any[], points: any[]) => {
       if (!franchises.length) return;
-      const pointsMap = buildPointsMap(points || []);
+      const detailMap = new Map<string, { stored: number | null; base: number | null }>();
+      (points || []).forEach((pt: any) => {
+        if (!pt?.player_id || !pt?.match_id) return;
+        const key = `${pt.player_id}_${pt.match_id}`;
+        const raw = pt.points;
+        const stored = raw === null || raw === undefined ? null : Number(raw) || 0;
+        const bp = pt.base_points;
+        const base = bp === null || bp === undefined ? null : Number(bp);
+        detailMap.set(key, { stored, base });
+      });
+      Object.values(pendingEdits || {}).forEach((ed: any) => {
+        if (!ed?.player_id || !ed?.match_id) return;
+        const key = `${ed.player_id}_${ed.match_id}`;
+        const raw = ed.points;
+        const stored = raw === null || raw === undefined ? null : Number(raw) || 0;
+        const existing = detailMap.get(key);
+        detailMap.set(key, { stored, base: existing?.base ?? null });
+      });
+
       const standingsData = franchises.map((team) => {
         let totalPoints = 0;
         let matchesPlayed = 0;
@@ -642,15 +680,25 @@ export default function ScoreboardPage() {
           let matchHasPoints = false;
           teamPlayers.forEach((player) => {
             const key = `${player.id}_${m.id}`;
-            if (pointsMap.has(key)) {
-              matchHasPoints = true;
-              const raw = pointsMap.get(key) || 0;
-              const iconId = franchiseIconRows.find((r) => r.team_id === team.id)?.player_id ?? null;
-              const d = matchDateKeyIST(m.date_time);
-              const active = activeCvcForMatchDate(franchiseCvcRows, team.id, d);
-              const { mult } = franchiseFantasyMultiplier(player.id, iconId, active);
-              matchTotal += raw * mult;
-            }
+            if (!detailMap.has(key)) return;
+            matchHasPoints = true;
+            const det = detailMap.get(key)!;
+            if (det.stored === null) return;
+            const raw = det.stored;
+            const iconId = franchiseIconRows.find((r) => r.team_id === team.id)?.player_id ?? null;
+            const d = matchDateKeyIST(m.date_time);
+            const active = activeCvcForMatchDate(franchiseCvcRows, team.id, d);
+            const { display } = franchiseMatchSheetDisplay({
+              storedPoints: raw,
+              basePoints: det.base,
+              franchiseId: team.id,
+              playerId: player.id,
+              franchiseIconPlayerId: iconId,
+              matchDateKeyIST: d,
+              boosterRows: franchiseBoosterRows,
+              activeCvc: active,
+            });
+            matchTotal += display;
           });
           if (matchHasPoints) {
             matchesPlayed++;
@@ -672,14 +720,33 @@ export default function ScoreboardPage() {
       }).sort((a, b) => b.totalPoints - a.totalPoints);
       setStandings(standingsData);
     },
-    [franchises, allMatches, buildPointsMap, playerBelongsToTeam, franchiseCvcRows, franchiseIconRows]
+    [
+      franchises,
+      allMatches,
+      playerBelongsToTeam,
+      franchiseCvcRows,
+      franchiseIconRows,
+      franchiseBoosterRows,
+      pendingEdits,
+    ]
   );
 
   useEffect(() => {
     if (activeTab !== "standings") return;
     if (!franchises.length || !allMatches.length) return;
     calculateStandings(allPlayers, allMatchPoints);
-  }, [activeTab, allMatchPoints, allPlayers, allMatches, franchises, calculateStandings, franchiseCvcRows, franchiseIconRows]);
+  }, [
+    activeTab,
+    allMatchPoints,
+    allPlayers,
+    allMatches,
+    franchises,
+    calculateStandings,
+    franchiseCvcRows,
+    franchiseIconRows,
+    franchiseBoosterRows,
+    pendingEdits,
+  ]);
 
   const fetchMatchSpecificData = async (matchId: string) => {
     const { data } = await supabase.from("nominations").select("*").eq("match_id", matchId);
@@ -710,8 +777,33 @@ export default function ScoreboardPage() {
     const short = resolvePlayerTeamToShort(player.team);
     const leagueMn = short ? teamSchedules.get(short)?.[teamGameSlot - 1] : undefined;
     const match = leagueMn != null ? allMatches.find((m) => m.match_no === leagueMn) : undefined;
-    const mult = match ? getFranchiseFantasyMult(fr.id, pId, match).mult : 1;
-    const raw = mult > 0 ? Math.round((displayPts / mult) * 100) / 100 : displayPts;
+    if (!match?.date_time) return;
+    const key = `${pId}_${match.id}`;
+    const pe = pendingEdits[key];
+    let storedPoints = 0;
+    if (pe && pe.points !== undefined) {
+      if (pe.points === null) return;
+      storedPoints = Number(pe.points) || 0;
+    } else {
+      const v = matchPointsCellMap.get(key);
+      if (v === null) return;
+      storedPoints = v === undefined ? 0 : Number(v) || 0;
+    }
+    const basePoints = matchPointsDetailByKey.get(key)?.base ?? undefined;
+    const d = matchDateKeyIST(match.date_time);
+    const iconId = franchiseIconRows.find((r) => r.team_id === fr.id)?.player_id ?? null;
+    const active = activeCvcForMatchDate(franchiseCvcRows, fr.id, d);
+    const raw = storedPointsFromFranchiseSheetDisplay({
+      displayPts,
+      storedPoints,
+      basePoints,
+      franchiseId: fr.id,
+      playerId: pId,
+      franchiseIconPlayerId: iconId,
+      matchDateKeyIST: d,
+      boosterRows: franchiseBoosterRows,
+      activeCvc: active,
+    });
     setSeasonMatchPoints(pId, teamGameSlot, raw);
   };
 
@@ -769,6 +861,86 @@ export default function ScoreboardPage() {
     return Array.from(map.entries());
   }, [filteredFixtures]);
 
+  /** Standings charts: franchise-adjusted column totals; X-axis only through last gameweek with any points. */
+  const standingsFranchiseChart = useMemo(() => {
+    const squadForTeam = (team: { id: string; team_name?: string }) =>
+      allPlayers.filter((p) => p.sold_to_id === team.id || p.sold_to === team.team_name);
+
+    let lastActiveSlot = 0;
+    for (let s = 1; s <= SHEET_GAME_SLOTS; s++) {
+      let anyPositive = false;
+      for (const team of standings) {
+        let colSum = 0;
+        for (const tp of squadForTeam(team)) {
+          colSum += getFranchiseSheetPoints(tp.id, tp.team, s, team.id);
+        }
+        if (colSum > 0) anyPositive = true;
+      }
+      if (anyPositive) lastActiveSlot = s;
+    }
+
+    const matchPlayedFallback = standings.length
+      ? Math.max(0, ...standings.map((t: { matchesPlayed?: number }) => Number(t.matchesPlayed) || 0))
+      : 0;
+    let gamesToShow =
+      lastActiveSlot > 0 ? lastActiveSlot : Math.max(1, matchPlayedFallback > 0 ? matchPlayedFallback : 1);
+    gamesToShow = Math.min(SHEET_GAME_SLOTS, Math.max(1, gamesToShow));
+
+    const marginalPerGame: Record<string, string | number>[] = [];
+    for (let s = 1; s <= gamesToShow; s++) {
+      const row: Record<string, string | number> = { game: `G${s}` };
+      for (const team of standings) {
+        let colSum = 0;
+        for (const tp of squadForTeam(team)) {
+          colSum += getFranchiseSheetPoints(tp.id, tp.team, s, team.id);
+        }
+        row[team.team_name] = Math.round(colSum * 100) / 100;
+      }
+      marginalPerGame.push(row);
+    }
+
+    return { gamesToShow, marginalPerGame };
+  }, [standings, allPlayers, getFranchiseSheetPoints]);
+
+  const squadPointsBreakdown = useMemo(() => {
+    const team = analyticsTeamId ? franchises.find((f) => f.id === analyticsTeamId) : standings[0];
+    const g = standingsFranchiseChart.gamesToShow;
+    if (!team?.id) {
+      return {
+        contributors: [] as { name: string; value: number }[],
+        roles: [] as { name: string; value: number }[],
+      };
+    }
+    const players = allPlayers.filter((p) => p.sold_to_id === team.id || p.sold_to === team.team_name);
+    const withPts = players.map((p) => {
+      let pts = 0;
+      for (let s = 1; s <= g; s++) {
+        pts += getFranchiseSheetPoints(p.id, p.team, s, team.id);
+      }
+      return {
+        name: String(p.player_name ?? ""),
+        points: pts,
+        role: normalizePlayerRoleForChart(p.role),
+      };
+    });
+    withPts.sort((a, b) => b.points - a.points);
+    const contributors = withPts.slice(0, 10).map((p) => ({
+      name: p.name.length > 20 ? `${p.name.slice(0, 18)}…` : p.name,
+      value: Math.round(p.points * 10) / 10,
+    }));
+    const roleBuckets = new Map<string, number>();
+    for (const p of withPts) {
+      roleBuckets.set(p.role, (roleBuckets.get(p.role) || 0) + p.points);
+    }
+    const roles = (["Batter", "Bowler", "All-Rounder", "WK", "Other"] as const)
+      .map((name) => ({
+        name,
+        value: Math.round((roleBuckets.get(name) || 0) * 10) / 10,
+      }))
+      .filter((x) => x.value > 0);
+    return { contributors, roles };
+  }, [analyticsTeamId, franchises, standings, allPlayers, standingsFranchiseChart.gamesToShow, getFranchiseSheetPoints]);
+
   if (loading) return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center">
        <Loader2 className="h-10 w-10 text-slate-900 animate-spin" />
@@ -807,124 +979,223 @@ export default function ScoreboardPage() {
         {/* ─── TAB: STANDINGS ─── */}
         {activeTab === "standings" && (
           <div className="min-w-0 space-y-6 animate-in fade-in duration-500">
-             {(() => {
-                /** Same axes as score sheets: G1 = IPL team’s 1st match, … — cumulative = running sum of franchise column totals. */
-                const gameLabels = Array.from({ length: SHEET_GAME_SLOTS }, (_, i) => `G${i + 1}`);
-                const cumulativeData = gameLabels.reduce((acc: any[], gl, gIdx) => {
-                  const slot = gIdx + 1;
-                  const prev = gIdx > 0 ? acc[gIdx - 1] : null;
-                  const data: Record<string, unknown> = { game: gl };
-                  standings.forEach((team) => {
-                    const teamPlayers = allPlayers.filter(
-                      (p) => p.sold_to_id === team.id || p.sold_to === team.team_name
-                    );
-                    let colSum = 0;
-                    teamPlayers.forEach((tp) => {
-                      colSum += Number(getEffectivePointsForPlayerTeamGame(tp.id, tp.team, slot)) || 0;
-                    });
-                    const prior = prev ? Number((prev as Record<string, number>)[team.team_name]) || 0 : 0;
-                    data[team.team_name] = prior + colSum;
-                  });
-                  acc.push(data);
-                  return acc;
-                }, []);
-
-                const currentAnalyticsTeam = analyticsTeamId
-                  ? franchises.find((f) => f.id === analyticsTeamId)
-                  : standings[0];
-                const playerPointsList = allPlayers
-                  .filter((p) => p.sold_to_id === currentAnalyticsTeam?.id || p.sold_to === currentAnalyticsTeam?.team_name)
-                  .map((p) => ({
-                    name: p.player_name,
-                    points: Array.from({ length: SHEET_GAME_SLOTS }, (_, i) =>
-                      Number(getEffectivePointsForPlayerTeamGame(p.id, p.team, i + 1)) || 0
-                    ).reduce((a, b) => a + b, 0),
-                    role: p.role,
-                  }))
-                  .sort((a, b) => (b.points ?? 0) - (a.points ?? 0));
-
-                const contributorData = playerPointsList
-                  .slice(0, 5)
-                  .map((p) => ({ name: p.name.split(" ")[0], value: Math.round(p.points ?? 0) }));
-                const roleData = ["Batter", "Bowler", "All-Rounder", "WK"]
-                  .map((r) => ({
-                    name: r,
-                    value: Math.round(
-                      playerPointsList.filter((p) => p.role === r).reduce((a, b) => a + (b.points ?? 0), 0)
-                    ),
-                  }))
-                  .filter((d) => d.value > 0);
-
-                return (
-                  <>
-                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div className="bg-white rounded-[2rem] p-6 border shadow-sm h-80">
-                           <h3 className="text-sm font-black uppercase italic">Points Progression</h3>
-                           <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wide mb-3 leading-snug">
-                             Cumulative franchise points after each sheet column (sum of G1…Gk column totals for that squad).
-                           </p>
-                           <ResponsiveContainer width="100%" height="82%"><AreaChart data={cumulativeData}><CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" /><XAxis dataKey="game" tick={{fontSize:10, fontWeight:700}} /><YAxis tick={{fontSize:10, fontWeight:700}} /><Tooltip contentStyle={{borderRadius:12, border:"none", boxShadow:"0 5px 15px rgba(0,0,0,0.1)"}} />{standings.map((t, i) => <Area key={t.id} type="monotone" dataKey={t.team_name} stroke={TEAM_COLORS[i % TEAM_COLORS.length]} fill="none" strokeWidth={3} />)}</AreaChart></ResponsiveContainer>
+            <>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="bg-white rounded-[2rem] p-6 border shadow-sm min-h-[20rem] flex flex-col">
+                      <h3 className="text-sm font-black uppercase italic">Points per gameweek</h3>
+                      <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wide mb-3 leading-snug">
+                        Grouped bars = each franchise’s total for that sheet column (G1, G2, …). Uses the same rules as the
+                        score sheet (Icon, Captain/Vice, booster days). Only G1–G{standingsFranchiseChart.gamesToShow} are shown — trailing empty
+                        weeks are hidden. Bar charts compare weeks side-by-side more clearly than a cumulative line when few
+                        games have been played.
+                      </p>
+                      <div className="flex-1 min-h-[220px] w-full min-w-0">
+                        {standings.length && standingsFranchiseChart.marginalPerGame.length ? (
+                          <ResponsiveContainer width="100%" height="100%">
+                            <BarChartRecharts
+                              data={standingsFranchiseChart.marginalPerGame}
+                              margin={{ top: 8, right: 8, left: 0, bottom: 0 }}
+                            >
+                              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+                              <XAxis dataKey="game" tick={{ fontSize: 10, fontWeight: 700 }} />
+                              <YAxis tick={{ fontSize: 10, fontWeight: 700 }} width={36} />
+                              <Tooltip
+                                contentStyle={{
+                                  borderRadius: 12,
+                                  border: "none",
+                                  boxShadow: "0 5px 15px rgba(0,0,0,0.1)",
+                                }}
+                              />
+                              <Legend wrapperStyle={{ fontSize: 10 }} />
+                              {standings.map((t, i) => (
+                                <Bar
+                                  key={t.id}
+                                  dataKey={t.team_name}
+                                  fill={TEAM_COLORS[i % TEAM_COLORS.length]}
+                                  radius={[3, 3, 0, 0]}
+                                  maxBarSize={28}
+                                />
+                              ))}
+                            </BarChartRecharts>
+                          </ResponsiveContainer>
+                        ) : (
+                          <div className="flex h-full min-h-[180px] items-center justify-center text-[10px] font-bold uppercase text-slate-400">
+                            No standings data yet
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <div className="bg-slate-900 rounded-[2rem] p-6 shadow-xl min-h-[20rem] flex flex-col gap-3">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <h3 className="text-sm font-black uppercase italic text-white">
+                            {(analyticsTeamId
+                              ? franchises.find((f) => f.id === analyticsTeamId)?.team_name
+                              : standings[0]?.team_name) ?? "Franchise"}{" "}
+                            — squad split
+                          </h3>
+                          <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wide mt-1 max-w-md leading-snug">
+                            Same franchise points as the sheet (not raw CricAPI totals). Top players and role buckets for
+                            G1–G{standingsFranchiseChart.gamesToShow}.
+                          </p>
                         </div>
-                        <div className="bg-slate-900 rounded-[2rem] p-6 shadow-xl h-80">
-                           <div className="flex justify-between mb-4">
-                              <h3 className="text-sm font-black uppercase italic text-white text-[10px]">{currentAnalyticsTeam?.team_name} Split</h3>
-                            <div className="flex gap-1 overflow-x-auto no-scrollbar">
-                               {franchises.slice(0, 5).map(f => (
-                                 <button 
-                                   key={f.id} 
-                                   onClick={() => setAnalyticsTeamId(f.id)} 
-                                   className={cn(
-                                     "text-[7px] font-black uppercase px-1.5 py-1 rounded whitespace-nowrap", 
-                                     analyticsTeamId === f.id || (!analyticsTeamId && standings[0]?.id === f.id) 
-                                       ? "bg-white text-slate-900" 
-                                       : "bg-white/10 text-white/40"
-                                   )}
-                                 >
-                                   {f.team_name.split(' ')[0]}
-                                 </button>
-                               ))}
+                        <div className="flex flex-wrap justify-end gap-1 max-w-[14rem]">
+                          {franchises.map((f) => (
+                            <button
+                              key={f.id}
+                              type="button"
+                              onClick={() => setAnalyticsTeamId(f.id)}
+                              className={cn(
+                                "text-[7px] font-black uppercase px-1.5 py-1 rounded whitespace-nowrap",
+                                analyticsTeamId === f.id ||
+                                  (!analyticsTeamId && standings[0]?.id === f.id)
+                                  ? "bg-white text-slate-900"
+                                  : "bg-white/10 text-white/50 hover:text-white/80"
+                              )}
+                            >
+                              {(f.team_name || "").split(" ")[0]}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="grid flex-1 grid-cols-1 gap-4 min-h-0 sm:grid-cols-2">
+                        <div className="min-h-[160px] w-full min-w-0">
+                          <p className="text-[8px] font-black uppercase tracking-widest text-slate-500 mb-1">
+                            Top contributors
+                          </p>
+                          {squadPointsBreakdown.contributors.length ? (
+                            <ResponsiveContainer width="100%" height={200}>
+                              <BarChartRecharts
+                                layout="vertical"
+                                data={squadPointsBreakdown.contributors}
+                                margin={{ left: 4, right: 12, top: 4, bottom: 4 }}
+                              >
+                                <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
+                                <XAxis
+                                  type="number"
+                                  stroke="#64748b"
+                                  tick={{ fill: "#94a3b8", fontSize: 9 }}
+                                />
+                                <YAxis
+                                  type="category"
+                                  dataKey="name"
+                                  width={92}
+                                  stroke="#64748b"
+                                  tick={{ fill: "#cbd5e1", fontSize: 8 }}
+                                />
+                                <Tooltip
+                                  contentStyle={{
+                                    background: "#0f172a",
+                                    border: "1px solid #334155",
+                                    borderRadius: 8,
+                                    fontSize: 11,
+                                  }}
+                                />
+                                <Bar dataKey="value" fill="#38bdf8" radius={[0, 4, 4, 0]} name="Points" />
+                              </BarChartRecharts>
+                            </ResponsiveContainer>
+                          ) : (
+                            <div className="flex h-[200px] items-center justify-center text-[9px] font-bold uppercase text-slate-500">
+                              No points yet
                             </div>
-                         </div>
-                         <div className="grid grid-cols-2 h-full pb-8">
-                            <ResponsiveContainer width="100%" height="100%">
-                              <PieChart>
-                                <Pie 
-                                  data={contributorData} 
-                                  cx="50%" cy="50%" 
-                                  innerRadius="40%" outerRadius="70%" 
-                                  dataKey="value" stroke="none"
-                                >
-                                  {contributorData?.map((_, i) => <Cell key={i} fill={TEAM_COLORS[i % TEAM_COLORS.length]} />)}
-                                </Pie>
-                                <Tooltip />
-                                <Legend wrapperStyle={{fontSize:7}} />
-                              </PieChart>
-                            </ResponsiveContainer>
-                            <ResponsiveContainer width="100%" height="100%">
-                              <PieChart>
-                                <Pie 
-                                  data={roleData} 
-                                  cx="50%" cy="50%" 
-                                  outerRadius="70%" 
-                                  dataKey="value" stroke="none"
-                                >
-                                  {roleData?.map((_, i) => <Cell key={i} fill={["#3b82f6", "#ef4444", "#10b981", "#f59e0b"][i]} />)}
-                                </Pie>
-                                <Tooltip />
-                                <Legend wrapperStyle={{fontSize:7}} />
-                              </PieChart>
-                            </ResponsiveContainer>
-                           </div>
+                          )}
                         </div>
-                     </div>
-                     <Card className="relative min-w-0 overflow-hidden rounded-[2.5rem] border-none shadow-2xl">
-                        {tabLoading && <div className="absolute inset-0 bg-white/60 backdrop-blur-md z-50 flex items-center justify-center"><Loader2 className="animate-spin text-slate-900" /></div>}
-                        <CardHeader className="bg-slate-50/50 p-8 border-b"><CardTitle className="text-xl font-black uppercase italic text-slate-900">Season Standings</CardTitle></CardHeader>
-                        <CardContent className="min-w-0 overflow-x-auto overscroll-x-contain touch-pan-x p-0 [-webkit-overflow-scrolling:touch]"><table className="w-full min-w-[800px] text-left"><thead className="bg-slate-50"><tr><th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400">Rank</th><th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400">Franchise</th><th className="px-6 py-5 text-center text-[10px] font-black text-slate-400">Squad</th><th className="px-6 py-5 text-center text-[10px] font-black text-slate-400">Games</th><th className="px-8 py-5 text-right text-[10px] font-black text-slate-900">Total Points</th></tr></thead><tbody>{standings.map((t, idx) => (<tr key={t.id} className="border-b hover:bg-slate-50 transition-colors"><td className="px-8 py-6"><span className={cn("h-10 w-10 flex items-center justify-center rounded-2xl font-black", idx === 0 ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-400")}>{idx + 1}</span></td><td className="px-8 py-6"><div className="font-black italic uppercase text-slate-900">{t.team_name}</div></td><td className="px-6 py-6 text-center font-black text-slate-500">{t.squadSize}</td><td className="px-6 py-6 text-center font-black text-slate-500">{t.matchesPlayed}</td><td className="px-8 py-6 text-right font-black italic text-2xl text-slate-900">{Math.floor(t.totalPoints)}</td></tr>))}</tbody></table></CardContent>
-                     </Card>
-                  </>
-                );
-             })()}
+                        <div className="min-h-[160px] w-full min-w-0">
+                          <p className="text-[8px] font-black uppercase tracking-widest text-slate-500 mb-1">
+                            By role (normalized)
+                          </p>
+                          {squadPointsBreakdown.roles.length ? (
+                            <ResponsiveContainer width="100%" height={200}>
+                              <BarChartRecharts
+                                layout="vertical"
+                                data={squadPointsBreakdown.roles}
+                                margin={{ left: 4, right: 12, top: 4, bottom: 4 }}
+                              >
+                                <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
+                                <XAxis
+                                  type="number"
+                                  stroke="#64748b"
+                                  tick={{ fill: "#94a3b8", fontSize: 9 }}
+                                />
+                                <YAxis
+                                  type="category"
+                                  dataKey="name"
+                                  width={72}
+                                  stroke="#64748b"
+                                  tick={{ fill: "#cbd5e1", fontSize: 9 }}
+                                />
+                                <Tooltip
+                                  contentStyle={{
+                                    background: "#0f172a",
+                                    border: "1px solid #334155",
+                                    borderRadius: 8,
+                                    fontSize: 11,
+                                  }}
+                                />
+                                <Bar dataKey="value" fill="#a78bfa" radius={[0, 4, 4, 0]} name="Points" />
+                              </BarChartRecharts>
+                            </ResponsiveContainer>
+                          ) : (
+                            <div className="flex h-[200px] items-center justify-center text-[9px] font-bold uppercase text-slate-500">
+                              No role totals
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <Card className="relative min-w-0 overflow-hidden rounded-[2.5rem] border-none shadow-2xl">
+                    {tabLoading && (
+                      <div className="absolute inset-0 bg-white/60 backdrop-blur-md z-50 flex items-center justify-center">
+                        <Loader2 className="animate-spin text-slate-900" />
+                      </div>
+                    )}
+                    <CardHeader className="bg-slate-50/50 p-8 border-b">
+                      <CardTitle className="text-xl font-black uppercase italic text-slate-900">
+                        Season Standings
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="min-w-0 overflow-x-auto overscroll-x-contain touch-pan-x p-0 [-webkit-overflow-scrolling:touch]">
+                      <table className="w-full min-w-[800px] text-left">
+                        <thead className="bg-slate-50">
+                          <tr>
+                            <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400">Rank</th>
+                            <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400">Franchise</th>
+                            <th className="px-6 py-5 text-center text-[10px] font-black text-slate-400">Squad</th>
+                            <th className="px-6 py-5 text-center text-[10px] font-black text-slate-400">Games</th>
+                            <th className="px-8 py-5 text-right text-[10px] font-black text-slate-900">
+                              Total Points
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {standings.map((t, idx) => (
+                            <tr key={t.id} className="border-b hover:bg-slate-50 transition-colors">
+                              <td className="px-8 py-6">
+                                <span
+                                  className={cn(
+                                    "h-10 w-10 flex items-center justify-center rounded-2xl font-black",
+                                    idx === 0 ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-400"
+                                  )}
+                                >
+                                  {idx + 1}
+                                </span>
+                              </td>
+                              <td className="px-8 py-6">
+                                <div className="font-black italic uppercase text-slate-900">{t.team_name}</div>
+                              </td>
+                              <td className="px-6 py-6 text-center font-black text-slate-500">{t.squadSize}</td>
+                              <td className="px-6 py-6 text-center font-black text-slate-500">{t.matchesPlayed}</td>
+                              <td className="px-8 py-6 text-right font-black italic text-2xl text-slate-900">
+                                {Math.floor(t.totalPoints)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </CardContent>
+                  </Card>
+            </>
           </div>
         )}
 
@@ -1413,7 +1684,7 @@ export default function ScoreboardPage() {
                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">
                     Rows are ordered by IPL team name, then player. Row tint follows IPL franchise (CSK, MI, RCB, etc.), matching the auction room and dashboard.
                     Each game column G1–G{SHEET_GAME_SLOTS} is that player’s IPL team’s 1st, 2nd, … match of the season (not the league schedule round). If CSK have played twice, only G1–G2 apply for CSK players.
-                    The database stores <span className="font-black text-slate-600">base points</span> (<code className="font-mono text-slate-500">base_points</code>) and <span className="font-black text-slate-600">total fantasy points</span> (<code className="font-mono text-slate-500">points</code>) = <span className="font-black text-slate-600">base points × performance multipliers</span> (big scores get a higher multiplier). The big number in each cell is your <span className="font-black text-slate-600">franchise total</span> = that stored total × <span className="font-black text-slate-600">Icon (2×) or Captain / Vice</span> (Icon wins if both apply). Small lines under the cell spell out <span className="font-black text-slate-600">base × multiplier → stored</span> and <span className="font-black text-slate-600">stored × franchise → what you see</span>. Day pipeline: <code className="font-mono">python3 scripts/run_ipl_day.py --date YYYY-MM-DD</code>. Manual edits set <span className="font-black text-slate-600">manual_override</span> so Sync skips them.
+                    The database stores <span className="font-black text-slate-600">PJ base points</span> (<code className="font-mono text-slate-500">base_points</code>) and <span className="font-black text-slate-600">stored fantasy</span> (<code className="font-mono text-slate-500">points</code>) = <span className="font-black text-slate-600">base × max(batting-haul tier, bowling-haul tier)</span> (runs and wicket tiers from the rules; the higher tier applies once to the whole base). The green subline shows <span className="font-black text-slate-600">max(bat,bowl)</span> when sync has written haul columns; otherwise the effective × until you re-sync. The big cell value is usually <span className="font-black text-slate-600">stored × Icon (2×) or Captain / Vice</span> (franchise Icon wins if both apply). On <span className="font-black text-slate-600">booster days</span>, the sheet uses <span className="font-black text-slate-600">base × 3</span> (or × 6 for franchise Icon). Day pipeline: <code className="font-mono">python3 scripts/run_ipl_day.py --date YYYY-MM-DD</code>. Manual edits set <span className="font-black text-slate-600">manual_override</span> so Sync skips them.
                  </p>
                  <div className="flex flex-wrap gap-2 items-center bg-white/80 p-3 rounded-xl border border-slate-100">
                     <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 mr-1">IPL legend</span>
@@ -1535,6 +1806,16 @@ export default function ScoreboardPage() {
                         onSaved={async () => {
                           const { data } = await supabase.from("franchise_cvc_selections").select("*");
                           setFranchiseCvcRows((data as FranchiseCvcRow[]) || []);
+                        }}
+                      />
+                      <FranchiseBoosterPanel
+                        franchiseId={franchise.id}
+                        franchiseLabel={franchise.team_name || franchise.full_name || ""}
+                        rows={franchiseBoosterRows}
+                        canEdit={canEdit}
+                        onSaved={async () => {
+                          const { data } = await supabase.from("franchise_booster_days").select("*");
+                          setFranchiseBoosterRows((data as FranchiseBoosterRow[]) || []);
                         }}
                       />
                     </div>
@@ -1699,16 +1980,58 @@ export default function ScoreboardPage() {
                                   }
 
                                   const rawPts = cell.value;
-                                  const fant = mObj ? getFranchiseFantasyMult(franchise.id, p.id, mObj) : { mult: 1, tag: null };
-                                  const displayPts = Math.round(rawPts * fant.mult * 100) / 100;
                                   const ptsKey = mObj ? `${p.id}_${mObj.id}` : "";
-                                  const basePts =
-                                    ptsKey && !isDirty ? matchPointsBasePointsMap.get(ptsKey) : undefined;
-                                  const showBaseMultHint =
-                                    basePts != null &&
-                                    basePts > 0 &&
-                                    Math.abs(rawPts - basePts) > 0.05;
-                                  const perfMult = showBaseMultHint ? rawPts / basePts : null;
+                                  const mpDet = ptsKey ? matchPointsDetailByKey.get(ptsKey) : undefined;
+                                  const basePts = mpDet?.base != null ? mpDet.base : undefined;
+                                  const dKey = mObj?.date_time ? matchDateKeyIST(mObj.date_time) : "";
+                                  const iconId =
+                                    franchiseIconRows.find((r) => r.team_id === franchise.id)?.player_id ?? null;
+                                  const activeCvc = mObj
+                                    ? activeCvcForMatchDate(franchiseCvcRows, franchise.id, dKey)
+                                    : null;
+                                  const sheet: {
+                                    display: number;
+                                    breakdown: FranchiseMatchSheetBreakdown;
+                                  } = mObj
+                                    ? franchiseMatchSheetDisplay({
+                                        storedPoints: rawPts,
+                                        basePoints: basePts,
+                                        franchiseId: franchise.id,
+                                        playerId: p.id,
+                                        franchiseIconPlayerId: iconId,
+                                        matchDateKeyIST: dKey,
+                                        boosterRows: franchiseBoosterRows,
+                                        activeCvc,
+                                      })
+                                    : {
+                                        display: rawPts,
+                                        breakdown: {
+                                          mode: "franchise_mult",
+                                          mult: 1,
+                                          tag: null,
+                                          storedPoints: rawPts,
+                                        },
+                                      };
+                                  const displayPts = sheet.display;
+                                  const { breakdown } = sheet;
+                                  const hasHaulCols =
+                                    mpDet?.haulRun != null &&
+                                    mpDet?.haulWick != null &&
+                                    mpDet?.haulApp != null &&
+                                    Number.isFinite(mpDet.haulRun) &&
+                                    Number.isFinite(mpDet.haulWick) &&
+                                    Number.isFinite(mpDet.haulApp);
+                                  const showPjHaulLine = basePts != null && basePts > 0;
+                                  const effHaulMult =
+                                    basePts != null && basePts > 0 ? rawPts / basePts : null;
+                                  const titleBooster =
+                                    breakdown.mode === "booster"
+                                      ? `Booster day: base ${breakdown.baseUsed} × ${breakdown.sheetMult} (${breakdown.isFranchiseIcon ? "Franchise Icon" : "booster"}) = ${displayPts}`
+                                      : null;
+                                  const titleFranchise =
+                                    breakdown.mode === "franchise_mult" && breakdown.mult > 1
+                                      ? `Stored ${rawPts} × ${breakdown.mult} (${breakdown.tag === "icon" ? "Icon" : breakdown.tag === "c" ? "C" : "VC"}) = ${displayPts}`
+                                      : null;
                                   return (
                                     <td key={i} className={cn("px-1.5 py-3 text-center sm:px-3 sm:py-4", teamStyle.bg)}>
                                       <div className="flex flex-col items-center gap-0.5">
@@ -1730,28 +2053,56 @@ export default function ScoreboardPage() {
                                           )}
                                           placeholder="0"
                                           title={
-                                            showBaseMultHint && basePts != null
-                                              ? `Base points ${basePts} × multiplier → stored ${rawPts}; franchise ×${fant.mult} → cell ${displayPts}`
-                                              : fant.mult > 1
-                                                ? `Stored ${rawPts} × ${fant.mult} (${fant.tag === "icon" ? "Icon" : fant.tag === "c" ? "C" : "VC"}) = ${displayPts}`
-                                                : undefined
+                                            titleBooster ??
+                                            (showPjHaulLine && basePts != null
+                                              ? hasHaulCols
+                                                ? `PJ base ${basePts} × max(batting haul ${fmtHaulTier(mpDet!.haulRun!)}, bowling haul ${fmtHaulTier(mpDet!.haulWick!)}) = ${fmtHaulTier(mpDet!.haulApp!)}× → stored ${rawPts}; franchise cell → ${displayPts}`
+                                                : `PJ base ${basePts} × haul (effective ${effHaulMult != null ? fmtHaulTier(effHaulMult) : "?"})× → stored ${rawPts}; franchise cell → ${displayPts}`
+                                              : titleFranchise ?? undefined)
                                           }
                                         />
-                                        {showBaseMultHint && perfMult != null ? (
+                                        {showPjHaulLine && basePts != null ? (
                                           <span
-                                            className="text-[7px] font-black uppercase tracking-tight text-emerald-800/90 tabular-nums"
-                                            title={`Base points × performance multiplier = stored fantasy points`}
+                                            className="text-[7px] font-black uppercase tracking-tight text-emerald-800/90 tabular-nums leading-tight text-center max-w-[5.5rem] sm:max-w-none"
+                                            title="Total fantasy points = PJ base × max(batting-haul tier, bowling-haul tier). Re-sync populates haul columns."
                                           >
-                                            base {basePts?.toFixed(1)}×{perfMult != null && perfMult >= 10 ? perfMult.toFixed(1) : perfMult != null ? perfMult.toFixed(2) : "?"}→{rawPts}
+                                            {hasHaulCols ? (
+                                              <>
+                                                base {basePts.toFixed(1)}×max(
+                                                {fmtHaulTier(mpDet!.haulRun!)},{fmtHaulTier(mpDet!.haulWick!)})=
+                                                {fmtHaulTier(mpDet!.haulApp!)}→{rawPts}
+                                              </>
+                                            ) : effHaulMult != null ? (
+                                              <>
+                                                base {basePts.toFixed(1)}×{fmtHaulTier(effHaulMult)}→{rawPts}
+                                                <span className="block font-bold text-emerald-950/70 normal-case">
+                                                  (re-sync for bat/bowl tiers)
+                                                </span>
+                                              </>
+                                            ) : (
+                                              <>base {basePts.toFixed(1)}→{rawPts}</>
+                                            )}
                                           </span>
                                         ) : null}
-                                        {fant.mult > 1 ? (
+                                        {breakdown.mode === "booster" ? (
+                                          <span
+                                            className="text-[7px] font-black uppercase tracking-tight text-violet-900 tabular-nums"
+                                            title="Booster day: base × 3 (× 6 franchise Icon); Captain/Vice and normal Icon 2× do not apply"
+                                          >
+                                            base {breakdown.baseUsed.toFixed(1)}×{breakdown.sheetMult} booster={displayPts}
+                                          </span>
+                                        ) : breakdown.mode === "franchise_mult" && breakdown.mult > 1 ? (
                                           <span
                                             className="text-[7px] font-black uppercase tracking-tight text-violet-900 tabular-nums"
                                             title="Franchise multiplier on stored fantasy points"
                                           >
-                                            {rawPts}×{fant.mult}
-                                            {fant.tag === "icon" ? " Icon" : fant.tag === "c" ? " C" : " VC"}={displayPts}
+                                            {rawPts}×{breakdown.mult}
+                                            {breakdown.tag === "icon"
+                                              ? " Icon"
+                                              : breakdown.tag === "c"
+                                                ? " C"
+                                                : " VC"}
+                                            ={displayPts}
                                           </span>
                                         ) : null}
                                         {canEdit && mObj && isMatchPlayed(mObj) ? (

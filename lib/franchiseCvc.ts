@@ -3,6 +3,11 @@ export const VICE_CAPTAIN_MULT = 1.5;
 /** Franchise Icon pick (not `players.type`) — 2× stored points for every game. */
 export const FRANCHISE_ICON_MULT = 2;
 
+/** On a franchise booster day (IST calendar): sheet uses base × this (C/VC and normal Icon 2× are ignored). */
+export const BOOSTER_DAY_MULT = 3;
+/** Franchise Icon on a booster day: base × this (not 3× and not 2× on stored). */
+export const BOOSTER_DAY_ICON_MULT = 6;
+
 export type FranchiseIconRow = {
   team_id: string;
   player_id: string;
@@ -16,6 +21,14 @@ export type FranchiseCvcRow = {
   captain_id: string | null;
   vice_captain_id: string | null;
   valid_from: string;
+  created_at?: string;
+};
+
+/** Up to 3 IST calendar dates per franchise when booster applies (base × 3, or × 6 for franchise Icon). */
+export type FranchiseBoosterRow = {
+  team_id: string;
+  slot: number;
+  booster_date: string;
   created_at?: string;
 };
 
@@ -88,6 +101,100 @@ export function franchiseFantasyMultiplier(
   if (c === CAPTAIN_MULT) return { mult: c, tag: "c" };
   if (c === VICE_CAPTAIN_MULT) return { mult: c, tag: "vc" };
   return { mult: 1, tag: null };
+}
+
+export function isFranchiseBoosterDay(
+  rows: FranchiseBoosterRow[],
+  teamId: string,
+  matchDateKeyIST: string
+): boolean {
+  if (!matchDateKeyIST) return false;
+  return rows.some((r) => r.team_id === teamId && dateKeyOnly(r.booster_date) === matchDateKeyIST);
+}
+
+function effectiveBaseForSheet(
+  basePoints: number | null | undefined,
+  storedPoints: number
+): number {
+  if (basePoints != null && Number.isFinite(Number(basePoints))) return Number(basePoints);
+  return storedPoints;
+}
+
+export type FranchiseMatchSheetBreakdown =
+  | { mode: "booster"; sheetMult: number; baseUsed: number; isFranchiseIcon: boolean }
+  | {
+      mode: "franchise_mult";
+      mult: number;
+      tag: "icon" | "c" | "vc" | null;
+      storedPoints: number;
+    };
+
+/**
+ * Franchise-facing points for one played cell: booster day → base × 3 (or × 6 for franchise Icon);
+ * otherwise stored fantasy × Icon / C / VC.
+ */
+export function franchiseMatchSheetDisplay(args: {
+  storedPoints: number;
+  basePoints: number | null | undefined;
+  franchiseId: string;
+  playerId: string;
+  franchiseIconPlayerId: string | null;
+  matchDateKeyIST: string;
+  boosterRows: FranchiseBoosterRow[];
+  activeCvc: ReturnType<typeof activeCvcForMatchDate>;
+}): { display: number; breakdown: FranchiseMatchSheetBreakdown } {
+  const booster = isFranchiseBoosterDay(args.boosterRows, args.franchiseId, args.matchDateKeyIST);
+  const isFIcon = !!(args.franchiseIconPlayerId && args.playerId === args.franchiseIconPlayerId);
+
+  if (booster) {
+    const baseUsed = effectiveBaseForSheet(args.basePoints, args.storedPoints);
+    const sheetMult = isFIcon ? BOOSTER_DAY_ICON_MULT : BOOSTER_DAY_MULT;
+    return {
+      display: Math.round(baseUsed * sheetMult * 100) / 100,
+      breakdown: { mode: "booster", sheetMult, baseUsed, isFranchiseIcon: isFIcon },
+    };
+  }
+
+  const { mult, tag } = franchiseFantasyMultiplier(
+    args.playerId,
+    args.franchiseIconPlayerId,
+    args.activeCvc
+  );
+  return {
+    display: Math.round(args.storedPoints * mult * 100) / 100,
+    breakdown: { mode: "franchise_mult", mult, tag, storedPoints: args.storedPoints },
+  };
+}
+
+/** Inverse of franchise sheet display when the owner edits the cell (saves underlying `match_points.points`). */
+export function storedPointsFromFranchiseSheetDisplay(args: {
+  displayPts: number;
+  storedPoints: number;
+  basePoints: number | null | undefined;
+  franchiseId: string;
+  playerId: string;
+  franchiseIconPlayerId: string | null;
+  matchDateKeyIST: string;
+  boosterRows: FranchiseBoosterRow[];
+  activeCvc: ReturnType<typeof activeCvcForMatchDate>;
+}): number {
+  const booster = isFranchiseBoosterDay(args.boosterRows, args.franchiseId, args.matchDateKeyIST);
+  const isFIcon = !!(args.franchiseIconPlayerId && args.playerId === args.franchiseIconPlayerId);
+
+  if (booster) {
+    const baseUsed = effectiveBaseForSheet(args.basePoints, args.storedPoints);
+    const perfMult = baseUsed > 0 ? args.storedPoints / baseUsed : 1;
+    const sheetMult = isFIcon ? BOOSTER_DAY_ICON_MULT : BOOSTER_DAY_MULT;
+    return Math.round((args.displayPts / sheetMult) * perfMult * 100) / 100;
+  }
+
+  const { mult } = franchiseFantasyMultiplier(
+    args.playerId,
+    args.franchiseIconPlayerId,
+    args.activeCvc
+  );
+  if (mult <= 0) return args.displayPts;
+  return Math.round((args.displayPts / mult) * 100) / 100;
 }
 
 export function isIconPlayer(p: { type?: string | null }): boolean {

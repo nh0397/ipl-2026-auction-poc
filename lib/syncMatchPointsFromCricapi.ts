@@ -6,6 +6,30 @@ function normPlayerName(s: string): string {
   return s.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
+/**
+ * Scorecard label (normalized) → try these DB `player_name` normalizations in order.
+ * CricAPI/ESPN spelling often differs from auction DB (Phil vs Philip, Chakaravarthy vs Chakravarthy).
+ */
+const SCORECARD_NAME_FALLBACKS: Record<string, readonly string[]> = {
+  "philip salt": ["phil salt"],
+  "varun chakaravarthy": ["varun chakravarthy"],
+  "digvesh singh rathi": ["digvesh rathi"],
+};
+
+function lookupDbPlayerId(scorecardPlayerName: string, nameToDbPlayerId: Map<string, string>): string | undefined {
+  const n = normPlayerName(scorecardPlayerName);
+  const direct = nameToDbPlayerId.get(n);
+  if (direct) return direct;
+  const fallbacks = SCORECARD_NAME_FALLBACKS[n];
+  if (fallbacks) {
+    for (const fb of fallbacks) {
+      const id = nameToDbPlayerId.get(fb);
+      if (id) return id;
+    }
+  }
+  return undefined;
+}
+
 /** Normalize DB `fixtures_cricapi.scorecard` to the shape expected by `aggregateFantasyRowsFromCricApiMatchData` (CricAPI `data` object). */
 function toMatchScorecardData(raw: unknown): Record<string, unknown> | null {
   if (raw == null) return null;
@@ -52,6 +76,19 @@ export async function syncMatchPointsFromStoredScorecards(admin: SupabaseClient)
     if (nm) nameToDbPlayerId.set(nm, String(pr.id));
   }
 
+  let includeHaulColumns = true;
+  const { error: haulColProbeErr } = await admin.from("match_points").select("haul_applied_mult").limit(1);
+  if (haulColProbeErr) {
+    if (/haul_applied|schema cache|could not find.*column/i.test(String(haulColProbeErr.message))) {
+      includeHaulColumns = false;
+      errors.push(
+        "match_points is missing haul_* columns — run SQL migration 20260403240000_match_points_haul_mults.sql in Supabase, then sync again for haul tier breakdown. Syncing points + base_points only for now."
+      );
+    } else {
+      errors.push(`match_points column probe: ${haulColProbeErr.message}`);
+    }
+  }
+
   const { data: lockedRows, error: lockErr } = await admin
     .from("match_points")
     .select("player_id, match_id")
@@ -84,12 +121,7 @@ export async function syncMatchPointsFromStoredScorecards(admin: SupabaseClient)
     if (Number.isFinite(n)) matchNoToId.set(n, String(m.id));
   }
 
-  const batch: {
-    player_id: string;
-    match_id: string;
-    points: number;
-    base_points: number;
-  }[] = [];
+  const batch: Record<string, string | number>[] = [];
   let rowsSkippedManual = 0;
   let rowsSkippedUnmapped = 0;
   const unmappedSample: string[] = [];
@@ -117,7 +149,7 @@ export async function syncMatchPointsFromStoredScorecards(admin: SupabaseClient)
     }
 
     for (const row of rows) {
-      const dbPlayerId = nameToDbPlayerId.get(normPlayerName(row.player_name));
+      const dbPlayerId = lookupDbPlayerId(row.player_name, nameToDbPlayerId);
       if (!dbPlayerId) {
         rowsSkippedUnmapped += 1;
         if (unmappedSample.length < 15) unmappedSample.push(row.player_name);
@@ -128,12 +160,18 @@ export async function syncMatchPointsFromStoredScorecards(admin: SupabaseClient)
         rowsSkippedManual += 1;
         continue;
       }
-      batch.push({
+      const rowPayload: Record<string, string | number> = {
         player_id: dbPlayerId,
         match_id: matchId,
         points: row.d11.multipliedTotal,
         base_points: row.scoring.total_pts,
-      });
+      };
+      if (includeHaulColumns) {
+        rowPayload.haul_run_mult = row.d11.runMultiplier;
+        rowPayload.haul_wicket_mult = row.d11.wicketMultiplier;
+        rowPayload.haul_applied_mult = row.d11.appliedMultiplier;
+      }
+      batch.push(rowPayload);
     }
   }
 

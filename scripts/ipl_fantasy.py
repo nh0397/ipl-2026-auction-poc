@@ -1045,8 +1045,8 @@ def field_pts(fld: Dict) -> int:
     return pts
 
 
-def d11_applied_multiplier(runs: int, wickets: int) -> float:
-    """Dream11-style haul tiers on total base (must match lib/scoring.ts d11BonusMultiplierInfo)."""
+def d11_multiplier_breakdown(runs: int, wickets: int) -> tuple[float, float, float]:
+    """(run_mult, wicket_mult, max(run,wicket)) — must match lib/scoring.ts d11BonusMultiplierInfo."""
     r = max(0, int(runs) if runs is not None else 0)
     w = max(0, int(wickets) if wickets is not None else 0)
 
@@ -1070,7 +1070,12 @@ def d11_applied_multiplier(runs: int, wickets: int) -> float:
     elif w == 2:
         wk_mult = 1.5
 
-    return max(run_mult, wk_mult)
+    return run_mult, wk_mult, max(run_mult, wk_mult)
+
+
+def d11_applied_multiplier(runs: int, wickets: int) -> float:
+    """Dream11-style haul tiers on total base (must match lib/scoring.ts d11BonusMultiplierInfo)."""
+    return d11_multiplier_breakdown(runs, wickets)[2]
 
 
 def pj_base_total(p: Dict) -> float:
