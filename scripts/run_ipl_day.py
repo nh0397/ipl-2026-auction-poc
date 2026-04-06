@@ -7,22 +7,24 @@ One entrypoint for a calendar day (IST):
   → Supabase PATCH scorecard + points_synced + fixtureapi_points
   → Upsert public.match_points (needs fixtures_cricapi.match_no + public.matches + name match on players)
 
-Everything lives in this file until you outgrow it.
+If `fixtures_cricapi.scorecard` already has innings data, **match_scorecard is not called** (saves API quota);
+otherwise CricAPI is called. Then Cricsheet zip → dot merge → PATCH → match_points.
 
-Usage:
+Usage (only flag you need):
   python3 scripts/run_ipl_day.py --date 2026-04-02
   python3 scripts/run_ipl_day.py                      # today (IST)
 
-Env: .env with NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY (or anon),
-     NEXT_PUBLIC_CRICAPI_KEY or CRICAPI_KEY.
-Optional: CRICAPI_SCORECARD_SLEEP_SECONDS (default 1.0)
+Env: NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY,
+     NEXT_PUBLIC_CRICAPI_KEY (only required when a fixture has no scorecard in DB yet).
+Optional: CRICAPI_SCORECARD_SLEEP_SECONDS (default 1.0), SKIP_CRICSHEET=1, SKIP_MATCH_POINTS=1
 
-Cricsheet: always downloads a fresh ipl_json.zip each run (URL updates often; CI runners are clean anyway).
+Cricsheet: downloads a fresh ipl_json.zip each run unless SKIP_CRICSHEET=1.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import tempfile
@@ -69,6 +71,31 @@ def fetch_cricapi_scorecard(api_match_id: str) -> Dict[str, Any]:
     if payload.get("status") != "success":
         raise RuntimeError(f"CricAPI match_scorecard failed: {payload}")
     return dict(payload.get("data") or {})
+
+
+def normalized_scorecard_data(raw: Any) -> Optional[Dict[str, Any]]:
+    """
+    Return the CricAPI `data` object (teamInfo + scorecard[], …) if the DB already has a usable
+    scorecard. Same shape as `fetch_cricapi_scorecard` returns. Otherwise None → caller should API.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            return None
+    if not isinstance(raw, dict):
+        return None
+    inner: Dict[str, Any]
+    if isinstance(raw.get("data"), dict):
+        inner = raw["data"]
+    else:
+        inner = raw
+    sc = inner.get("scorecard")
+    if isinstance(sc, list) and len(sc) > 0:
+        return dict(inner)
+    return None
 
 
 def list_fixtures_for_day(match_date_ist: Optional[str]) -> List[Dict[str, Any]]:
@@ -125,7 +152,7 @@ def update_fixture_and_sync_flag(fixture_id: str, api_match_id: str, scorecard: 
     r2.raise_for_status()
 
 
-# ── Cricsheet: readme → id → {id}.json → dots per bowler (PJ-style) ──────────
+# ── Cricsheet: readme → id → {id}.json → dots per bowler (fantasy dot balls) ─
 
 
 def download_cricsheet_zip_fresh() -> str:
@@ -233,23 +260,9 @@ def find_cricsheet_match_id(
 def main() -> None:
     if not SUPABASE_URL or not SB_SERVICE_KEY:
         raise SystemExit("Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env")
-    if not CRICAPI_KEY:
-        raise SystemExit("Missing NEXT_PUBLIC_CRICAPI_KEY (or CRICAPI_KEY) in .env")
 
-    ap = argparse.ArgumentParser(
-        description="Select fixtures_cricapi by match_date, then CricAPI scorecard + optional Cricsheet dots."
-    )
+    ap = argparse.ArgumentParser(description="Full IPL day pipeline: CricAPI (if needed) → dots → DB → match_points.")
     ap.add_argument("--date", default=None, help="IST YYYY-MM-DD (default: today IST)")
-    ap.add_argument(
-        "--skip-cricsheet",
-        action="store_true",
-        help="Only CricAPI scorecard (no zip / readme / dots).",
-    )
-    ap.add_argument(
-        "--skip-match-points",
-        action="store_true",
-        help="Do not upsert public.match_points after saving the scorecard.",
-    )
     args = ap.parse_args()
     if args.date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(args.date).strip()):
         raise SystemExit(f"Bad --date (want YYYY-MM-DD): {args.date!r}")
@@ -260,9 +273,20 @@ def main() -> None:
     fixtures = list_fixtures_for_day(target)
     print(f"IST date: {label} — {len(fixtures)} row(s) from fixtures_cricapi where match_date = {label!r}.")
 
+    need_cricapi_fetch = any(normalized_scorecard_data(fx.get("scorecard")) is None for fx in fixtures)
+    if need_cricapi_fetch and not CRICAPI_KEY:
+        raise SystemExit(
+            "Missing NEXT_PUBLIC_CRICAPI_KEY (or CRICAPI_KEY) in .env — needed because at least one fixture has no scorecard in DB yet."
+        )
+    if not need_cricapi_fetch:
+        print("  [cricapi] scorecards already in DB — skipping match_scorecard API.")
+
+    skip_cricsheet = os.getenv("SKIP_CRICSHEET", "").strip() == "1"
+    skip_match_points = os.getenv("SKIP_MATCH_POINTS", "").strip() == "1"
+
     zip_path: Optional[str] = None
     zip_ready = False
-    if fixtures and not args.skip_cricsheet:
+    if fixtures and not skip_cricsheet:
         try:
             zip_path = download_cricsheet_zip_fresh()
             zip_ready = True
@@ -270,7 +294,7 @@ def main() -> None:
             print(f"  WARNING: cricsheet zip unavailable ({e}); continuing without dots.")
 
     players_by_name: Dict[str, str] = {}
-    if not args.skip_match_points:
+    if not skip_match_points:
         try:
             from cricapi_match_points import fetch_players_name_map
 
@@ -289,10 +313,18 @@ def main() -> None:
             md = fx.get("match_date") or label
             t1 = fx.get("team1_name") or fx.get("team1_short") or ""
             t2 = fx.get("team2_name") or fx.get("team2_short") or ""
-            print(f"[{i}/{len(fixtures)}] CricAPI scorecard api_match_id={api_mid} …")
-            sc = fetch_cricapi_scorecard(str(api_mid))
+            from_db = normalized_scorecard_data(fx.get("scorecard"))
+            if from_db is not None:
+                sc = from_db
+                print(
+                    f"[{i}/{len(fixtures)}] api_match_id={api_mid} — skip CricAPI; using scorecard from DB, then merge / persist."
+                )
+            else:
+                print(f"[{i}/{len(fixtures)}] CricAPI match_scorecard api_match_id={api_mid} …")
+                sc = fetch_cricapi_scorecard(str(api_mid))
+                time.sleep(sleep_s)
 
-            if zip_ready and zip_path and not args.skip_cricsheet:
+            if zip_ready and zip_path and not skip_cricsheet:
                 from merge_cricsheet_dots_into_scorecard import merge_dots_into_scorecard_data
 
                 sc, dot_meta = merge_dots_into_scorecard_data(sc, str(md), zip_path)
@@ -307,7 +339,7 @@ def main() -> None:
             update_fixture_and_sync_flag(str(fid), str(api_mid), sc)
             print(f"  stored + synced fixture_id={fid}")
 
-            if not args.skip_match_points and players_by_name:
+            if not skip_match_points and players_by_name:
                 from cricapi_match_points import persist_match_points_from_scorecard
 
                 n_pts, skipped, mp_err = persist_match_points_from_scorecard(
@@ -333,7 +365,6 @@ def main() -> None:
                     "team2_short": fx.get("team2_short") or "",
                 }
             )
-            time.sleep(sleep_s)
     finally:
         if zip_path and os.path.isfile(zip_path):
             try:

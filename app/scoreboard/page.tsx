@@ -31,6 +31,15 @@ import {
   type PlayerCatalogRow,
 } from "@/lib/espnPjBreakdownFromScorecard";
 import { FantasyPjBreakdownPanel } from "@/components/fantasy/FantasyPjBreakdownPanel";
+import { FranchiseCvcPanel } from "@/components/scoreboard/FranchiseCvcPanel";
+import { FranchiseIconPanel } from "@/components/scoreboard/FranchiseIconPanel";
+import {
+  activeCvcForMatchDate,
+  franchiseFantasyMultiplier,
+  matchDateKeyIST,
+  type FranchiseCvcRow,
+  type FranchiseIconRow,
+} from "@/lib/franchiseCvc";
 
 // ─── Fixture helpers ────────────────────────────────────────────────
 interface Fixture {
@@ -204,12 +213,16 @@ export default function ScoreboardPage() {
   const [allNominations, setAllNominations] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [pendingEdits, setPendingEdits] = useState<Record<string, { player_id: string, match_id: string, points: number }>>({});
+  const [pendingEdits, setPendingEdits] = useState<
+    Record<string, { player_id: string; match_id: string; points: number | null; manual_override: boolean }>
+  >({});
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState<"sheets" | "standings" | "fixtures">("sheets");
   const [analyticsTeamId, setAnalyticsTeamId] = useState<string | null>(null);
   const [standings, setStandings] = useState<any[]>([]);
   const [allMatchPoints, setAllMatchPoints] = useState<any[]>([]);
+  const [franchiseCvcRows, setFranchiseCvcRows] = useState<FranchiseCvcRow[]>([]);
+  const [franchiseIconRows, setFranchiseIconRows] = useState<FranchiseIconRow[]>([]);
   /** Fixtures tab: ESPN / CricAPI modal (scorecard + fantasy tabs). */
   const [fixtureModal, setFixtureModal] = useState<{ source: "espn" | "cricapi"; fixture: Fixture } | null>(null);
   const [fixtureModalTab, setFixtureModalTab] = useState<"scorecard" | "fantasy">("scorecard");
@@ -217,6 +230,7 @@ export default function ScoreboardPage() {
   const [modalRefreshing, setModalRefreshing] = useState(false);
   const [expandedCricapiFantasyId, setExpandedCricapiFantasyId] = useState<string | null>(null);
   const [expandedEspnFantasyKey, setExpandedEspnFantasyKey] = useState<string | null>(null);
+  const [syncingPoints, setSyncingPoints] = useState(false);
 
   const [espnScorecardByMatchNo, setEspnScorecardByMatchNo] = useState<Record<number, any | null>>({});
   const [espnScorecardLoadingByMatchNo, setEspnScorecardLoadingByMatchNo] = useState<Record<number, boolean>>({});
@@ -330,20 +344,76 @@ export default function ScoreboardPage() {
 
   const teamSchedules = useMemo(() => buildTeamSchedules(iplScheduleRows), [iplScheduleRows]);
 
-  const effectivePointsByPlayerMatch = useMemo(() => {
-    const map = new Map<string, number>();
+  /**
+   * Stored `match_points.points`: NULL = DNP, number = score (0 = played, zero points).
+   * Map only contains keys for rows present in DB or pending; missing key = no row yet.
+   */
+  const matchPointsCellMap = useMemo(() => {
+    const map = new Map<string, number | null>();
     (allMatchPoints || []).forEach((pt: any) => {
       if (!pt?.player_id || !pt?.match_id) return;
-      map.set(`${pt.player_id}_${pt.match_id}`, Number(pt.points) || 0);
+      const key = `${pt.player_id}_${pt.match_id}`;
+      const raw = pt.points;
+      if (raw === null || raw === undefined) map.set(key, null);
+      else map.set(key, Number(raw) || 0);
     });
     Object.values(pendingEdits || {}).forEach((ed: any) => {
       if (!ed?.player_id || !ed?.match_id) return;
-      map.set(`${ed.player_id}_${ed.match_id}`, Number(ed.points) || 0);
+      const key = `${ed.player_id}_${ed.match_id}`;
+      const raw = ed.points;
+      if (raw === null || raw === undefined) map.set(key, null);
+      else map.set(key, Number(raw) || 0);
     });
     return map;
   }, [allMatchPoints, pendingEdits]);
 
-  /** Points for this player in their IPL team’s *n*th match of the season (not league round number). */
+  /** `base_points` from DB (before performance multipliers); used under the cell total. */
+  const matchPointsBasePointsMap = useMemo(() => {
+    const map = new Map<string, number | null>();
+    (allMatchPoints || []).forEach((pt: any) => {
+      if (!pt?.player_id || !pt?.match_id) return;
+      const key = `${pt.player_id}_${pt.match_id}`;
+      const raw = pt.base_points;
+      if (raw === null || raw === undefined) map.set(key, null);
+      else map.set(key, Number(raw));
+    });
+    return map;
+  }, [allMatchPoints]);
+
+  /** Stored fantasy total (base × multipliers) × franchise Icon or C/VC for this match day. */
+  const getFranchiseFantasyMult = useCallback(
+    (franchiseId: string, playerId: string, mObj: { id: string; date_time?: string } | null | undefined) => {
+      if (!mObj?.date_time) return { mult: 1, tag: null as "icon" | "c" | "vc" | null };
+      const d = matchDateKeyIST(mObj.date_time);
+      const active = activeCvcForMatchDate(franchiseCvcRows, franchiseId, d);
+      const iconId = franchiseIconRows.find((r) => r.team_id === franchiseId)?.player_id ?? null;
+      return franchiseFantasyMultiplier(playerId, iconId, active);
+    },
+    [franchiseCvcRows, franchiseIconRows]
+  );
+
+  /** Sheet total: stored fantasy points × franchise multiplier (Icon / C / VC). */
+  const getFranchiseSheetPoints = useCallback(
+    (playerId: string, playerTeam: string | null | undefined, slot: number, franchiseId: string) => {
+      const short = resolvePlayerTeamToShort(playerTeam);
+      if (!short) return 0;
+      const sched = teamSchedules.get(short);
+      const leagueMn = sched?.[slot - 1];
+      if (leagueMn == null) return 0;
+      const m = matchByNo.get(leagueMn);
+      if (!m?.id) return 0;
+      const key = `${playerId}_${m.id}`;
+      if (!matchPointsCellMap.has(key)) return 0;
+      const v = matchPointsCellMap.get(key);
+      if (v === null) return 0;
+      const raw = Number(v) || 0;
+      const { mult } = getFranchiseFantasyMult(franchiseId, playerId, m);
+      return Math.round(raw * mult * 100) / 100;
+    },
+    [teamSchedules, matchByNo, matchPointsCellMap, getFranchiseFantasyMult]
+  );
+
+  /** Numeric points for totals (DNP and empty cell = 0). */
   const getEffectivePointsForPlayerTeamGame = (playerId: string, playerTeam: string | null | undefined, slot: number) => {
     const short = resolvePlayerTeamToShort(playerTeam);
     if (!short) return 0;
@@ -352,7 +422,45 @@ export default function ScoreboardPage() {
     if (leagueMn == null) return 0;
     const m = matchByNo.get(leagueMn);
     if (!m?.id) return 0;
-    return effectivePointsByPlayerMatch.get(`${playerId}_${m.id}`) ?? 0;
+    const key = `${playerId}_${m.id}`;
+    if (!matchPointsCellMap.has(key)) return 0;
+    const v = matchPointsCellMap.get(key);
+    if (v === null) return 0;
+    return v;
+  };
+
+  /** Match considered “played” for DNP / empty semantics (sheet UX). */
+  const isMatchPlayed = useCallback((m: { date_time?: string; is_locked?: boolean } | null | undefined) => {
+    if (!m) return false;
+    if (m.is_locked === true) return true;
+    const dt = m.date_time;
+    if (!dt) return false;
+    return new Date(dt).getTime() <= Date.now();
+  }, []);
+
+  /**
+   * no_match: slot past IPL schedule — show 0.
+   * upcoming: match not played yet — show 0 (not DNP).
+   * no_data: match played, no row in DB — show — until sync/entry (not auto DNP).
+   * dnp: NULL stored — did not play.
+   * score: numeric including 0 (played, zero points).
+   */
+  const resolveSheetCell = (
+    playerId: string,
+    mObj: { id: string; date_time?: string; is_locked?: boolean } | undefined
+  ):
+    | { kind: "no_match" }
+    | { kind: "upcoming" }
+    | { kind: "no_data" }
+    | { kind: "dnp" }
+    | { kind: "score"; value: number } => {
+    if (!mObj) return { kind: "no_match" };
+    if (!isMatchPlayed(mObj)) return { kind: "upcoming" };
+    const key = `${playerId}_${mObj.id}`;
+    const v = matchPointsCellMap.get(key);
+    if (v === undefined) return { kind: "no_data" };
+    if (v === null) return { kind: "dnp" };
+    return { kind: "score", value: v };
   };
 
   useEffect(() => { if (authProfile) setProfile(authProfile); }, [authProfile]);
@@ -401,7 +509,7 @@ export default function ScoreboardPage() {
   const fetchInitialData = async () => {
     try {
       setLoading(true);
-      const [teamsRes, matchesRes, scheduleRes, playersCatRes] = await Promise.all([
+      const [teamsRes, matchesRes, scheduleRes, playersCatRes, cvcRes, iconRes] = await Promise.all([
         supabase.from("profiles").select("*").neq("role", "Viewer").order("team_name", { ascending: true }),
         supabase.from("matches").select("*").order("match_no", { ascending: true }),
         supabase
@@ -413,6 +521,8 @@ export default function ScoreboardPage() {
           .select("player_name, team, type, role")
           .eq("auction_status", "sold")
           .order("player_name", { ascending: true }),
+        supabase.from("franchise_cvc_selections").select("*"),
+        supabase.from("franchise_icon_selection").select("*"),
       ]);
       if (scheduleRes.data) setIplScheduleRows(scheduleRes.data as IplScheduleRow[]);
       const teamsData = teamsRes.data || [];
@@ -425,6 +535,8 @@ export default function ScoreboardPage() {
       if (playersCatRes.data) {
         setPlayersCatalog(playersCatRes.data as PlayerCatalogRow[]);
       }
+      if (cvcRes.data) setFranchiseCvcRows(cvcRes.data as FranchiseCvcRow[]);
+      if (iconRes.data) setFranchiseIconRows(iconRes.data as FranchiseIconRow[]);
     } finally { setTimeout(() => setLoading(false), 300); }
   };
 
@@ -432,13 +544,15 @@ export default function ScoreboardPage() {
   const fetchSheetsData = async () => {
     setSubLoading(true);
     try {
-      const [playersRes, pointsRes, schedRes] = await Promise.all([
+      const [playersRes, pointsRes, schedRes, cvcRes, iconRes] = await Promise.all([
         supabase.from("players").select("*").eq("auction_status", "sold").order("player_name", { ascending: true }),
         supabase.from("match_points").select("*"),
         supabase
           .from("fixtures_cricapi")
           .select("match_no,team1_short,team2_short,date_time_gmt")
           .order("date_time_gmt", { ascending: true }),
+        supabase.from("franchise_cvc_selections").select("*"),
+        supabase.from("franchise_icon_selection").select("*"),
       ]);
       const pl = playersRes.data || [];
       setAllPlayers(pl);
@@ -452,6 +566,8 @@ export default function ScoreboardPage() {
       );
       setAllMatchPoints(pointsRes.data || []);
       if (schedRes.data?.length) setIplScheduleRows(schedRes.data as IplScheduleRow[]);
+      if (cvcRes.data) setFranchiseCvcRows(cvcRes.data as FranchiseCvcRow[]);
+      if (iconRes.data) setFranchiseIconRows(iconRes.data as FranchiseIconRow[]);
     } finally {
       setSubLoading(false);
     }
@@ -460,31 +576,41 @@ export default function ScoreboardPage() {
   const fetchStandingsData = async () => {
     setTabLoading(true);
     try {
-      // NOTE: players table doesn't have `team_name`; ownership is stored as `sold_to`/`sold_to_id`.
-      const { data: soldPlayers } = await supabase
-        .from("players")
-        .select("id, sold_to_id, sold_to, player_name, role")
-        .eq("auction_status", "sold");
-      const { data: pts } = await supabase.from("match_points").select("*");
+      // Must include `team` (IPL side) or G-column mapping and charts read 0 for every cell.
+      const [{ data: soldPlayers }, { data: pts }, { data: schedRes }, { data: cvcRows }, { data: iconRows }] = await Promise.all([
+        supabase.from("players").select("*").eq("auction_status", "sold").order("player_name", { ascending: true }),
+        supabase.from("match_points").select("*"),
+        supabase
+          .from("fixtures_cricapi")
+          .select("match_no,team1_short,team2_short,date_time_gmt")
+          .order("date_time_gmt", { ascending: true }),
+        supabase.from("franchise_cvc_selections").select("*"),
+        supabase.from("franchise_icon_selection").select("*"),
+      ]);
       setAllPlayers(soldPlayers || []);
       setAllMatchPoints(pts || []);
-      // Do NOT call calculateStandings here: setState is async; effectivePoints / derived maps
-      // would still be stale. Recompute in useEffect after state commits.
+      if (schedRes?.length) setIplScheduleRows(schedRes as IplScheduleRow[]);
+      if (cvcRows) setFranchiseCvcRows(cvcRows as FranchiseCvcRow[]);
+      if (iconRows) setFranchiseIconRows(iconRows as FranchiseIconRow[]);
     } finally {
       setTabLoading(false);
     }
   };
 
-  /** Build the same key map as effectivePointsByPlayerMatch but from explicit rows (avoids stale closure). */
+  /** Standings: numeric totals only (DNP → 0). */
   const buildPointsMap = useCallback((points: any[]) => {
     const map = new Map<string, number>();
     (points || []).forEach((pt: any) => {
       if (!pt?.player_id || !pt?.match_id) return;
-      map.set(`${pt.player_id}_${pt.match_id}`, Number(pt.points) || 0);
+      const raw = pt.points;
+      const n = raw === null || raw === undefined ? 0 : Number(raw) || 0;
+      map.set(`${pt.player_id}_${pt.match_id}`, n);
     });
     Object.values(pendingEdits || {}).forEach((ed: any) => {
       if (!ed?.player_id || !ed?.match_id) return;
-      map.set(`${ed.player_id}_${ed.match_id}`, Number(ed.points) || 0);
+      const raw = ed.points;
+      const n = raw === null || raw === undefined ? 0 : Number(raw) || 0;
+      map.set(`${ed.player_id}_${ed.match_id}`, n);
     });
     return map;
   }, [pendingEdits]);
@@ -518,7 +644,12 @@ export default function ScoreboardPage() {
             const key = `${player.id}_${m.id}`;
             if (pointsMap.has(key)) {
               matchHasPoints = true;
-              matchTotal += pointsMap.get(key) || 0;
+              const raw = pointsMap.get(key) || 0;
+              const iconId = franchiseIconRows.find((r) => r.team_id === team.id)?.player_id ?? null;
+              const d = matchDateKeyIST(m.date_time);
+              const active = activeCvcForMatchDate(franchiseCvcRows, team.id, d);
+              const { mult } = franchiseFantasyMultiplier(player.id, iconId, active);
+              matchTotal += raw * mult;
             }
           });
           if (matchHasPoints) {
@@ -541,31 +672,75 @@ export default function ScoreboardPage() {
       }).sort((a, b) => b.totalPoints - a.totalPoints);
       setStandings(standingsData);
     },
-    [franchises, allMatches, buildPointsMap, playerBelongsToTeam]
+    [franchises, allMatches, buildPointsMap, playerBelongsToTeam, franchiseCvcRows, franchiseIconRows]
   );
 
   useEffect(() => {
     if (activeTab !== "standings") return;
     if (!franchises.length || !allMatches.length) return;
     calculateStandings(allPlayers, allMatchPoints);
-  }, [activeTab, allMatchPoints, allPlayers, allMatches, franchises, calculateStandings]);
+  }, [activeTab, allMatchPoints, allPlayers, allMatches, franchises, calculateStandings, franchiseCvcRows, franchiseIconRows]);
 
   const fetchMatchSpecificData = async (matchId: string) => {
     const { data } = await supabase.from("nominations").select("*").eq("match_id", matchId);
     setAllNominations(data || []);
   };
 
-  const updateSeasonPoint = async (pId: string, teamGameSlot: number, val: string) => {
+  const setSeasonMatchPoints = (pId: string, teamGameSlot: number, points: number | null) => {
     if (!profile?.id || sheetFranchiseId !== profile.id) return;
     const fr = franchises.find((f) => f.id === sheetFranchiseId);
     const player = allPlayers.find((p) => p.id === pId);
     if (!fr || !player || (player.sold_to_id !== fr.id && player.sold_to !== fr.team_name)) return;
-    const pts = parseFloat(val) || 0;
     const short = resolvePlayerTeamToShort(player.team);
     const leagueMn = short ? teamSchedules.get(short)?.[teamGameSlot - 1] : undefined;
     const match = leagueMn != null ? allMatches.find((m) => m.match_no === leagueMn) : undefined;
     if (!match) return;
-    setPendingEdits((prev) => ({ ...prev, [`${pId}_${match.id}`]: { player_id: pId, match_id: match.id, points: pts } }));
+    setPendingEdits((prev) => ({
+      ...prev,
+      [`${pId}_${match.id}`]: { player_id: pId, match_id: match.id, points, manual_override: true },
+    }));
+  };
+
+  const updateSeasonPoint = (pId: string, teamGameSlot: number, val: string) => {
+    const ptsIn = parseFloat(val);
+    const displayPts = Number.isFinite(ptsIn) ? ptsIn : 0;
+    const fr = franchises.find((f) => f.id === sheetFranchiseId);
+    const player = allPlayers.find((p) => p.id === pId);
+    if (!fr || !player) return;
+    const short = resolvePlayerTeamToShort(player.team);
+    const leagueMn = short ? teamSchedules.get(short)?.[teamGameSlot - 1] : undefined;
+    const match = leagueMn != null ? allMatches.find((m) => m.match_no === leagueMn) : undefined;
+    const mult = match ? getFranchiseFantasyMult(fr.id, pId, match).mult : 1;
+    const raw = mult > 0 ? Math.round((displayPts / mult) * 100) / 100 : displayPts;
+    setSeasonMatchPoints(pId, teamGameSlot, raw);
+  };
+
+  const handleSyncMatchPoints = async () => {
+    setSyncingPoints(true);
+    try {
+      const res = await fetch("/api/match-points/sync", { method: "POST" });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(typeof json?.error === "string" ? json.error : `Sync failed (${res.status})`);
+        return;
+      }
+      const { data: pts } = await supabase.from("match_points").select("*");
+      setAllMatchPoints(pts || []);
+      const skipM = json.rowsSkippedManual ?? 0;
+      const skipU = json.rowsSkippedUnmapped ?? 0;
+      const sample = Array.isArray(json.unmappedNameSample) ? json.unmappedNameSample : [];
+      alert(
+        `Synced: ${json.rowsUpserted ?? 0} row(s) from ${json.fixturesProcessed ?? 0} fixture(s).` +
+          (skipM ? ` Skipped ${skipM} manual row(s).` : "") +
+          (skipU
+            ? ` No DB player for ${skipU} scorecard name(s) (CricAPI IDs are mapped by player name).` +
+                (sample.length ? ` Examples: ${sample.slice(0, 8).join(", ")}` : "")
+            : "") +
+          (json.errors?.length ? `\nNotes: ${json.errors.slice(0, 5).join("; ")}` : "")
+      );
+    } finally {
+      setSyncingPoints(false);
+    }
   };
 
   const handleBulkSave = async () => {
@@ -645,7 +820,7 @@ export default function ScoreboardPage() {
                     );
                     let colSum = 0;
                     teamPlayers.forEach((tp) => {
-                      colSum += getEffectivePointsForPlayerTeamGame(tp.id, tp.team, slot);
+                      colSum += Number(getEffectivePointsForPlayerTeamGame(tp.id, tp.team, slot)) || 0;
                     });
                     const prior = prev ? Number((prev as Record<string, number>)[team.team_name]) || 0 : 0;
                     data[team.team_name] = prior + colSum;
@@ -654,20 +829,31 @@ export default function ScoreboardPage() {
                   return acc;
                 }, []);
 
-                const currentAnalyticsTeam = analyticsTeamId ? franchises.find(f => f.id === analyticsTeamId) : standings[0];
+                const currentAnalyticsTeam = analyticsTeamId
+                  ? franchises.find((f) => f.id === analyticsTeamId)
+                  : standings[0];
                 const playerPointsList = allPlayers
                   .filter((p) => p.sold_to_id === currentAnalyticsTeam?.id || p.sold_to === currentAnalyticsTeam?.team_name)
                   .map((p) => ({
                     name: p.player_name,
                     points: Array.from({ length: SHEET_GAME_SLOTS }, (_, i) =>
-                      getEffectivePointsForPlayerTeamGame(p.id, p.team, i + 1)
+                      Number(getEffectivePointsForPlayerTeamGame(p.id, p.team, i + 1)) || 0
                     ).reduce((a, b) => a + b, 0),
                     role: p.role,
                   }))
-                  .sort((a, b) => b.points - a.points);
+                  .sort((a, b) => (b.points ?? 0) - (a.points ?? 0));
 
-                const contributorData = playerPointsList.slice(0, 5).map(p => ({ name: p.name.split(' ')[0], value: Math.round(p.points) }));
-                const roleData = ["Batter", "Bowler", "All-Rounder", "WK"].map(r => ({ name: r, value: Math.round(playerPointsList.filter(p => p.role === r).reduce((a,b) => a + b.points, 0)) })).filter(d => d.value > 0);
+                const contributorData = playerPointsList
+                  .slice(0, 5)
+                  .map((p) => ({ name: p.name.split(" ")[0], value: Math.round(p.points ?? 0) }));
+                const roleData = ["Batter", "Bowler", "All-Rounder", "WK"]
+                  .map((r) => ({
+                    name: r,
+                    value: Math.round(
+                      playerPointsList.filter((p) => p.role === r).reduce((a, b) => a + (b.points ?? 0), 0)
+                    ),
+                  }))
+                  .filter((d) => d.value > 0);
 
                 return (
                   <>
@@ -1192,6 +1378,17 @@ export default function ScoreboardPage() {
                          onChange={(e) => setSearchQuery(e.target.value)} 
                        />
                     </div>
+                    <div className="flex flex-wrap gap-2">
+                    <Button 
+                      variant="outline" 
+                      disabled={syncingPoints}
+                      onClick={handleSyncMatchPoints}
+                      className="h-11 border-slate-200 rounded-xl font-black uppercase tracking-widest flex gap-2 text-slate-600 px-6 shadow-sm text-[10px]"
+                      title="Recompute stored points from scorecards (base points × multipliers). Sheet saves are skipped."
+                    >
+                       {syncingPoints ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+                       Sync points
+                    </Button>
                     <Button 
                       variant="outline" 
                       onClick={() => {
@@ -1211,10 +1408,12 @@ export default function ScoreboardPage() {
                     >
                        <Download size={16} /> Export all squads
                     </Button>
+                    </div>
                  </div>
                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">
                     Rows are ordered by IPL team name, then player. Row tint follows IPL franchise (CSK, MI, RCB, etc.), matching the auction room and dashboard.
                     Each game column G1–G{SHEET_GAME_SLOTS} is that player’s IPL team’s 1st, 2nd, … match of the season (not the league schedule round). If CSK have played twice, only G1–G2 apply for CSK players.
+                    The database stores <span className="font-black text-slate-600">base points</span> (<code className="font-mono text-slate-500">base_points</code>) and <span className="font-black text-slate-600">total fantasy points</span> (<code className="font-mono text-slate-500">points</code>) = <span className="font-black text-slate-600">base points × performance multipliers</span> (big scores get a higher multiplier). The big number in each cell is your <span className="font-black text-slate-600">franchise total</span> = that stored total × <span className="font-black text-slate-600">Icon (2×) or Captain / Vice</span> (Icon wins if both apply). Small lines under the cell spell out <span className="font-black text-slate-600">base × multiplier → stored</span> and <span className="font-black text-slate-600">stored × franchise → what you see</span>. Day pipeline: <code className="font-mono">python3 scripts/run_ipl_day.py --date YYYY-MM-DD</code>. Manual edits set <span className="font-black text-slate-600">manual_override</span> so Sync skips them.
                  </p>
                  <div className="flex flex-wrap gap-2 items-center bg-white/80 p-3 rounded-xl border border-slate-100">
                     <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 mr-1">IPL legend</span>
@@ -1303,7 +1502,8 @@ export default function ScoreboardPage() {
                             const teamTotal = squad.reduce((sum, sp) => {
                               let t = 0;
                               for (let i = 1; i <= SHEET_GAME_SLOTS; i++) {
-                                t += getEffectivePointsForPlayerTeamGame(sp.id, sp.team, i);
+                                t +=
+                                  Number(getFranchiseSheetPoints(sp.id, sp.team, i, franchise.id)) || 0;
                               }
                               return sum + t;
                             }, 0);
@@ -1311,6 +1511,32 @@ export default function ScoreboardPage() {
                           })()}
                         </div>
                       </div>
+                    </div>
+                    <div className="border-b border-slate-100 space-y-4 px-3 py-3 sm:px-6">
+                      <FranchiseIconPanel
+                        franchiseId={franchise.id}
+                        franchiseLabel={franchise.team_name || franchise.full_name || ""}
+                        squad={squad}
+                        row={franchiseIconRows.find((r) => r.team_id === franchise.id)}
+                        canEdit={canEdit}
+                        onSaved={async () => {
+                          const { data } = await supabase.from("franchise_icon_selection").select("*");
+                          setFranchiseIconRows((data as FranchiseIconRow[]) || []);
+                        }}
+                      />
+                      <FranchiseCvcPanel
+                        key={franchise.id}
+                        franchiseId={franchise.id}
+                        franchiseLabel={franchise.team_name || franchise.full_name || ""}
+                        squad={squad}
+                        rows={franchiseCvcRows}
+                        franchiseIconPlayerId={franchiseIconRows.find((r) => r.team_id === franchise.id)?.player_id}
+                        canEdit={canEdit}
+                        onSaved={async () => {
+                          const { data } = await supabase.from("franchise_cvc_selections").select("*");
+                          setFranchiseCvcRows((data as FranchiseCvcRow[]) || []);
+                        }}
+                      />
                     </div>
                     {showEmptySquad ? (
                       <div className="px-8 py-14 text-center text-[11px] font-bold text-slate-400 uppercase tracking-wide">
@@ -1339,10 +1565,9 @@ export default function ScoreboardPage() {
                         <tbody>
                           {visible.map((p) => {
                             const teamStyle = getIplTeamStyle(p.team);
-                            const pts = Array.from({ length: SHEET_GAME_SLOTS }, (_, idx) =>
-                              getEffectivePointsForPlayerTeamGame(p.id, p.team, idx + 1)
-                            );
-                            const total = pts.reduce((a, b) => a + b, 0);
+                            const total = Array.from({ length: SHEET_GAME_SLOTS }, (_, idx) =>
+                              Number(getFranchiseSheetPoints(p.id, p.team, idx + 1, franchise.id)) || 0
+                            ).reduce((a, b) => a + b, 0);
 
                             return (
                               <tr key={p.id} className={cn("border-b border-slate-200/80 transition-colors", teamStyle.bg)}>
@@ -1374,31 +1599,172 @@ export default function ScoreboardPage() {
                                     </div>
                                   </div>
                                 </td>
-                                {pts.map((score, i) => {
+                                {Array.from({ length: SHEET_GAME_SLOTS }, (_, i) => {
                                   const short = resolvePlayerTeamToShort(p.team);
                                   const leagueMn =
                                     short != null ? teamSchedules.get(short)?.[i] : undefined;
                                   const mObj =
                                     leagueMn != null ? matchByNo.get(leagueMn) : undefined;
-                                  const isDirty = mObj && pendingEdits[`${p.id}_${mObj.id}`] !== undefined;
+                                  const slot = i + 1;
+                                  const isDirty =
+                                    mObj && pendingEdits[`${p.id}_${mObj.id}`] !== undefined;
+                                  const cell = resolveSheetCell(p.id, mObj);
+
+                                  if (cell.kind === "no_match" || cell.kind === "upcoming") {
+                                    return (
+                                      <td
+                                        key={i}
+                                        className={cn(
+                                          "px-1.5 py-3 text-center text-[10px] font-black tabular-nums text-slate-400 sm:px-3 sm:py-4",
+                                          teamStyle.bg
+                                        )}
+                                      >
+                                        0
+                                      </td>
+                                    );
+                                  }
+
+                                  if (cell.kind === "no_data") {
+                                    if (!canEdit) {
+                                      return (
+                                        <td
+                                          key={i}
+                                          className={cn(
+                                            "px-1.5 py-3 text-center text-[10px] text-slate-400 sm:px-3 sm:py-4",
+                                            teamStyle.bg
+                                          )}
+                                          title="No points yet — run Sync or enter manually"
+                                        >
+                                          —
+                                        </td>
+                                      );
+                                    }
+                                    return (
+                                      <td key={i} className={cn("px-1.5 py-3 text-center sm:px-3 sm:py-4", teamStyle.bg)}>
+                                        <div className="flex flex-col items-center gap-0.5">
+                                          <Input
+                                            type="number"
+                                            step="0.5"
+                                            value=""
+                                            onChange={(e) => {
+                                              if (!canEdit) return;
+                                              updateSeasonPoint(p.id, slot, e.target.value);
+                                            }}
+                                            className={cn(
+                                              "h-8 w-11 sm:w-14 mx-auto text-[10px] font-black text-center border-none rounded-lg",
+                                              isDirty
+                                                ? "bg-amber-100 text-amber-900 ring-1 ring-amber-300"
+                                                : "bg-white/70 text-slate-900"
+                                            )}
+                                            placeholder="0"
+                                          />
+                                          <button
+                                            type="button"
+                                            onClick={() => setSeasonMatchPoints(p.id, slot, null)}
+                                            className="text-[8px] font-black uppercase text-slate-500 hover:text-slate-700 touch-manipulation"
+                                            title="Save as did not play (NULL points)"
+                                          >
+                                            Mark DNP
+                                          </button>
+                                        </div>
+                                      </td>
+                                    );
+                                  }
+
+                                  if (cell.kind === "dnp") {
+                                    return (
+                                      <td
+                                        key={i}
+                                        className={cn("px-1 py-2 align-middle sm:px-3 sm:py-4", teamStyle.bg)}
+                                      >
+                                        <div className="flex flex-col items-center justify-center gap-0.5 min-h-[2rem]">
+                                          <span
+                                            className="text-[9px] font-black uppercase tracking-tight text-slate-500 sm:text-[10px]"
+                                            title="Did not play"
+                                          >
+                                            DNP
+                                          </span>
+                                          {canEdit ? (
+                                            <button
+                                              type="button"
+                                              onClick={() => setSeasonMatchPoints(p.id, slot, 0)}
+                                              className="text-[8px] font-bold uppercase text-blue-600 underline decoration-dotted touch-manipulation"
+                                            >
+                                              Enter pts
+                                            </button>
+                                          ) : null}
+                                        </div>
+                                      </td>
+                                    );
+                                  }
+
+                                  const rawPts = cell.value;
+                                  const fant = mObj ? getFranchiseFantasyMult(franchise.id, p.id, mObj) : { mult: 1, tag: null };
+                                  const displayPts = Math.round(rawPts * fant.mult * 100) / 100;
+                                  const ptsKey = mObj ? `${p.id}_${mObj.id}` : "";
+                                  const basePts =
+                                    ptsKey && !isDirty ? matchPointsBasePointsMap.get(ptsKey) : undefined;
+                                  const showBaseMultHint =
+                                    basePts != null &&
+                                    basePts > 0 &&
+                                    Math.abs(rawPts - basePts) > 0.05;
+                                  const perfMult = showBaseMultHint ? rawPts / basePts : null;
                                   return (
                                     <td key={i} className={cn("px-1.5 py-3 text-center sm:px-3 sm:py-4", teamStyle.bg)}>
-                                      <Input
-                                        type="number"
-                                        step="0.5"
-                                        value={score ? String(score) : ""}
-                                        readOnly={!canEdit}
-                                        onChange={(e) => {
-                                          if (!canEdit) return;
-                                          updateSeasonPoint(p.id, i + 1, e.target.value);
-                                        }}
-                                        className={cn(
-                                          "h-8 w-11 sm:w-14 mx-auto text-[10px] font-black text-center border-none rounded-lg",
-                                          isDirty ? "bg-amber-100 text-amber-900 ring-1 ring-amber-300" : "bg-white/70 text-slate-900",
-                                          !canEdit && "cursor-not-allowed opacity-85"
-                                        )}
-                                        placeholder="0"
-                                      />
+                                      <div className="flex flex-col items-center gap-0.5">
+                                        <Input
+                                          type="number"
+                                          step="0.5"
+                                          value={String(displayPts)}
+                                          readOnly={!canEdit}
+                                          onChange={(e) => {
+                                            if (!canEdit) return;
+                                            updateSeasonPoint(p.id, slot, e.target.value);
+                                          }}
+                                          className={cn(
+                                            "h-8 w-11 sm:w-14 mx-auto text-[10px] font-black text-center border-none rounded-lg",
+                                            isDirty
+                                              ? "bg-amber-100 text-amber-900 ring-1 ring-amber-300"
+                                              : "bg-white/70 text-slate-900",
+                                            !canEdit && "cursor-not-allowed opacity-85"
+                                          )}
+                                          placeholder="0"
+                                          title={
+                                            showBaseMultHint && basePts != null
+                                              ? `Base points ${basePts} × multiplier → stored ${rawPts}; franchise ×${fant.mult} → cell ${displayPts}`
+                                              : fant.mult > 1
+                                                ? `Stored ${rawPts} × ${fant.mult} (${fant.tag === "icon" ? "Icon" : fant.tag === "c" ? "C" : "VC"}) = ${displayPts}`
+                                                : undefined
+                                          }
+                                        />
+                                        {showBaseMultHint && perfMult != null ? (
+                                          <span
+                                            className="text-[7px] font-black uppercase tracking-tight text-emerald-800/90 tabular-nums"
+                                            title={`Base points × performance multiplier = stored fantasy points`}
+                                          >
+                                            base {basePts?.toFixed(1)}×{perfMult != null && perfMult >= 10 ? perfMult.toFixed(1) : perfMult != null ? perfMult.toFixed(2) : "?"}→{rawPts}
+                                          </span>
+                                        ) : null}
+                                        {fant.mult > 1 ? (
+                                          <span
+                                            className="text-[7px] font-black uppercase tracking-tight text-violet-900 tabular-nums"
+                                            title="Franchise multiplier on stored fantasy points"
+                                          >
+                                            {rawPts}×{fant.mult}
+                                            {fant.tag === "icon" ? " Icon" : fant.tag === "c" ? " C" : " VC"}={displayPts}
+                                          </span>
+                                        ) : null}
+                                        {canEdit && mObj && isMatchPlayed(mObj) ? (
+                                          <button
+                                            type="button"
+                                            onClick={() => setSeasonMatchPoints(p.id, slot, null)}
+                                            className="text-[8px] font-black uppercase text-slate-500 hover:text-slate-700 touch-manipulation"
+                                            title="Mark as did not play (NULL points)"
+                                          >
+                                            Mark DNP
+                                          </button>
+                                        ) : null}
+                                      </div>
                                     </td>
                                   );
                                 })}
@@ -1417,7 +1783,12 @@ export default function ScoreboardPage() {
                             const teamGameTotals = Array(SHEET_GAME_SLOTS).fill(0);
                             squad.forEach((sp) => {
                               for (let i = 1; i <= SHEET_GAME_SLOTS; i++) {
-                                teamGameTotals[i - 1] += getEffectivePointsForPlayerTeamGame(sp.id, sp.team, i);
+                                teamGameTotals[i - 1] += getFranchiseSheetPoints(
+                                  sp.id,
+                                  sp.team,
+                                  i,
+                                  franchise.id
+                                );
                               }
                             });
                             const teamGrandTotal = teamGameTotals.reduce((a, b) => a + b, 0);

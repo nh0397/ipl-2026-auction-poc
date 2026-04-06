@@ -1045,6 +1045,57 @@ def field_pts(fld: Dict) -> int:
     return pts
 
 
+def d11_applied_multiplier(runs: int, wickets: int) -> float:
+    """Dream11-style haul tiers on total base (must match lib/scoring.ts d11BonusMultiplierInfo)."""
+    r = max(0, int(runs) if runs is not None else 0)
+    w = max(0, int(wickets) if wickets is not None else 0)
+
+    run_mult = 1.0
+    if r >= 150:
+        run_mult = 4.0
+    elif r >= 100:
+        run_mult = 3.0
+    elif r >= 75:
+        run_mult = 1.75
+    elif r >= 45:
+        run_mult = 1.5
+    elif r >= 25:
+        run_mult = 1.25
+
+    wk_mult = 1.0
+    if w >= 5:
+        wk_mult = 4.0
+    elif w >= 3:
+        wk_mult = 2.0
+    elif w == 2:
+        wk_mult = 1.5
+
+    return max(run_mult, wk_mult)
+
+
+def pj_base_total(p: Dict) -> float:
+    """PJ rules base only (no haul, no C/VC) — matches score_player when C/VC are false."""
+    b = bat_pts(p.get("batting", {}))
+    bw = bowl_pts(p.get("bowling", {}))
+    f = field_pts(p.get("fielding", {}))
+    extra = 4 if p.get("in_announced_lineup") else 0
+    if p.get("is_playing_substitute"):
+        extra += 4
+    return float(b + bw + f + extra)
+
+
+def pj_points_with_haul_multiplier(p: Dict) -> tuple[float, float]:
+    """(base_pts, points_after_haul) — aligns with aggregateFantasyRowsFromCricApiMatchData + sync."""
+    base = pj_base_total(p)
+    bat = p.get("batting") or {}
+    bwl = p.get("bowling") or {}
+    r = int(bat.get("runs", 0) or 0)
+    w = int(bwl.get("wickets", 0) or 0)
+    haul = d11_applied_multiplier(r, w)
+    total = round(base * haul * 100) / 100
+    return round(base * 100) / 100, total
+
+
 def score_player(p: Dict):
     b = bat_pts(p.get("batting", {}))
     bw = bowl_pts(p.get("bowling", {}))

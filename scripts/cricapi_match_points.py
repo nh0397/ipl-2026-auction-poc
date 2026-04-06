@@ -88,9 +88,24 @@ def persist_match_points_from_scorecard(
     if not match_uuid:
         return 0, [], f"no public.matches row for match_no={mn}"
 
-    from ipl_fantasy import score_player, transform
+    from ipl_fantasy import pj_points_with_haul_multiplier, transform
 
     rows = transform(str(api_match_id), scorecard)
+    locked_url = f"{SUPABASE_URL}/rest/v1/match_points"
+    lr = requests.get(
+        locked_url,
+        headers=HEADERS_GET,
+        params={
+            "select": "player_id",
+            "match_id": f"eq.{match_uuid}",
+            "manual_override": "eq.true",
+        },
+        timeout=30,
+    )
+    locked_ids: set[str] = set()
+    if lr.ok:
+        locked_ids = {str(row["player_id"]) for row in (lr.json() or []) if row.get("player_id")}
+
     upserts: List[Dict[str, Any]] = []
     skipped: List[str] = []
     for p in rows:
@@ -99,8 +114,17 @@ def persist_match_points_from_scorecard(
         if not pid:
             skipped.append(p.get("player_name") or "?")
             continue
-        _b, _bw, _f, _ex, _mult, total = score_player(p)
-        upserts.append({"match_id": match_uuid, "player_id": pid, "points": total})
+        if pid in locked_ids:
+            continue
+        base_pts, total = pj_points_with_haul_multiplier(p)
+        upserts.append(
+            {
+                "match_id": match_uuid,
+                "player_id": pid,
+                "points": total,
+                "base_points": base_pts,
+            }
+        )
 
     if not upserts:
         return 0, skipped, None
