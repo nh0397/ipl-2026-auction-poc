@@ -20,7 +20,11 @@ export type FranchiseCvcRow = {
   slot: number;
   captain_id: string | null;
   vice_captain_id: string | null;
+  /** Legacy: original paired effective date. */
   valid_from: string;
+  /** New: captain and vice dates can differ. */
+  captain_valid_from?: string | null;
+  vice_valid_from?: string | null;
   created_at?: string;
 };
 
@@ -65,20 +69,39 @@ export function activeCvcForMatchDate(
   matchDateKeyIST: string
 ): Pick<FranchiseCvcRow, "captain_id" | "vice_captain_id"> | null {
   if (!matchDateKeyIST) return null;
-  const elig = rows.filter((r) => {
-    const vf = dateKeyOnly(r.valid_from);
-    return (
-      r.team_id === teamId &&
-      r.captain_id &&
-      r.vice_captain_id &&
-      r.captain_id !== r.vice_captain_id &&
-      vf <= matchDateKeyIST
+  const cands = rows.filter((r) => r.team_id === teamId);
+
+  const captainElig = cands
+    .filter((r) => {
+      const vf = dateKeyOnly(r.captain_valid_from ?? r.valid_from);
+      return !!r.captain_id && vf && vf <= matchDateKeyIST;
+    })
+    .sort((a, b) =>
+      dateKeyOnly(a.captain_valid_from ?? a.valid_from) < dateKeyOnly(b.captain_valid_from ?? b.valid_from)
+        ? 1
+        : dateKeyOnly(a.captain_valid_from ?? a.valid_from) > dateKeyOnly(b.captain_valid_from ?? b.valid_from)
+          ? -1
+          : 0
     );
-  });
-  if (elig.length === 0) return null;
-  elig.sort((a, b) => (dateKeyOnly(a.valid_from) < dateKeyOnly(b.valid_from) ? 1 : dateKeyOnly(a.valid_from) > dateKeyOnly(b.valid_from) ? -1 : 0));
-  const top = elig[0];
-  return { captain_id: top.captain_id, vice_captain_id: top.vice_captain_id };
+
+  const viceElig = cands
+    .filter((r) => {
+      const vf = dateKeyOnly(r.vice_valid_from ?? r.valid_from);
+      return !!r.vice_captain_id && vf && vf <= matchDateKeyIST;
+    })
+    .sort((a, b) =>
+      dateKeyOnly(a.vice_valid_from ?? a.valid_from) < dateKeyOnly(b.vice_valid_from ?? b.valid_from)
+        ? 1
+        : dateKeyOnly(a.vice_valid_from ?? a.valid_from) > dateKeyOnly(b.vice_valid_from ?? b.valid_from)
+          ? -1
+          : 0
+    );
+
+  const captain_id = captainElig[0]?.captain_id ?? null;
+  const vice_captain_id = viceElig[0]?.vice_captain_id ?? null;
+  if (!captain_id || !vice_captain_id) return null;
+  if (captain_id === vice_captain_id) return null;
+  return { captain_id, vice_captain_id };
 }
 
 export function cvcMultiplierForPlayer(playerId: string, active: ReturnType<typeof activeCvcForMatchDate>): number {
@@ -166,7 +189,7 @@ export function franchiseMatchSheetDisplay(args: {
   };
 }
 
-/** Inverse of franchise sheet display when the owner edits the cell (saves underlying `match_points.points`). */
+/** Inverse of franchise sheet display when the owner edits the cell (saves underlying stored points — see `SHEET_MATCH_POINTS_TABLE`). */
 export function storedPointsFromFranchiseSheetDisplay(args: {
   displayPts: number;
   storedPoints: number;

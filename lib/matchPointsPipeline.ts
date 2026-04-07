@@ -1,16 +1,16 @@
 /**
- * ## How scorecard data becomes `public.match_points`
+ * ## How scorecard data becomes stored fantasy points
  *
- * 1. **Source**: `fixtures_cricapi.scorecard` — CricAPI match scorecard JSON.
- * 2. **Engine**: Per-player fantasy stats → **base points** (runs, wickets, fielding, etc., before any big-score multiplier).
- * 3. **Performance multipliers**: Exceptional innings (e.g. high runs or wicket hauls) apply a **multiplier** on that base.
- * 4. **Stored columns**:
- *    - `base_points` = points **before** that multiplier
- *    - `points` = **base points × multipliers** (what we sync from the scorecard)
+ * Two **separate** tables (do not mix writes):
  *
- * **Franchise layer** (sheet only): Icon 2× or Captain / Vice on top of `points` — not written back into `match_points`.
+ * 1. **`public.match_points`** — CricAPI / `fixtures_cricapi.scorecard` + `run_ipl_day.py` / TS sync when `USE_CRICAPI_MATCH_POINTS_SYNC`.
+ * 2. **`public.match_points_espn`** — ESPN scraper / `fixtures.scorecard` + `syncMatchPointsFromEspnFixtures` (always on Sync).
  *
- * Manual sheet edits save `points` (and `manual_override`); the UI shows franchise totals and breakdown lines.
+ * Per row: **base_points** (PJ before haul) and **points** (base × max(batting haul, bowling haul)).
+ *
+ * **Franchise layer** (sheet only): Icon 2× or Captain / Vice on top of stored `points` — not written back into either table.
+ *
+ * The scoreboard **Sheets** tab reads **`SHEET_MATCH_POINTS_TABLE`** in `lib/featureFlags.ts` (`match_points_espn` vs `match_points`).
  */
 
-export const MATCH_POINTS_PIPELINE_VERSION = 2;
+export const MATCH_POINTS_PIPELINE_VERSION = 3;

@@ -12,6 +12,7 @@
     "lint": "eslint",
     "sync:fixtures": "tsx scripts/sync-fixtures.ts",
     "sync:auto": "tsx scripts/auto-sync-scores.ts",
+    "sync:espn-points-db": "tsx scripts/sync_match_points_espn_from_db.ts",
     "test:cricapi-bbb": "python3 scripts/test_cricapi_bbb.py"
   },
   "dependencies": {

@@ -26,6 +26,8 @@ import {
   MapPin, BarChart3, Target, Loader2, ArrowUpDown, Radio, Database, XCircle
 } from "lucide-react";
 import { cn, getPlayerImage, iplColors } from "@/lib/utils";
+import { SHOW_CRICAPI_FIXTURE_UI, SHEET_MATCH_POINTS_TABLE } from "@/lib/featureFlags";
+import { MATCH_POINTS_CRICAPI_TABLE, MATCH_POINTS_ESPN_TABLE } from "@/lib/matchPointsTables";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/auth/AuthProvider";
 import React from "react";
@@ -245,6 +247,13 @@ export default function ScoreboardPage() {
   const [analyticsTeamId, setAnalyticsTeamId] = useState<string | null>(null);
   const [standings, setStandings] = useState<any[]>([]);
   const [allMatchPoints, setAllMatchPoints] = useState<any[]>([]);
+  const [matchPointsSource, setMatchPointsSource] = useState<"espn" | "cricapi" | null>(null);
+  const sheetMatchPointsTable =
+    matchPointsSource === "cricapi"
+      ? MATCH_POINTS_CRICAPI_TABLE
+      : matchPointsSource === "espn"
+        ? MATCH_POINTS_ESPN_TABLE
+        : SHEET_MATCH_POINTS_TABLE;
   const [franchiseCvcRows, setFranchiseCvcRows] = useState<FranchiseCvcRow[]>([]);
   const [franchiseIconRows, setFranchiseIconRows] = useState<FranchiseIconRow[]>([]);
   const [franchiseBoosterRows, setFranchiseBoosterRows] = useState<FranchiseBoosterRow[]>([]);
@@ -255,7 +264,9 @@ export default function ScoreboardPage() {
   const [modalRefreshing, setModalRefreshing] = useState(false);
   const [expandedCricapiFantasyId, setExpandedCricapiFantasyId] = useState<string | null>(null);
   const [expandedEspnFantasyKey, setExpandedEspnFantasyKey] = useState<string | null>(null);
-  const [syncingPoints, setSyncingPoints] = useState(false);
+  const [syncingPoints, setSyncingPoints] = useState(false); // legacy combined sync (kept for now)
+  const [syncingEspn, setSyncingEspn] = useState(false);
+  const [syncingCricapi, setSyncingCricapi] = useState(false);
 
   const [espnScorecardByMatchNo, setEspnScorecardByMatchNo] = useState<Record<number, any | null>>({});
   const [espnScorecardLoadingByMatchNo, setEspnScorecardLoadingByMatchNo] = useState<Record<number, boolean>>({});
@@ -269,6 +280,7 @@ export default function ScoreboardPage() {
   const [tabLoading, setTabLoading] = useState(false);
   /** Which auction franchise’s score sheet is shown (sub-tabs under Sheets). */
   const [sheetFranchiseId, setSheetFranchiseId] = useState<string | null>(null);
+  const [auctionConfigId, setAuctionConfigId] = useState<string | null>(null);
 
   const fetchEspnScorecardForMatchNo = useCallback(async (matchNo: number) => {
     if (!matchNo || matchNo <= 0) return;
@@ -370,7 +382,7 @@ export default function ScoreboardPage() {
   const teamSchedules = useMemo(() => buildTeamSchedules(iplScheduleRows), [iplScheduleRows]);
 
   /**
-   * Stored `match_points.points`: NULL = DNP, number = score (0 = played, zero points).
+   * Stored sheet table (`SHEET_MATCH_POINTS_TABLE`).points: NULL = DNP, number = score (0 = played, zero points).
    * Map only contains keys for rows present in DB or pending; missing key = no row yet.
    */
   const matchPointsCellMap = useMemo(() => {
@@ -393,7 +405,7 @@ export default function ScoreboardPage() {
   }, [allMatchPoints, pendingEdits]);
 
   /**
-   * Per match_points row: PJ base (before haul), and haul tiers (batting runs / bowling wickets / max).
+   * Per row in the sheet table: PJ base (before haul), and haul tiers (batting runs / bowling wickets / max).
    * Not merged from pending edits — still shown while a cell is dirty so the haul line stays visible.
    */
   const matchPointsDetailByKey = useMemo(() => {
@@ -577,9 +589,9 @@ export default function ScoreboardPage() {
   const fetchSheetsData = async () => {
     setSubLoading(true);
     try {
-      const [playersRes, pointsRes, schedRes, cvcRes, iconRes, boosterRes] = await Promise.all([
+      const [playersRes, pointsRes, schedRes, cvcRes, iconRes, boosterRes, cfgRes] = await Promise.all([
         supabase.from("players").select("*").eq("auction_status", "sold").order("player_name", { ascending: true }),
-        supabase.from("match_points").select("*"),
+        supabase.from(sheetMatchPointsTable).select("*"),
         supabase
           .from("fixtures_cricapi")
           .select("match_no,team1_short,team2_short,date_time_gmt")
@@ -587,6 +599,7 @@ export default function ScoreboardPage() {
         supabase.from("franchise_cvc_selections").select("*"),
         supabase.from("franchise_icon_selection").select("*"),
         supabase.from("franchise_booster_days").select("*"),
+        supabase.from("auction_config").select("id,match_points_source").limit(1).maybeSingle(),
       ]);
       const pl = playersRes.data || [];
       setAllPlayers(pl);
@@ -603,6 +616,17 @@ export default function ScoreboardPage() {
       if (cvcRes.data) setFranchiseCvcRows(cvcRes.data as FranchiseCvcRow[]);
       if (iconRes.data) setFranchiseIconRows(iconRes.data as FranchiseIconRow[]);
       if (boosterRes.data) setFranchiseBoosterRows(boosterRes.data as FranchiseBoosterRow[]);
+      const src = String((cfgRes.data as any)?.match_points_source ?? "").toLowerCase();
+      if (src === "espn" || src === "cricapi") {
+        setMatchPointsSource(src as any);
+        const desiredTable = src === "cricapi" ? MATCH_POINTS_CRICAPI_TABLE : MATCH_POINTS_ESPN_TABLE;
+        if (desiredTable !== sheetMatchPointsTable) {
+          const { data: refetched } = await supabase.from(desiredTable).select("*");
+          setAllMatchPoints(refetched || []);
+        }
+      }
+      const cid = (cfgRes.data as any)?.id;
+      if (typeof cid === "string" && cid) setAuctionConfigId(cid);
     } finally {
       setSubLoading(false);
     }
@@ -612,10 +636,10 @@ export default function ScoreboardPage() {
     setTabLoading(true);
     try {
       // Must include `team` (IPL side) or G-column mapping and charts read 0 for every cell.
-      const [{ data: soldPlayers }, { data: pts }, { data: schedRes }, { data: cvcRows }, { data: iconRows }, { data: boosterRows }] =
+      const [{ data: soldPlayers }, { data: pts }, { data: schedRes }, { data: cvcRows }, { data: iconRows }, { data: boosterRows }, { data: cfgRes }] =
         await Promise.all([
         supabase.from("players").select("*").eq("auction_status", "sold").order("player_name", { ascending: true }),
-        supabase.from("match_points").select("*"),
+        supabase.from(sheetMatchPointsTable).select("*"),
         supabase
           .from("fixtures_cricapi")
           .select("match_no,team1_short,team2_short,date_time_gmt")
@@ -623,6 +647,7 @@ export default function ScoreboardPage() {
         supabase.from("franchise_cvc_selections").select("*"),
         supabase.from("franchise_icon_selection").select("*"),
         supabase.from("franchise_booster_days").select("*"),
+        supabase.from("auction_config").select("id,match_points_source").limit(1).maybeSingle(),
       ]);
       setAllPlayers(soldPlayers || []);
       setAllMatchPoints(pts || []);
@@ -630,6 +655,17 @@ export default function ScoreboardPage() {
       if (cvcRows) setFranchiseCvcRows(cvcRows as FranchiseCvcRow[]);
       if (iconRows) setFranchiseIconRows(iconRows as FranchiseIconRow[]);
       if (boosterRows) setFranchiseBoosterRows(boosterRows as FranchiseBoosterRow[]);
+      const src = String((cfgRes as any)?.match_points_source ?? "").toLowerCase();
+      if (src === "espn" || src === "cricapi") {
+        setMatchPointsSource(src as any);
+        const desiredTable = src === "cricapi" ? MATCH_POINTS_CRICAPI_TABLE : MATCH_POINTS_ESPN_TABLE;
+        if (desiredTable !== sheetMatchPointsTable) {
+          const { data: refetched } = await supabase.from(desiredTable).select("*");
+          setAllMatchPoints(refetched || []);
+        }
+      }
+      const cid = (cfgRes as any)?.id;
+      if (typeof cid === "string" && cid) setAuctionConfigId(cid);
     } finally {
       setTabLoading(false);
     }
@@ -816,16 +852,26 @@ export default function ScoreboardPage() {
         alert(typeof json?.error === "string" ? json.error : `Sync failed (${res.status})`);
         return;
       }
-      const { data: pts } = await supabase.from("match_points").select("*");
+      const { data: pts } = await supabase.from(sheetMatchPointsTable).select("*");
       setAllMatchPoints(pts || []);
       const skipM = json.rowsSkippedManual ?? 0;
       const skipU = json.rowsSkippedUnmapped ?? 0;
       const sample = Array.isArray(json.unmappedNameSample) ? json.unmappedNameSample : [];
+      const espnU = typeof json.espn?.rowsUpserted === "number" ? json.espn.rowsUpserted : null;
+      const crU = typeof json.cricapi?.rowsUpserted === "number" ? json.cricapi.rowsUpserted : null;
+      const sourceHint =
+        espnU != null && crU != null && (espnU > 0 || crU > 0)
+          ? crU === 0
+            ? ` (${espnU} from ESPN scorecards)`
+            : espnU === 0
+              ? ` (${crU} from CricAPI scorecards)`
+              : ` (${espnU} ESPN, ${crU} CricAPI)`
+          : "";
       alert(
-        `Synced: ${json.rowsUpserted ?? 0} row(s) from ${json.fixturesProcessed ?? 0} fixture(s).` +
+        `Synced: ${json.rowsUpserted ?? 0} row(s) from ${json.fixturesProcessed ?? 0} fixture(s).${sourceHint}` +
           (skipM ? ` Skipped ${skipM} manual row(s).` : "") +
           (skipU
-            ? ` No DB player for ${skipU} scorecard name(s) (CricAPI IDs are mapped by player name).` +
+            ? ` No DB player for ${skipU} scorecard name(s) (matched by player name).` +
                 (sample.length ? ` Examples: ${sample.slice(0, 8).join(", ")}` : "")
             : "") +
           (json.errors?.length ? `\nNotes: ${json.errors.slice(0, 5).join("; ")}` : "")
@@ -835,15 +881,96 @@ export default function ScoreboardPage() {
     }
   };
 
+  const refreshSheetPointsFromSource = async () => {
+    const { data: pts } = await supabase.from(sheetMatchPointsTable).select("*");
+    setAllMatchPoints(pts || []);
+  };
+
+  const setSheetSource = async (src: "espn" | "cricapi") => {
+    const isAdmin = profile?.role === "Admin";
+    if (!isAdmin) return;
+    if (!auctionConfigId) {
+      alert("Missing auction_config row id. Refresh and try again.");
+      return;
+    }
+    const { error } = await supabase
+      .from("auction_config")
+      .update({ match_points_source: src, updated_at: new Date().toISOString() })
+      .eq("id", auctionConfigId);
+    if (error) {
+      alert(`Could not update sheet source: ${error.message}`);
+      return;
+    }
+    setMatchPointsSource(src);
+    // Reload points for the newly selected table.
+    // Also refresh standings if that tab is active.
+    if (activeTab === "standings") await fetchStandingsData();
+    if (activeTab === "sheets") await fetchSheetsData();
+  };
+
+  const handleSyncEspnOnly = async () => {
+    setSyncingEspn(true);
+    try {
+      const res = await fetch("/api/match-points/sync/espn", { method: "POST" });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(typeof json?.error === "string" ? json.error : `Sync failed (${res.status})`);
+        return;
+      }
+      await refreshSheetPointsFromSource();
+      alert(
+        `ESPN synced: ${json.rowsUpserted ?? 0} row(s) from ${json.fixturesProcessed ?? 0} fixture(s).` +
+          ((json.rowsSkippedManual ?? 0) ? ` Skipped ${json.rowsSkippedManual} manual row(s).` : "") +
+          ((json.rowsSkippedUnmapped ?? 0)
+            ? ` Unmapped ${json.rowsSkippedUnmapped} scorecard name(s).` +
+              (Array.isArray(json.unmappedNameSample) && json.unmappedNameSample.length
+                ? ` Examples: ${json.unmappedNameSample.slice(0, 8).join(", ")}`
+                : "")
+            : "") +
+          (Array.isArray(json.errors) && json.errors.length ? `\nNotes: ${json.errors.slice(0, 5).join("; ")}` : "")
+      );
+    } finally {
+      setSyncingEspn(false);
+    }
+  };
+
+  const handleSyncCricapiOnly = async () => {
+    setSyncingCricapi(true);
+    try {
+      const res = await fetch("/api/match-points/sync/cricapi", { method: "POST" });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(typeof json?.error === "string" ? json.error : `Sync failed (${res.status})`);
+        return;
+      }
+      await refreshSheetPointsFromSource();
+      alert(
+        `CricAPI synced: ${json.rowsUpserted ?? 0} row(s) from ${json.fixturesProcessed ?? 0} fixture(s).` +
+          ((json.rowsSkippedManual ?? 0) ? ` Skipped ${json.rowsSkippedManual} manual row(s).` : "") +
+          ((json.rowsSkippedUnmapped ?? 0)
+            ? ` Unmapped ${json.rowsSkippedUnmapped} scorecard name(s).` +
+              (Array.isArray(json.unmappedNameSample) && json.unmappedNameSample.length
+                ? ` Examples: ${json.unmappedNameSample.slice(0, 8).join(", ")}`
+                : "")
+            : "") +
+          (Array.isArray(json.errors) && json.errors.length ? `\nNotes: ${json.errors.slice(0, 5).join("; ")}` : "")
+      );
+    } finally {
+      setSyncingCricapi(false);
+    }
+  };
+
   const handleBulkSave = async () => {
     if (!profile?.id || sheetFranchiseId !== profile.id) return;
     setSaving(true);
-    const { error } = await supabase.from("match_points").upsert(Object.values(pendingEdits), { onConflict: "player_id,match_id" });
+    const { error } = await supabase
+      .from(sheetMatchPointsTable)
+      .upsert(Object.values(pendingEdits), { onConflict: "player_id,match_id" });
     if (!error) setPendingEdits({});
     // Keep Sheets + Standings consistent immediately after saving.
     // Without this, the grid keeps showing stale values until a refresh/refetch.
     if (!error) {
-      const { data: pts } = await supabase.from("match_points").select("*");
+      const { data: pts } = await supabase.from(sheetMatchPointsTable).select("*");
       setAllMatchPoints(pts || []);
     }
     setSaving(false);
@@ -1035,7 +1162,8 @@ export default function ScoreboardPage() {
                             — squad split
                           </h3>
                           <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wide mt-1 max-w-md leading-snug">
-                            Same franchise points as the sheet (not raw CricAPI totals). Top players and role buckets for
+                            Same franchise points as the sheet (stored{" "}
+                            <code className="font-mono">{SHEET_MATCH_POINTS_TABLE}</code> after Sync). Top players and role buckets for
                             G1–G{standingsFranchiseChart.gamesToShow}.
                           </p>
                         </div>
@@ -1224,7 +1352,9 @@ export default function ScoreboardPage() {
                         <div className="h-3 w-2/3 rounded-md bg-slate-200 animate-pulse" />
                         <div className="flex gap-2">
                           <div className="h-8 w-24 rounded-lg bg-slate-200 animate-pulse" />
-                          <div className="h-8 w-24 rounded-lg bg-slate-200 animate-pulse" />
+                          {SHOW_CRICAPI_FIXTURE_UI ? (
+                            <div className="h-8 w-24 rounded-lg bg-slate-200 animate-pulse" />
+                          ) : null}
                         </div>
                       </div>
                     </div>
@@ -1249,10 +1379,14 @@ export default function ScoreboardPage() {
                       const espnReady = mnRow != null && espnPointsSynced;
                       const cricReady = cricapiPointsSynced;
                       const syncStatusLine = (() => {
-                        if (espnReady && cricReady) return null;
-                        if (!espnReady && !cricReady) return "ESPN and CricAPI data not ready yet";
-                        if (!espnReady) return "ESPN points pending";
-                        return "CricAPI sync pending";
+                        if (SHOW_CRICAPI_FIXTURE_UI) {
+                          if (espnReady && cricReady) return null;
+                          if (!espnReady && !cricReady) return "ESPN and CricAPI data not ready yet";
+                          if (!espnReady) return "ESPN points pending";
+                          return "CricAPI sync pending";
+                        }
+                        if (espnReady) return null;
+                        return "ESPN data not ready yet";
                       })();
                       return (
                       <div key={match.id} className="space-y-2">
@@ -1283,7 +1417,12 @@ export default function ScoreboardPage() {
                                 return `${ist}${localPart}${venue}`;
                               })()}
                             </div>
-                            <div className="grid grid-cols-2 gap-2 w-full sm:max-w-sm sm:ml-auto">
+                            <div
+                              className={cn(
+                                "grid gap-2 w-full sm:max-w-sm sm:ml-auto",
+                                SHOW_CRICAPI_FIXTURE_UI ? "grid-cols-2" : "grid-cols-1"
+                              )}
+                            >
                               <button
                                 type="button"
                                 disabled={!espnReady}
@@ -1305,32 +1444,36 @@ export default function ScoreboardPage() {
                                 <Radio className="h-3.5 w-3.5 shrink-0" />
                                 ESPN
                               </button>
-                              <button
-                                type="button"
-                                disabled={!cricReady}
-                                onClick={() => {
-                                  if (!cricReady) return;
-                                  setFixtureModalTab("scorecard");
-                                  setExpandedCricapiFantasyId(null);
-                                  setFixtureModal({ source: "cricapi", fixture: match });
-                                }}
-                                className={cn(
-                                  "touch-manipulation min-h-10 flex items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl text-[9px] sm:text-[10px] font-black uppercase tracking-wide transition-all border text-center leading-tight",
-                                  cricReady
-                                    ? "bg-slate-900 text-white border-slate-900 active:bg-slate-800 hover:bg-black shadow-md"
-                                    : "bg-slate-50 border-slate-100 text-slate-300 cursor-not-allowed"
-                                )}
-                              >
-                                <Database className="h-3.5 w-3.5 shrink-0" />
-                                CricAPI
-                              </button>
+                              {SHOW_CRICAPI_FIXTURE_UI ? (
+                                <button
+                                  type="button"
+                                  disabled={!cricReady}
+                                  onClick={() => {
+                                    if (!cricReady) return;
+                                    setFixtureModalTab("scorecard");
+                                    setExpandedCricapiFantasyId(null);
+                                    setFixtureModal({ source: "cricapi", fixture: match });
+                                  }}
+                                  className={cn(
+                                    "touch-manipulation min-h-10 flex items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl text-[9px] sm:text-[10px] font-black uppercase tracking-wide transition-all border text-center leading-tight",
+                                    cricReady
+                                      ? "bg-slate-900 text-white border-slate-900 active:bg-slate-800 hover:bg-black shadow-md"
+                                      : "bg-slate-50 border-slate-100 text-slate-300 cursor-not-allowed"
+                                  )}
+                                >
+                                  <Database className="h-3.5 w-3.5 shrink-0" />
+                                  CricAPI
+                                </button>
+                              ) : null}
                             </div>
                             {syncStatusLine ? (
                               <p className="text-[9px] font-bold text-slate-500 text-center sm:text-right uppercase tracking-wide leading-snug">
                                 {syncStatusLine}
                               </p>
                             ) : null}
-                            {!espnReady && !cricReady && !match.match_ended ? (
+                            {!espnReady &&
+                            !(SHOW_CRICAPI_FIXTURE_UI && cricReady) &&
+                            !match.match_ended ? (
                               <p className="text-[9px] font-black text-amber-600 bg-amber-50 px-2 py-1 rounded uppercase text-center sm:text-right w-fit sm:ml-auto">
                                 Live soon
                               </p>
@@ -1459,7 +1602,7 @@ export default function ScoreboardPage() {
                           </div>
                         ) : cricapiFantasyRows.length === 0 ? (
                           <p className="text-center text-sm font-bold text-slate-400 py-16 px-2 leading-relaxed">
-                            No fantasy rows — save a CricAPI scorecard to the DB first.
+                            No fantasy rows — sync ESPN scorecard to the DB, then use Sync points on Sheets.
                           </p>
                         ) : (
                           <div className="w-full min-w-0 overflow-x-auto rounded-lg border border-slate-100">
@@ -1649,16 +1792,74 @@ export default function ScoreboardPage() {
                          onChange={(e) => setSearchQuery(e.target.value)} 
                        />
                     </div>
-                    <div className="flex flex-wrap gap-2">
+                    <div className="flex flex-wrap gap-2 items-center">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">Sheet source</span>
+                      <span
+                        className={cn(
+                          "px-2 py-1 rounded-lg text-[9px] font-black uppercase tracking-widest border",
+                          sheetMatchPointsTable === MATCH_POINTS_ESPN_TABLE
+                            ? "bg-indigo-50 text-indigo-700 border-indigo-200"
+                            : "bg-blue-50 text-blue-700 border-blue-200"
+                        )}
+                        title={
+                          sheetMatchPointsTable === MATCH_POINTS_ESPN_TABLE
+                            ? "Using ESPN persisted points (match_points_espn)"
+                            : "Using CricAPI persisted points (match_points)"
+                        }
+                      >
+                        {sheetMatchPointsTable === MATCH_POINTS_ESPN_TABLE ? "ESPN" : "CricAPI"}
+                      </span>
+                      {profile?.role === "Admin" ? (
+                        <div className="flex rounded-xl overflow-hidden border border-slate-200 shadow-sm">
+                          <button
+                            type="button"
+                            onClick={() => void setSheetSource("espn")}
+                            className={cn(
+                              "px-3 py-2 text-[9px] font-black uppercase tracking-widest",
+                              sheetMatchPointsTable === MATCH_POINTS_ESPN_TABLE
+                                ? "bg-slate-900 text-white"
+                                : "bg-white text-slate-700 hover:bg-slate-50"
+                            )}
+                            title="Switch Sheets to ESPN points (match_points_espn)"
+                          >
+                            ESPN
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void setSheetSource("cricapi")}
+                            className={cn(
+                              "px-3 py-2 text-[9px] font-black uppercase tracking-widest",
+                              sheetMatchPointsTable === MATCH_POINTS_CRICAPI_TABLE
+                                ? "bg-slate-900 text-white"
+                                : "bg-white text-slate-700 hover:bg-slate-50"
+                            )}
+                            title="Switch Sheets to CricAPI points (match_points)"
+                          >
+                            CricAPI
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
                     <Button 
                       variant="outline" 
-                      disabled={syncingPoints}
-                      onClick={handleSyncMatchPoints}
+                      disabled={syncingEspn}
+                      onClick={handleSyncEspnOnly}
                       className="h-11 border-slate-200 rounded-xl font-black uppercase tracking-widest flex gap-2 text-slate-600 px-6 shadow-sm text-[10px]"
-                      title="Recompute stored points from scorecards (base points × multipliers). Sheet saves are skipped."
+                      title="Sync ESPN scorecards (fixtures.scorecard) → match_points_espn. Skips manual_override rows."
                     >
-                       {syncingPoints ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
-                       Sync points
+                       {syncingEspn ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+                       Sync ESPN
+                    </Button>
+                    <Button
+                      variant="outline"
+                      disabled={syncingCricapi}
+                      onClick={handleSyncCricapiOnly}
+                      className="h-11 border-slate-200 rounded-xl font-black uppercase tracking-widest flex gap-2 text-slate-600 px-6 shadow-sm text-[10px]"
+                      title="Sync CricAPI scorecards (fixtures_cricapi.scorecard) → match_points. Skips manual_override rows."
+                    >
+                      {syncingCricapi ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+                      Sync CricAPI
                     </Button>
                     <Button 
                       variant="outline" 
@@ -1684,7 +1885,12 @@ export default function ScoreboardPage() {
                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">
                     Rows are ordered by IPL team name, then player. Row tint follows IPL franchise (CSK, MI, RCB, etc.), matching the auction room and dashboard.
                     Each game column G1–G{SHEET_GAME_SLOTS} is that player’s IPL team’s 1st, 2nd, … match of the season (not the league schedule round). If CSK have played twice, only G1–G2 apply for CSK players.
-                    The database stores <span className="font-black text-slate-600">PJ base points</span> (<code className="font-mono text-slate-500">base_points</code>) and <span className="font-black text-slate-600">stored fantasy</span> (<code className="font-mono text-slate-500">points</code>) = <span className="font-black text-slate-600">base × max(batting-haul tier, bowling-haul tier)</span> (runs and wicket tiers from the rules; the higher tier applies once to the whole base). The green subline shows <span className="font-black text-slate-600">max(bat,bowl)</span> when sync has written haul columns; otherwise the effective × until you re-sync. The big cell value is usually <span className="font-black text-slate-600">stored × Icon (2×) or Captain / Vice</span> (franchise Icon wins if both apply). On <span className="font-black text-slate-600">booster days</span>, the sheet uses <span className="font-black text-slate-600">base × 3</span> (or × 6 for franchise Icon). Day pipeline: <code className="font-mono">python3 scripts/run_ipl_day.py --date YYYY-MM-DD</code>. Manual edits set <span className="font-black text-slate-600">manual_override</span> so Sync skips them.
+                    The database stores <span className="font-black text-slate-600">PJ base points</span> (<code className="font-mono text-slate-500">base_points</code>) and <span className="font-black text-slate-600">stored fantasy</span> (<code className="font-mono text-slate-500">points</code>) = <span className="font-black text-slate-600">base × max(batting-haul tier, bowling-haul tier)</span> (runs and wicket tiers from the rules; the higher tier applies once to the whole base). The green subline shows <span className="font-black text-slate-600">max(bat,bowl)</span> when sync has written haul columns; otherwise the effective × until you re-sync. The big cell value is usually <span className="font-black text-slate-600">stored × Icon (2×) or Captain / Vice</span> (franchise Icon wins if both apply). On <span className="font-black text-slate-600">booster days</span>, the sheet uses <span className="font-black text-slate-600">base × 3</span> (or × 6 for franchise Icon). Fill the grid with <span className="font-black text-slate-600">Sync points</span>: ESPN →{" "}
+                    <code className="font-mono">match_points_espn</code>, optional CricAPI →{" "}
+                    <code className="font-mono">match_points</code>. This tab reads{" "}
+                    <code className="font-mono">{SHEET_MATCH_POINTS_TABLE}</code> (set in{" "}
+                    <code className="font-mono">lib/featureFlags.ts</code>). Manual{" "}
+                    <span className="font-black text-slate-600">manual_override</span> rows are skipped by Sync.
                  </p>
                  <div className="flex flex-wrap gap-2 items-center bg-white/80 p-3 rounded-xl border border-slate-100">
                     <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 mr-1">IPL legend</span>
@@ -1832,7 +2038,7 @@ export default function ScoreboardPage() {
                     <p className="border-b border-slate-100 bg-slate-50 px-4 py-2 text-[10px] font-bold uppercase tracking-wide text-slate-500 sm:hidden">
                       Swipe sideways to see all game columns (G1–G17).
                     </p>
-                    <div className="min-w-0 w-full overflow-x-auto overscroll-x-contain touch-pan-x [-webkit-overflow-scrolling:touch]">
+                    <div className="min-w-0 w-full overflow-x-auto overscroll-x-contain touch-pan-x touch-pan-y [-webkit-overflow-scrolling:touch]">
                       <table className="w-full min-w-[1200px] text-left">
                         <thead className="bg-slate-50">
                           <tr>
@@ -2021,7 +2227,8 @@ export default function ScoreboardPage() {
                                     Number.isFinite(mpDet.haulRun) &&
                                     Number.isFinite(mpDet.haulWick) &&
                                     Number.isFinite(mpDet.haulApp);
-                                  const showPjHaulLine = basePts != null && basePts > 0;
+                                  const showPjHaulLine =
+                                    breakdown.mode !== "booster" && basePts != null && basePts > 0;
                                   const effHaulMult =
                                     basePts != null && basePts > 0 ? rawPts / basePts : null;
                                   const titleBooster =

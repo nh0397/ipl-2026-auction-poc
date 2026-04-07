@@ -14,6 +14,7 @@ import {
   Database,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SHOW_CRICAPI_FIXTURE_UI } from "@/lib/featureFlags";
 import ScorecardViewer from "@/components/scoreboard/ScorecardViewer";
 import { adaptCricApiToScorecardViewer } from "@/lib/adapters/cricapiScorecard";
 import { aggregateFantasyRowsFromCricApiMatchData } from "@/lib/cricapiFantasyAggregate";
@@ -501,8 +502,13 @@ export default function FixturesPage() {
                           )}
                         </div>
 
-                        {/* ESPN + CricAPI (DB-backed) */}
-                        <div className="mt-4 pt-4 border-t border-slate-50 grid grid-cols-2 gap-2 min-w-0">
+                        {/* ESPN (+ optional CricAPI DB modal) */}
+                        <div
+                          className={cn(
+                            "mt-4 pt-4 border-t border-slate-50 grid gap-2 min-w-0",
+                            SHOW_CRICAPI_FIXTURE_UI ? "grid-cols-2" : "grid-cols-1"
+                          )}
+                        >
                           {(() => {
                             const mn = espnMatchNo(match);
                             const espnReady = mn != null && !!espnPointsSyncedByMatchNo[mn];
@@ -528,30 +534,32 @@ export default function FixturesPage() {
                                   <Radio className="h-3.5 w-3.5 shrink-0" />
                                   <span className="break-words">ESPN</span>
                                 </button>
-                                <button
-                                  type="button"
-                                  disabled={!cricReady}
-                                  onClick={() => {
-                                    if (!cricReady) return;
-                                    setModalTab("scorecard");
-                                    setExpandedFantasyId(null);
-                                    setModal({ source: "cricapi", fixture: match });
-                                  }}
-                                  className={cn(
-                                    "touch-manipulation min-h-[48px] flex items-center justify-center gap-1.5 py-3 px-2 rounded-xl text-[10px] sm:text-xs font-black uppercase tracking-wide sm:tracking-widest transition-all border text-center leading-tight",
-                                    cricReady
-                                      ? "bg-slate-900 text-white border-slate-900 active:bg-slate-800 hover:bg-black shadow-md"
-                                      : "bg-slate-50 border-slate-100 text-slate-300 cursor-not-allowed"
-                                  )}
-                                >
-                                  <Database className="h-3.5 w-3.5 shrink-0" />
-                                  <span className="break-words">CricAPI</span>
-                                </button>
+                                {SHOW_CRICAPI_FIXTURE_UI ? (
+                                  <button
+                                    type="button"
+                                    disabled={!cricReady}
+                                    onClick={() => {
+                                      if (!cricReady) return;
+                                      setModalTab("scorecard");
+                                      setExpandedFantasyId(null);
+                                      setModal({ source: "cricapi", fixture: match });
+                                    }}
+                                    className={cn(
+                                      "touch-manipulation min-h-[48px] flex items-center justify-center gap-1.5 py-3 px-2 rounded-xl text-[10px] sm:text-xs font-black uppercase tracking-wide sm:tracking-widest transition-all border text-center leading-tight",
+                                      cricReady
+                                        ? "bg-slate-900 text-white border-slate-900 active:bg-slate-800 hover:bg-black shadow-md"
+                                        : "bg-slate-50 border-slate-100 text-slate-300 cursor-not-allowed"
+                                    )}
+                                  >
+                                    <Database className="h-3.5 w-3.5 shrink-0" />
+                                    <span className="break-words">CricAPI</span>
+                                  </button>
+                                ) : null}
                               </>
                             );
                           })()}
                         </div>
-                        {match.match_ended && !match.points_synced ? (
+                        {SHOW_CRICAPI_FIXTURE_UI && match.match_ended && !match.points_synced ? (
                           <p className="mt-2 text-[10px] font-bold text-blue-600 text-center uppercase tracking-wide">
                             CricAPI sync pending (points_synced)
                           </p>
