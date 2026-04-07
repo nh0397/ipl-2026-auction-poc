@@ -1864,21 +1864,93 @@ export default function ScoreboardPage() {
                     <Button 
                       variant="outline" 
                       onClick={() => {
-                        let csv = "Auction Franchise,Player,IPL Team,Role,Price\n";
-                        franchises.forEach((franchise) => {
-                          const squad = allPlayers.filter(p => p.sold_to_id === franchise.id || p.sold_to === franchise.team_name);
-                          squad.forEach((p) => {
-                            csv += `"${franchise.team_name || franchise.full_name}","${p.player_name}","${p.team ?? ""}","${p.role}","${p.sold_price || p.price}"\n`;
-                          });
-                        });
+                        const escapeCsv = (v: any) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+                        const header = [
+                          "Auction Franchise",
+                          "Player",
+                          "IPL Team",
+                          "Role",
+                          ...Array.from({ length: SHEET_GAME_SLOTS }, (_, i) => `G${i + 1}`),
+                        ];
+                        let csv = header.map(escapeCsv).join(",") + "\n";
+
+                        const pointsMap = matchPointsCellMap; // already from selected sheetMatchPointsTable
+                        const baseMap = matchPointsDetailByKey;
+
+                        const franchisesSorted = [...franchises].sort((a: any, b: any) =>
+                          String(a.team_name || a.full_name || "").localeCompare(String(b.team_name || b.full_name || ""))
+                        );
+
+                        for (const franchise of franchisesSorted) {
+                          const squad = allPlayers
+                            .filter((p: any) => p.sold_to_id === franchise.id || p.sold_to === franchise.team_name)
+                            .sort((a: any, b: any) => String(a.player_name || "").localeCompare(String(b.player_name || "")));
+
+                          for (const p of squad) {
+                            const row: any[] = [
+                              franchise.team_name || franchise.full_name || "",
+                              p.player_name || "",
+                              p.team || "",
+                              p.role || "",
+                            ];
+
+                            for (let slot = 1; slot <= SHEET_GAME_SLOTS; slot++) {
+                              const short = resolvePlayerTeamToShort(p.team);
+                              const leagueMn = short ? teamSchedules.get(short)?.[slot - 1] : undefined;
+                              const match = leagueMn != null ? allMatches.find((m: any) => m.match_no === leagueMn) : undefined;
+                              if (!match) {
+                                row.push("");
+                                continue;
+                              }
+                              if (!isMatchPlayed(match)) {
+                                row.push(0);
+                                continue;
+                              }
+
+                              const key = `${p.id}_${match.id}`;
+                              const stored = pointsMap.get(key);
+                              if (stored === undefined) {
+                                row.push(""); // no_data
+                                continue;
+                              }
+                              if (stored === null) {
+                                row.push("DNP");
+                                continue;
+                              }
+
+                              const storedPoints = Number(stored) || 0;
+                              const basePoints = baseMap.get(key)?.base ?? undefined;
+                              const dKey = matchDateKeyIST(match.date_time);
+                              const iconId = franchiseIconRows.find((r) => r.team_id === franchise.id)?.player_id ?? null;
+                              const activeCvc = activeCvcForMatchDate(franchiseCvcRows, franchise.id, dKey);
+                              const sheet = franchiseMatchSheetDisplay({
+                                storedPoints,
+                                basePoints,
+                                franchiseId: franchise.id,
+                                playerId: p.id,
+                                franchiseIconPlayerId: iconId,
+                                matchDateKeyIST: dKey,
+                                boosterRows: franchiseBoosterRows,
+                                activeCvc,
+                              });
+                              row.push(sheet.display);
+                            }
+
+                            csv += row.map(escapeCsv).join(",") + "\n";
+                          }
+                        }
+
                         const link = document.createElement("a");
                         link.setAttribute("href", encodeURI("data:text/csv;charset=utf-8," + csv));
-                        link.setAttribute("download", "All_Franchises_Score_Sheets.csv");
+                        link.setAttribute(
+                          "download",
+                          `Points_${sheetMatchPointsTable}_${new Date().toISOString().slice(0, 10)}.csv`
+                        );
                         link.click();
                       }} 
                       className="h-11 border-slate-200 rounded-xl font-black uppercase tracking-widest flex gap-2 text-slate-600 px-6 shadow-sm text-[10px]"
                     >
-                       <Download size={16} /> Export all squads
+                       <Download size={16} /> Export points
                     </Button>
                     </div>
                  </div>

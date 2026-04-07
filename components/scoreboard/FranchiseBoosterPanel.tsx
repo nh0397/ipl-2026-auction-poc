@@ -83,25 +83,26 @@ export function FranchiseBoosterPanel({ franchiseId, franchiseLabel, rows, canEd
   };
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-violet-50/50 p-4 shadow-sm">
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <Zap className="h-4 w-4 text-violet-800" aria-hidden />
-        <h3 className="text-[11px] font-black uppercase tracking-widest text-violet-950">
-          Booster days (3)
-        </h3>
-        <span className="text-[9px] font-bold text-violet-900/75">
-          Pick up to three IST calendar dates · On each, players who played score{" "}
-          <span className="font-black">base × 3</span> on your sheet (no Captain/Vice or normal Icon 2×) · Franchise Icon gets{" "}
-          <span className="font-black">base × 6</span>
-        </span>
-      </div>
-      <p className="mb-3 text-[10px] font-bold text-violet-900/85">{franchiseLabel}</p>
-      <div className="space-y-3">
+    <details className="rounded-2xl border border-slate-200 bg-violet-50/50 shadow-sm overflow-hidden" open>
+      <summary className="cursor-pointer list-none p-3 sm:p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <Zap className="h-4 w-4 text-violet-800" aria-hidden />
+          <h3 className="text-[11px] font-black uppercase tracking-widest text-violet-950">
+            Booster days
+          </h3>
+          <span className="text-[9px] font-bold text-violet-900/75">
+            3 IST dates · base × 3 (Icon × 6)
+          </span>
+        </div>
+        <p className="mt-1 text-[10px] font-bold text-violet-900/85">{franchiseLabel}</p>
+      </summary>
+      <div className="px-3 pb-3 sm:px-4 sm:pb-4">
+        <div className="space-y-3">
         {SLOTS.map((slot) => (
           <div
             key={slot}
             className={cn(
-              "grid gap-2 rounded-xl border border-violet-200/80 bg-white/70 p-3 sm:grid-cols-[auto_1fr] sm:items-center",
+              "grid gap-2 rounded-xl border border-violet-200/80 bg-white/70 p-2 sm:p-3 sm:grid-cols-[auto_1fr] sm:items-center",
               !canEdit && "opacity-80"
             )}
           >
@@ -115,21 +116,22 @@ export function FranchiseBoosterPanel({ franchiseId, franchiseLabel, rows, canEd
             />
           </div>
         ))}
-      </div>
-      {canEdit ? (
-        <div className="mt-4 flex justify-end">
-          <Button
-            type="button"
-            size="sm"
-            disabled={saving}
-            onClick={save}
-            className="rounded-xl bg-violet-900 font-black uppercase tracking-widest text-[10px] text-white hover:bg-violet-950"
-          >
-            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Save booster days
-          </Button>
         </div>
-      ) : null}
-    </div>
+        {canEdit ? (
+          <div className="mt-3 flex justify-end">
+            <Button
+              type="button"
+              size="sm"
+              disabled={saving}
+              onClick={save}
+              className="rounded-xl bg-violet-900 font-black uppercase tracking-widest text-[10px] text-white hover:bg-violet-950"
+            >
+              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              Save booster
+            </Button>
+          </div>
+        ) : null}
+      </div>
+    </details>
   );
 }

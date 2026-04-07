@@ -36,14 +36,17 @@ export function FranchiseCvcPanel({
   onSaved,
 }: Props) {
   const [saving, setSaving] = useState(false);
-  const [local, setLocal] = useState<Record<number, { captain_id: string; vice_id: string; valid_from: string }>>(() => {
-    const init: Record<number, { captain_id: string; vice_id: string; valid_from: string }> = {};
+  const [local, setLocal] = useState<
+    Record<number, { captain_id: string; captain_from: string; vice_id: string; vice_from: string }>
+  >(() => {
+    const init: Record<number, { captain_id: string; captain_from: string; vice_id: string; vice_from: string }> = {};
     for (const s of SLOTS) {
       const r = rowForSlot(rows, franchiseId, s);
       init[s] = {
         captain_id: r?.captain_id ?? "",
         vice_id: r?.vice_captain_id ?? "",
-        valid_from: r?.valid_from ?? "",
+        captain_from: (r?.captain_valid_from ?? r?.valid_from ?? "") as string,
+        vice_from: (r?.vice_valid_from ?? r?.valid_from ?? "") as string,
       };
     }
     return init;
@@ -51,13 +54,14 @@ export function FranchiseCvcPanel({
 
   useEffect(() => {
     setLocal(() => {
-      const next: Record<number, { captain_id: string; vice_id: string; valid_from: string }> = {};
+      const next: Record<number, { captain_id: string; captain_from: string; vice_id: string; vice_from: string }> = {};
       for (const s of SLOTS) {
         const r = rowForSlot(rows, franchiseId, s);
         next[s] = {
           captain_id: r?.captain_id ?? "",
           vice_id: r?.vice_captain_id ?? "",
-          valid_from: r?.valid_from ?? "",
+          captain_from: (r?.captain_valid_from ?? r?.valid_from ?? "") as string,
+          vice_from: (r?.vice_valid_from ?? r?.valid_from ?? "") as string,
         };
       }
       return next;
@@ -78,26 +82,37 @@ export function FranchiseCvcPanel({
     try {
       for (const slot of SLOTS) {
         const st = local[slot];
-        const hasPair = st.captain_id && st.vice_id && st.valid_from;
-        if (hasPair) {
-          if (st.captain_id === st.vice_id) {
+        const hasAny = !!(st.captain_id || st.vice_id || st.captain_from || st.vice_from);
+        const hasCaptain = !!(st.captain_id && st.captain_from);
+        const hasVice = !!(st.vice_id && st.vice_from);
+        if (hasAny) {
+          if (st.captain_id && !st.captain_from) {
+            alert(`Slot ${slot}: Pick a Captain effective date.`);
+            return;
+          }
+          if (st.vice_id && !st.vice_from) {
+            alert(`Slot ${slot}: Pick a Vice Captain effective date.`);
+            return;
+          }
+          if (hasCaptain && hasVice && st.captain_id === st.vice_id) {
             alert(`Slot ${slot}: Captain and Vice Captain must be different players.`);
-            setSaving(false);
             return;
           }
           const { error } = await supabase.from("franchise_cvc_selections").upsert(
             {
               team_id: franchiseId,
               slot,
-              captain_id: st.captain_id,
-              vice_captain_id: st.vice_id,
-              valid_from: st.valid_from,
+              captain_id: st.captain_id || null,
+              vice_captain_id: st.vice_id || null,
+              // Keep legacy `valid_from` populated so older code/queries remain sane.
+              valid_from: (st.captain_from || st.vice_from) as string,
+              captain_valid_from: st.captain_from || null,
+              vice_valid_from: st.vice_from || null,
             },
             { onConflict: "team_id,slot" }
           );
           if (error) {
             alert(error.message);
-            setSaving(false);
             return;
           }
         } else {
@@ -108,7 +123,6 @@ export function FranchiseCvcPanel({
             .eq("slot", slot);
           if (error) {
             alert(error.message);
-            setSaving(false);
             return;
           }
         }
@@ -120,21 +134,23 @@ export function FranchiseCvcPanel({
   };
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-amber-50/40 p-4 shadow-sm">
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <Shield className="h-4 w-4 text-amber-800" aria-hidden />
-        <h3 className="text-[11px] font-black uppercase tracking-widest text-amber-950">
-          Captain &amp; Vice Captain (5 dated slots)
-        </h3>
-        <span className="text-[9px] font-bold text-amber-900/70">
-          Effective from date (IST) · Multiplies stored fantasy points (base × multipliers) by Captain 2× or Vice 1.5× · Franchise Icon and auction Icon types excluded
-        </span>
-      </div>
-      <p className="mb-3 text-[10px] font-bold text-amber-900/80">
-        For each IPL match column, the row with the latest <code className="font-mono">valid_from</code> on or before that
-        match day applies. {franchiseLabel}
-      </p>
-      <div className="space-y-3">
+    <details className="rounded-2xl border border-slate-200 bg-amber-50/40 shadow-sm overflow-hidden" open>
+      <summary className="cursor-pointer list-none p-3 sm:p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <Shield className="h-4 w-4 text-amber-800" aria-hidden />
+          <h3 className="text-[11px] font-black uppercase tracking-widest text-amber-950">
+            Captain &amp; Vice Captain
+          </h3>
+          <span className="text-[9px] font-bold text-amber-900/70">
+            Separate effective dates · Captain 2× · Vice 1.5× · franchise Icon excluded
+          </span>
+        </div>
+        <p className="mt-1 text-[10px] font-bold text-amber-900/80">
+          On each match day, the latest effective Captain and latest effective Vice are applied independently. {franchiseLabel}
+        </p>
+      </summary>
+      <div className="px-3 pb-3 sm:px-4 sm:pb-4">
+        <div className="space-y-3">
         {SLOTS.map((slot) => {
           const st = local[slot];
           return (
@@ -175,28 +191,38 @@ export function FranchiseCvcPanel({
               <input
                 type="date"
                 disabled={!canEdit}
-                value={st.valid_from}
-                onChange={(e) => setLocal((prev) => ({ ...prev, [slot]: { ...prev[slot], valid_from: e.target.value } }))}
+                value={st.captain_from}
+                onChange={(e) => setLocal((prev) => ({ ...prev, [slot]: { ...prev[slot], captain_from: e.target.value } }))}
                 className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-[11px] font-bold text-slate-800"
+                title="Captain effective from (IST date)"
+              />
+              <input
+                type="date"
+                disabled={!canEdit}
+                value={st.vice_from}
+                onChange={(e) => setLocal((prev) => ({ ...prev, [slot]: { ...prev[slot], vice_from: e.target.value } }))}
+                className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-[11px] font-bold text-slate-800"
+                title="Vice effective from (IST date)"
               />
             </div>
           );
         })}
-      </div>
-      {canEdit ? (
-        <div className="mt-4 flex justify-end">
-          <Button
-            type="button"
-            size="sm"
-            disabled={saving}
-            onClick={save}
-            className="rounded-xl bg-amber-900 font-black uppercase tracking-widest text-[10px] text-white hover:bg-amber-950"
-          >
-            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Save C/VC picks
-          </Button>
         </div>
-      ) : null}
-    </div>
+        {canEdit ? (
+          <div className="mt-3 flex justify-end">
+            <Button
+              type="button"
+              size="sm"
+              disabled={saving}
+              onClick={save}
+              className="rounded-xl bg-amber-900 font-black uppercase tracking-widest text-[10px] text-white hover:bg-amber-950"
+            >
+              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              Save C/VC
+            </Button>
+          </div>
+        ) : null}
+      </div>
+    </details>
   );
 }

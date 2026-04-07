@@ -43,8 +43,6 @@ HEADERS = {
 }
 
 SERIES_ID = "1510719"
-# Same schedule source as scripts/run_ipl_day.py (CricAPI table); we still persist ESPN HTML to public.fixtures by api_match_id.
-FIXTURES_CRICAPI_TABLE = "fixtures_cricapi"
 OUTFILE = "scraped_scorecard.json"
 DEBUG_HTML = "debug_scorecard.html"
 DEBUG_PNG = "debug_scorecard.png"
@@ -1190,9 +1188,9 @@ def slugify_team(name: str) -> str:
     return (name or "").strip().lower().replace("&", "and").replace(" ", "-")
 
 
-def list_fixtures_cricapi_for_day(match_date: str) -> List[Dict[str, Any]]:
-    """Same query shape as run_ipl_day.list_fixtures_for_day — which matches to scrape today."""
-    url = f"{SUPABASE_URL}/rest/v1/{FIXTURES_CRICAPI_TABLE}"
+def list_fixtures_for_day(match_date: str) -> List[Dict[str, Any]]:
+    """ESPN scraper source of truth: public.fixtures (match_no + api_match_id + points_synced)."""
+    url = f"{SUPABASE_URL}/rest/v1/fixtures"
     params = {
         "select": "*",
         "match_date": f"eq.{match_date}",
@@ -1292,10 +1290,10 @@ async def main():
         target_date = now_ist.strftime("%Y-%m-%d")
 
     log(f"Targeting date: {target_date} (Force: {args.force})")
-    fixtures_cricapi = list_fixtures_cricapi_for_day(target_date)
-    log(f"{len(fixtures_cricapi)} row(s) from {FIXTURES_CRICAPI_TABLE} where match_date={target_date!r} (same as run_ipl_day)")
+    fixtures = list_fixtures_for_day(target_date)
+    log(f"{len(fixtures)} row(s) from fixtures where match_date={target_date!r}")
 
-    if not fixtures_cricapi:
+    if not fixtures:
         log(f"No matches found for {target_date}. Exiting.")
         return
 
@@ -1303,45 +1301,30 @@ async def main():
 
     now_utc = datetime.now(timezone.utc)
     updated: List[Dict[str, Any]] = []
-    for fc in fixtures_cricapi:
+    for f in fixtures:
         # Skip future-starting matches for today's run (keep old behavior for backfills: still respects cutoff)
-        dt = parse_utc_dt(fc.get("date_time_gmt"))
+        dt = parse_utc_dt(f.get("date_time_gmt"))
         if dt and dt > now_utc:
-            log(f"Skipping future match {fc.get('api_match_id')} date_time_gmt={fc.get('date_time_gmt')}")
+            log(f"Skipping future match {f.get('api_match_id')} date_time_gmt={f.get('date_time_gmt')}")
             continue
 
-        match_id = fc.get("api_match_id")
+        match_id = f.get("api_match_id")
         if not match_id:
             continue
 
-        legacy = fetch_legacy_fixture_by_api_match_id(str(match_id))
-        if not legacy and fc.get("match_no") is not None:
-            try:
-                legacy = fetch_legacy_fixture_by_match_no(int(fc["match_no"]))
-            except (TypeError, ValueError):
-                legacy = None
-        if not legacy:
-            log(
-                f"Skipping api_match_id={match_id}: no public.fixtures row (ESPN scorecard is stored there; "
-                "match_no / points_synced sync requires it)."
-            )
+        if not args.force and f.get("points_synced") is True and f.get("scorecard"):
+            log(f"Skipping already-synced match {match_id} ({f.get('title')})")
             continue
 
-        if not args.force and legacy.get("points_synced") is True and legacy.get("scorecard"):
-            log(
-                f"Skipping already-synced match {match_id} ({fc.get('match_name') or legacy.get('title')})"
-            )
-            continue
-
-        t1 = slugify_team(fc.get("team1_name") or fc.get("team1_short") or "").replace(" ", "-")
-        t2 = slugify_team(fc.get("team2_name") or fc.get("team2_short") or "").replace(" ", "-")
+        t1 = slugify_team(f.get("team1_name") or f.get("team1_short") or "").replace(" ", "-")
+        t2 = slugify_team(f.get("team2_name") or f.get("team2_short") or "").replace(" ", "-")
         if not t1 or not t2:
             log(f"Skipping api_match_id={match_id}: missing team names for ESPN URL slug")
             continue
 
         dynamic_url = f"https://www.espncricinfo.com/series/ipl-2026-{SERIES_ID}/{t1}-vs-{t2}-{match_id}/full-scorecard"
 
-        log(f"Identified Match: {fc.get('match_name') or legacy.get('title')}")
+        log(f"Identified Match: {f.get('title')}")
         log(f"Generated URL: {dynamic_url}")
 
         data = await run(dynamic_url, player_catalog)
@@ -1349,17 +1332,17 @@ async def main():
             continue
 
         mi = data.get("match_info") or {}
-        status = clean(str(mi.get("result") or mi.get("status") or legacy.get("status") or ""))
-        update_legacy_fixture_scorecard_and_mark_synced(str(legacy["id"]), data, status)
+        status = clean(str(mi.get("result") or mi.get("status") or f.get("status") or ""))
+        update_legacy_fixture_scorecard_and_mark_synced(str(f["id"]), data, status)
         upsert_fixtureapi_points_synced(str(match_id))
         log("Fixture scorecard updated in Supabase (fixtures.scorecard + points_synced=true).")
         updated.append(
             {
                 "api_match_id": str(match_id),
-                "match_date": fc.get("match_date") or "",
-                "title": (fc.get("match_name") or legacy.get("title") or ""),
-                "team1_short": fc.get("team1_short") or "",
-                "team2_short": fc.get("team2_short") or "",
+                "match_date": f.get("match_date") or "",
+                "title": (f.get("title") or ""),
+                "team1_short": f.get("team1_short") or "",
+                "team2_short": f.get("team2_short") or "",
                 "status": status or "",
             }
         )
