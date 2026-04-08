@@ -4,9 +4,8 @@ on:
   schedule:
     # Same slots as CricAPI scorecard sync (scripts/run_ipl_day.py) so both pipelines align on calendar days.
     # ~06:40 IST
-    - cron: "10 1 * * *"
     # ~22:10 IST
-    - cron: "40 16 * * *"
+    - cron: "30 18 * * *"
   workflow_dispatch:
     inputs:
       date_ist:
