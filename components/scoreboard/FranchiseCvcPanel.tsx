@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import { isIconPlayer, type FranchiseCvcRow } from "@/lib/franchiseCvc";
 import { Loader2, Shield } from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
 type Player = { id: string; player_name: string; team?: string | null; type?: string | null; role?: string | null };
@@ -87,15 +88,15 @@ export function FranchiseCvcPanel({
         const hasVice = !!(st.vice_id && st.vice_from);
         if (hasAny) {
           if (st.captain_id && !st.captain_from) {
-            alert(`Slot ${slot}: Pick a Captain effective date.`);
+            toast.error(`Slot ${slot}: Pick a Captain effective date.`);
             return;
           }
           if (st.vice_id && !st.vice_from) {
-            alert(`Slot ${slot}: Pick a Vice Captain effective date.`);
+            toast.error(`Slot ${slot}: Pick a Vice Captain effective date.`);
             return;
           }
           if (hasCaptain && hasVice && st.captain_id === st.vice_id) {
-            alert(`Slot ${slot}: Captain and Vice Captain must be different players.`);
+            toast.error(`Slot ${slot}: Captain and Vice Captain must be different players.`);
             return;
           }
           const { error } = await supabase.from("franchise_cvc_selections").upsert(
@@ -112,7 +113,7 @@ export function FranchiseCvcPanel({
             { onConflict: "team_id,slot" }
           );
           if (error) {
-            alert(error.message);
+            toast.error(error.message);
             return;
           }
         } else {
@@ -122,11 +123,12 @@ export function FranchiseCvcPanel({
             .eq("team_id", franchiseId)
             .eq("slot", slot);
           if (error) {
-            alert(error.message);
+            toast.error(error.message);
             return;
           }
         }
       }
+      toast.success("Captain / Vice Captain saved");
       onSaved();
     } finally {
       setSaving(false);

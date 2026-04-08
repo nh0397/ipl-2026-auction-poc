@@ -31,6 +31,7 @@ import { MATCH_POINTS_CRICAPI_TABLE, MATCH_POINTS_ESPN_TABLE } from "@/lib/match
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/auth/AuthProvider";
 import React from "react";
+import { toast } from "sonner";
 import ScorecardViewer from "@/components/scoreboard/ScorecardViewer";
 import { adaptCricApiToScorecardViewer } from "@/lib/adapters/cricapiScorecard";
 import { aggregateFantasyRowsFromCricApiMatchData } from "@/lib/cricapiFantasyAggregate";
@@ -52,6 +53,14 @@ import {
   type FranchiseIconRow,
   type FranchiseMatchSheetBreakdown,
 } from "@/lib/franchiseCvc";
+import { MOM_BONUS_DEFAULT, syntheticStoredAfterHaulWithMom } from "@/lib/matchMomBonus";
+import { formatPoints2, toPoints2 } from "@/lib/pointsPrecision";
+
+/** Recharts Tooltip value can be number, string, or array; normalize to 2-decimal display. */
+function formatRechartsTooltipPoints(value: unknown): string {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return formatPoints2(Number(raw ?? 0));
+}
 
 // ─── Fixture helpers ────────────────────────────────────────────────
 interface Fixture {
@@ -257,6 +266,8 @@ export default function ScoreboardPage() {
   const [franchiseCvcRows, setFranchiseCvcRows] = useState<FranchiseCvcRow[]>([]);
   const [franchiseIconRows, setFranchiseIconRows] = useState<FranchiseIconRow[]>([]);
   const [franchiseBoosterRows, setFranchiseBoosterRows] = useState<FranchiseBoosterRow[]>([]);
+  /** Admin-selected MoM per match — bonus added to PJ base before haul on sheets (not in match_points). */
+  const [momRows, setMomRows] = useState<{ match_id: string; player_id: string; bonus_points: number }[]>([]);
   /** Fixtures tab: ESPN / CricAPI modal (scorecard + fantasy tabs). */
   const [fixtureModal, setFixtureModal] = useState<{ source: "espn" | "cricapi"; fixture: Fixture } | null>(null);
   const [fixtureModalTab, setFixtureModalTab] = useState<"scorecard" | "fantasy">("scorecard");
@@ -381,6 +392,17 @@ export default function ScoreboardPage() {
 
   const teamSchedules = useMemo(() => buildTeamSchedules(iplScheduleRows), [iplScheduleRows]);
 
+  const momByMatchId = useMemo(() => {
+    const m = new Map<string, { player_id: string; bonus_points: number }>();
+    for (const r of momRows) {
+      m.set(r.match_id, {
+        player_id: r.player_id,
+        bonus_points: Number(r.bonus_points) || MOM_BONUS_DEFAULT,
+      });
+    }
+    return m;
+  }, [momRows]);
+
   /**
    * Stored sheet table (`SHEET_MATCH_POINTS_TABLE`).points: NULL = DNP, number = score (0 = played, zero points).
    * Map only contains keys for rows present in DB or pending; missing key = no row yet.
@@ -449,7 +471,14 @@ export default function ScoreboardPage() {
       const d = matchDateKeyIST(m.date_time);
       const iconId = franchiseIconRows.find((r) => r.team_id === franchiseId)?.player_id ?? null;
       const active = activeCvcForMatchDate(franchiseCvcRows, franchiseId, d);
-      const basePts = matchPointsDetailByKey.get(key)?.base ?? undefined;
+      const det = matchPointsDetailByKey.get(key);
+      const basePts = det?.base ?? undefined;
+      const haulApp = det?.haulApp ?? null;
+      const momRow = momByMatchId.get(m.id);
+      const momBonus =
+        momRow && momRow.player_id === playerId
+          ? Number(momRow.bonus_points) || MOM_BONUS_DEFAULT
+          : 0;
       return franchiseMatchSheetDisplay({
         storedPoints: raw,
         basePoints: basePts,
@@ -459,6 +488,8 @@ export default function ScoreboardPage() {
         matchDateKeyIST: d,
         boosterRows: franchiseBoosterRows,
         activeCvc: active,
+        momBonusPoints: momBonus,
+        haulAppliedMult: haulApp,
       }).display;
     },
     [
@@ -469,6 +500,7 @@ export default function ScoreboardPage() {
       franchiseCvcRows,
       franchiseIconRows,
       franchiseBoosterRows,
+      momByMatchId,
     ]
   );
 
@@ -552,7 +584,7 @@ export default function ScoreboardPage() {
   const fetchInitialData = async () => {
     try {
       setLoading(true);
-      const [teamsRes, matchesRes, scheduleRes, playersCatRes, cvcRes, iconRes, boosterRes] = await Promise.all([
+      const [teamsRes, matchesRes, scheduleRes, playersCatRes, cvcRes, iconRes, boosterRes, momRes] = await Promise.all([
         supabase.from("profiles").select("*").neq("role", "Viewer").order("team_name", { ascending: true }),
         supabase.from("matches").select("*").order("match_no", { ascending: true }),
         supabase
@@ -567,6 +599,7 @@ export default function ScoreboardPage() {
         supabase.from("franchise_cvc_selections").select("*"),
         supabase.from("franchise_icon_selection").select("*"),
         supabase.from("franchise_booster_days").select("*"),
+        supabase.from("match_man_of_the_match").select("match_id, player_id, bonus_points"),
       ]);
       if (scheduleRes.data) setIplScheduleRows(scheduleRes.data as IplScheduleRow[]);
       const teamsData = teamsRes.data || [];
@@ -582,6 +615,7 @@ export default function ScoreboardPage() {
       if (cvcRes.data) setFranchiseCvcRows(cvcRes.data as FranchiseCvcRow[]);
       if (iconRes.data) setFranchiseIconRows(iconRes.data as FranchiseIconRow[]);
       if (boosterRes.data) setFranchiseBoosterRows(boosterRes.data as FranchiseBoosterRow[]);
+      if (momRes.data) setMomRows(momRes.data as { match_id: string; player_id: string; bonus_points: number }[]);
     } finally { setTimeout(() => setLoading(false), 300); }
   };
 
@@ -589,7 +623,7 @@ export default function ScoreboardPage() {
   const fetchSheetsData = async () => {
     setSubLoading(true);
     try {
-      const [playersRes, pointsRes, schedRes, cvcRes, iconRes, boosterRes, cfgRes] = await Promise.all([
+      const [playersRes, pointsRes, schedRes, cvcRes, iconRes, boosterRes, cfgRes, momRes] = await Promise.all([
         supabase.from("players").select("*").eq("auction_status", "sold").order("player_name", { ascending: true }),
         supabase.from(sheetMatchPointsTable).select("*"),
         supabase
@@ -600,6 +634,7 @@ export default function ScoreboardPage() {
         supabase.from("franchise_icon_selection").select("*"),
         supabase.from("franchise_booster_days").select("*"),
         supabase.from("auction_config").select("id,match_points_source").limit(1).maybeSingle(),
+        supabase.from("match_man_of_the_match").select("match_id, player_id, bonus_points"),
       ]);
       const pl = playersRes.data || [];
       setAllPlayers(pl);
@@ -627,6 +662,7 @@ export default function ScoreboardPage() {
       }
       const cid = (cfgRes.data as any)?.id;
       if (typeof cid === "string" && cid) setAuctionConfigId(cid);
+      if (momRes.data) setMomRows(momRes.data as { match_id: string; player_id: string; bonus_points: number }[]);
     } finally {
       setSubLoading(false);
     }
@@ -636,7 +672,7 @@ export default function ScoreboardPage() {
     setTabLoading(true);
     try {
       // Must include `team` (IPL side) or G-column mapping and charts read 0 for every cell.
-      const [{ data: soldPlayers }, { data: pts }, { data: schedRes }, { data: cvcRows }, { data: iconRows }, { data: boosterRows }, { data: cfgRes }] =
+      const [{ data: soldPlayers }, { data: pts }, { data: schedRes }, { data: cvcRows }, { data: iconRows }, { data: boosterRows }, { data: cfgRes }, { data: momData }] =
         await Promise.all([
         supabase.from("players").select("*").eq("auction_status", "sold").order("player_name", { ascending: true }),
         supabase.from(sheetMatchPointsTable).select("*"),
@@ -648,6 +684,7 @@ export default function ScoreboardPage() {
         supabase.from("franchise_icon_selection").select("*"),
         supabase.from("franchise_booster_days").select("*"),
         supabase.from("auction_config").select("id,match_points_source").limit(1).maybeSingle(),
+        supabase.from("match_man_of_the_match").select("match_id, player_id, bonus_points"),
       ]);
       setAllPlayers(soldPlayers || []);
       setAllMatchPoints(pts || []);
@@ -666,6 +703,7 @@ export default function ScoreboardPage() {
       }
       const cid = (cfgRes as any)?.id;
       if (typeof cid === "string" && cid) setAuctionConfigId(cid);
+      if (momData) setMomRows(momData as { match_id: string; player_id: string; bonus_points: number }[]);
     } finally {
       setTabLoading(false);
     }
@@ -684,7 +722,7 @@ export default function ScoreboardPage() {
   const calculateStandings = useCallback(
     (players: any[], points: any[]) => {
       if (!franchises.length) return;
-      const detailMap = new Map<string, { stored: number | null; base: number | null }>();
+      const detailMap = new Map<string, { stored: number | null; base: number | null; haulApp: number | null }>();
       (points || []).forEach((pt: any) => {
         if (!pt?.player_id || !pt?.match_id) return;
         const key = `${pt.player_id}_${pt.match_id}`;
@@ -692,7 +730,9 @@ export default function ScoreboardPage() {
         const stored = raw === null || raw === undefined ? null : Number(raw) || 0;
         const bp = pt.base_points;
         const base = bp === null || bp === undefined ? null : Number(bp);
-        detailMap.set(key, { stored, base });
+        const ha = pt.haul_applied_mult;
+        const haulApp = ha === null || ha === undefined ? null : Number(ha);
+        detailMap.set(key, { stored, base, haulApp });
       });
       Object.values(pendingEdits || {}).forEach((ed: any) => {
         if (!ed?.player_id || !ed?.match_id) return;
@@ -700,7 +740,7 @@ export default function ScoreboardPage() {
         const raw = ed.points;
         const stored = raw === null || raw === undefined ? null : Number(raw) || 0;
         const existing = detailMap.get(key);
-        detailMap.set(key, { stored, base: existing?.base ?? null });
+        detailMap.set(key, { stored, base: existing?.base ?? null, haulApp: existing?.haulApp ?? null });
       });
 
       const standingsData = franchises.map((team) => {
@@ -724,6 +764,11 @@ export default function ScoreboardPage() {
             const iconId = franchiseIconRows.find((r) => r.team_id === team.id)?.player_id ?? null;
             const d = matchDateKeyIST(m.date_time);
             const active = activeCvcForMatchDate(franchiseCvcRows, team.id, d);
+            const momRec = momByMatchId.get(m.id);
+            const momBonus =
+              momRec && momRec.player_id === player.id
+                ? Number(momRec.bonus_points) || MOM_BONUS_DEFAULT
+                : 0;
             const { display } = franchiseMatchSheetDisplay({
               storedPoints: raw,
               basePoints: det.base,
@@ -733,6 +778,8 @@ export default function ScoreboardPage() {
               matchDateKeyIST: d,
               boosterRows: franchiseBoosterRows,
               activeCvc: active,
+              momBonusPoints: momBonus,
+              haulAppliedMult: det.haulApp,
             });
             matchTotal += display;
           });
@@ -750,7 +797,7 @@ export default function ScoreboardPage() {
           matchesPlayed: Math.min(matchesPlayed, 17),
           bestMatch: matchesPlayed > 0 ? bestMatch : 0,
           worstMatch: worstMatch === Infinity ? 0 : worstMatch,
-          avgPerMatch: matchesPlayed > 0 ? Math.round((totalPoints / matchesPlayed) * 10) / 10 : 0,
+          avgPerMatch: matchesPlayed > 0 ? toPoints2(totalPoints / matchesPlayed) : 0,
           squadSize: teamPlayers.length,
         };
       }).sort((a, b) => b.totalPoints - a.totalPoints);
@@ -764,6 +811,7 @@ export default function ScoreboardPage() {
       franchiseIconRows,
       franchiseBoosterRows,
       pendingEdits,
+      momByMatchId,
     ]
   );
 
@@ -782,6 +830,7 @@ export default function ScoreboardPage() {
     franchiseIconRows,
     franchiseBoosterRows,
     pendingEdits,
+    momByMatchId,
   ]);
 
   const fetchMatchSpecificData = async (matchId: string) => {
@@ -825,10 +874,15 @@ export default function ScoreboardPage() {
       if (v === null) return;
       storedPoints = v === undefined ? 0 : Number(v) || 0;
     }
-    const basePoints = matchPointsDetailByKey.get(key)?.base ?? undefined;
+    const det = matchPointsDetailByKey.get(key);
+    const basePoints = det?.base ?? undefined;
+    const haulApp = det?.haulApp ?? null;
     const d = matchDateKeyIST(match.date_time);
     const iconId = franchiseIconRows.find((r) => r.team_id === fr.id)?.player_id ?? null;
     const active = activeCvcForMatchDate(franchiseCvcRows, fr.id, d);
+    const momRec = momByMatchId.get(match.id);
+    const momBonus =
+      momRec && momRec.player_id === pId ? Number(momRec.bonus_points) || MOM_BONUS_DEFAULT : 0;
     const raw = storedPointsFromFranchiseSheetDisplay({
       displayPts,
       storedPoints,
@@ -839,8 +893,44 @@ export default function ScoreboardPage() {
       matchDateKeyIST: d,
       boosterRows: franchiseBoosterRows,
       activeCvc: active,
+      momBonusPoints: momBonus,
+      haulAppliedMult: haulApp,
     });
     setSeasonMatchPoints(pId, teamGameSlot, raw);
+  };
+
+  const persistMatchMom = async (matchId: string, playerId: string, checked: boolean) => {
+    if (profile?.role !== "Admin") return;
+    const cur = momByMatchId.get(matchId);
+    if (checked) {
+      const { error } = await supabase.from("match_man_of_the_match").upsert(
+        {
+          match_id: matchId,
+          player_id: playerId,
+          bonus_points: MOM_BONUS_DEFAULT,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "match_id" }
+      );
+      if (error) {
+        toast.error(error.message);
+        return;
+      }
+      setMomRows((prev) => {
+        const rest = prev.filter((r) => r.match_id !== matchId);
+        return [...rest, { match_id: matchId, player_id: playerId, bonus_points: MOM_BONUS_DEFAULT }];
+      });
+      toast.success("Man of the Match saved (+50 base before haul)");
+    } else {
+      if (cur?.player_id !== playerId) return;
+      const { error } = await supabase.from("match_man_of_the_match").delete().eq("match_id", matchId);
+      if (error) {
+        toast.error(error.message);
+        return;
+      }
+      setMomRows((prev) => prev.filter((r) => r.match_id !== matchId));
+      toast.success("MoM cleared");
+    }
   };
 
   const handleSyncMatchPoints = async () => {
@@ -849,7 +939,7 @@ export default function ScoreboardPage() {
       const res = await fetch("/api/match-points/sync", { method: "POST" });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
-        alert(typeof json?.error === "string" ? json.error : `Sync failed (${res.status})`);
+        toast.error(typeof json?.error === "string" ? json.error : `Sync failed (${res.status})`);
         return;
       }
       const { data: pts } = await supabase.from(sheetMatchPointsTable).select("*");
@@ -867,15 +957,23 @@ export default function ScoreboardPage() {
               ? ` (${crU} from CricAPI scorecards)`
               : ` (${espnU} ESPN, ${crU} CricAPI)`
           : "";
-      alert(
-        `Synced: ${json.rowsUpserted ?? 0} row(s) from ${json.fixturesProcessed ?? 0} fixture(s).${sourceHint}` +
-          (skipM ? ` Skipped ${skipM} manual row(s).` : "") +
-          (skipU
-            ? ` No DB player for ${skipU} scorecard name(s) (matched by player name).` +
-                (sample.length ? ` Examples: ${sample.slice(0, 8).join(", ")}` : "")
-            : "") +
-          (json.errors?.length ? `\nNotes: ${json.errors.slice(0, 5).join("; ")}` : "")
-      );
+      const title = `Synced: ${json.rowsUpserted ?? 0} row(s) from ${json.fixturesProcessed ?? 0} fixture(s).${sourceHint}`;
+      const detailParts: string[] = [];
+      if (skipM) detailParts.push(`Skipped ${skipM} manual row(s).`);
+      if (skipU) {
+        detailParts.push(
+          `No DB player for ${skipU} scorecard name(s) (matched by player name).` +
+            (sample.length ? ` Examples: ${sample.slice(0, 8).join(", ")}` : "")
+        );
+      }
+      const errNotes = Array.isArray(json.errors) && json.errors.length ? json.errors.slice(0, 5).join("; ") : "";
+      if (errNotes) detailParts.push(`Notes: ${errNotes}`);
+      const description = detailParts.length ? detailParts.join("\n\n") : undefined;
+      if (Array.isArray(json.errors) && json.errors.length) {
+        toast.warning(title, { description, duration: 14_000 });
+      } else {
+        toast.success(title, { description, duration: description ? 12_000 : 7000 });
+      }
     } finally {
       setSyncingPoints(false);
     }
@@ -890,7 +988,7 @@ export default function ScoreboardPage() {
     const isAdmin = profile?.role === "Admin";
     if (!isAdmin) return;
     if (!auctionConfigId) {
-      alert("Missing auction_config row id. Refresh and try again.");
+      toast.error("Missing auction_config row id. Refresh and try again.");
       return;
     }
     const { error } = await supabase
@@ -898,10 +996,11 @@ export default function ScoreboardPage() {
       .update({ match_points_source: src, updated_at: new Date().toISOString() })
       .eq("id", auctionConfigId);
     if (error) {
-      alert(`Could not update sheet source: ${error.message}`);
+      toast.error(`Could not update sheet source: ${error.message}`);
       return;
     }
     setMatchPointsSource(src);
+    toast.success(`Sheet source: ${src === "espn" ? "ESPN" : "CricAPI"}`);
     // Reload points for the newly selected table.
     // Also refresh standings if that tab is active.
     if (activeTab === "standings") await fetchStandingsData();
@@ -914,21 +1013,30 @@ export default function ScoreboardPage() {
       const res = await fetch("/api/match-points/sync/espn", { method: "POST" });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
-        alert(typeof json?.error === "string" ? json.error : `Sync failed (${res.status})`);
+        toast.error(typeof json?.error === "string" ? json.error : `Sync failed (${res.status})`);
         return;
       }
       await refreshSheetPointsFromSource();
-      alert(
-        `ESPN synced: ${json.rowsUpserted ?? 0} row(s) from ${json.fixturesProcessed ?? 0} fixture(s).` +
-          ((json.rowsSkippedManual ?? 0) ? ` Skipped ${json.rowsSkippedManual} manual row(s).` : "") +
-          ((json.rowsSkippedUnmapped ?? 0)
-            ? ` Unmapped ${json.rowsSkippedUnmapped} scorecard name(s).` +
-              (Array.isArray(json.unmappedNameSample) && json.unmappedNameSample.length
-                ? ` Examples: ${json.unmappedNameSample.slice(0, 8).join(", ")}`
-                : "")
-            : "") +
-          (Array.isArray(json.errors) && json.errors.length ? `\nNotes: ${json.errors.slice(0, 5).join("; ")}` : "")
-      );
+      const title = `ESPN synced: ${json.rowsUpserted ?? 0} row(s) from ${json.fixturesProcessed ?? 0} fixture(s).`;
+      const detailParts: string[] = [];
+      if (json.rowsSkippedManual) detailParts.push(`Skipped ${json.rowsSkippedManual} manual row(s).`);
+      if (json.rowsSkippedUnmapped) {
+        detailParts.push(
+          `Unmapped ${json.rowsSkippedUnmapped} scorecard name(s).` +
+            (Array.isArray(json.unmappedNameSample) && json.unmappedNameSample.length
+              ? ` Examples: ${json.unmappedNameSample.slice(0, 8).join(", ")}`
+              : "")
+        );
+      }
+      if (Array.isArray(json.errors) && json.errors.length) {
+        detailParts.push(`Notes: ${json.errors.slice(0, 5).join("; ")}`);
+      }
+      const description = detailParts.length ? detailParts.join("\n\n") : undefined;
+      if (Array.isArray(json.errors) && json.errors.length) {
+        toast.warning(title, { description, duration: 14_000 });
+      } else {
+        toast.success(title, { description, duration: description ? 12_000 : 7000 });
+      }
     } finally {
       setSyncingEspn(false);
     }
@@ -940,21 +1048,30 @@ export default function ScoreboardPage() {
       const res = await fetch("/api/match-points/sync/cricapi", { method: "POST" });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
-        alert(typeof json?.error === "string" ? json.error : `Sync failed (${res.status})`);
+        toast.error(typeof json?.error === "string" ? json.error : `Sync failed (${res.status})`);
         return;
       }
       await refreshSheetPointsFromSource();
-      alert(
-        `CricAPI synced: ${json.rowsUpserted ?? 0} row(s) from ${json.fixturesProcessed ?? 0} fixture(s).` +
-          ((json.rowsSkippedManual ?? 0) ? ` Skipped ${json.rowsSkippedManual} manual row(s).` : "") +
-          ((json.rowsSkippedUnmapped ?? 0)
-            ? ` Unmapped ${json.rowsSkippedUnmapped} scorecard name(s).` +
-              (Array.isArray(json.unmappedNameSample) && json.unmappedNameSample.length
-                ? ` Examples: ${json.unmappedNameSample.slice(0, 8).join(", ")}`
-                : "")
-            : "") +
-          (Array.isArray(json.errors) && json.errors.length ? `\nNotes: ${json.errors.slice(0, 5).join("; ")}` : "")
-      );
+      const title = `CricAPI synced: ${json.rowsUpserted ?? 0} row(s) from ${json.fixturesProcessed ?? 0} fixture(s).`;
+      const detailParts: string[] = [];
+      if (json.rowsSkippedManual) detailParts.push(`Skipped ${json.rowsSkippedManual} manual row(s).`);
+      if (json.rowsSkippedUnmapped) {
+        detailParts.push(
+          `Unmapped ${json.rowsSkippedUnmapped} scorecard name(s).` +
+            (Array.isArray(json.unmappedNameSample) && json.unmappedNameSample.length
+              ? ` Examples: ${json.unmappedNameSample.slice(0, 8).join(", ")}`
+              : "")
+        );
+      }
+      if (Array.isArray(json.errors) && json.errors.length) {
+        detailParts.push(`Notes: ${json.errors.slice(0, 5).join("; ")}`);
+      }
+      const description = detailParts.length ? detailParts.join("\n\n") : undefined;
+      if (Array.isArray(json.errors) && json.errors.length) {
+        toast.warning(title, { description, duration: 14_000 });
+      } else {
+        toast.success(title, { description, duration: description ? 12_000 : 7000 });
+      }
     } finally {
       setSyncingCricapi(false);
     }
@@ -1127,6 +1244,7 @@ export default function ScoreboardPage() {
                               <XAxis dataKey="game" tick={{ fontSize: 10, fontWeight: 700 }} />
                               <YAxis tick={{ fontSize: 10, fontWeight: 700 }} width={36} />
                               <Tooltip
+                                formatter={formatRechartsTooltipPoints}
                                 contentStyle={{
                                   borderRadius: 12,
                                   border: "none",
@@ -1212,6 +1330,7 @@ export default function ScoreboardPage() {
                                   tick={{ fill: "#cbd5e1", fontSize: 8 }}
                                 />
                                 <Tooltip
+                                  formatter={formatRechartsTooltipPoints}
                                   contentStyle={{
                                     background: "#0f172a",
                                     border: "1px solid #334155",
@@ -1253,6 +1372,7 @@ export default function ScoreboardPage() {
                                   tick={{ fill: "#cbd5e1", fontSize: 9 }}
                                 />
                                 <Tooltip
+                                  formatter={formatRechartsTooltipPoints}
                                   contentStyle={{
                                     background: "#0f172a",
                                     border: "1px solid #334155",
@@ -1315,7 +1435,7 @@ export default function ScoreboardPage() {
                               <td className="px-6 py-6 text-center font-black text-slate-500">{t.squadSize}</td>
                               <td className="px-6 py-6 text-center font-black text-slate-500">{t.matchesPlayed}</td>
                               <td className="px-8 py-6 text-right font-black italic text-2xl text-slate-900">
-                                {Math.floor(t.totalPoints)}
+                                {formatPoints2(t.totalPoints)}
                               </td>
                             </tr>
                           ))}
@@ -1647,7 +1767,7 @@ export default function ScoreboardPage() {
                                         </TableCell>
                                         <TableCell className="text-right align-top whitespace-nowrap">
                                           <div className="font-bold tabular-nums text-slate-900">
-                                            {d11.multipliedTotal % 1 === 0 ? d11.multipliedTotal : d11.multipliedTotal.toFixed(2)}
+                                            {formatPoints2(d11.multipliedTotal)}
                                           </div>
                                           {mult > 1 ? (
                                             <div className="text-[10px] font-medium text-amber-800">
@@ -1723,11 +1843,7 @@ export default function ScoreboardPage() {
                                         </TableCell>
                                         <TableCell className="text-right whitespace-nowrap">
                                           <div className="font-bold tabular-nums text-slate-900">
-                                            {d11
-                                              ? d11.multipliedTotal % 1 === 0
-                                                ? d11.multipliedTotal
-                                                : d11.multipliedTotal.toFixed(2)
-                                              : row.total}
+                                            {d11 ? formatPoints2(d11.multipliedTotal) : formatPoints2(Number(row.total) || 0)}
                                           </div>
                                           {d11 && mult > 1 ? (
                                             <div className="text-[10px] font-medium text-amber-800">
@@ -1919,10 +2035,17 @@ export default function ScoreboardPage() {
                               }
 
                               const storedPoints = Number(stored) || 0;
-                              const basePoints = baseMap.get(key)?.base ?? undefined;
+                              const det = baseMap.get(key);
+                              const basePoints = det?.base ?? undefined;
+                              const haulApp = det?.haulApp ?? null;
                               const dKey = matchDateKeyIST(match.date_time);
                               const iconId = franchiseIconRows.find((r) => r.team_id === franchise.id)?.player_id ?? null;
                               const activeCvc = activeCvcForMatchDate(franchiseCvcRows, franchise.id, dKey);
+                              const momRec = momByMatchId.get(match.id);
+                              const momBonus =
+                                momRec && momRec.player_id === p.id
+                                  ? Number(momRec.bonus_points) || MOM_BONUS_DEFAULT
+                                  : 0;
                               const sheet = franchiseMatchSheetDisplay({
                                 storedPoints,
                                 basePoints,
@@ -1932,8 +2055,10 @@ export default function ScoreboardPage() {
                                 matchDateKeyIST: dKey,
                                 boosterRows: franchiseBoosterRows,
                                 activeCvc,
+                                momBonusPoints: momBonus,
+                                haulAppliedMult: haulApp,
                               });
-                              row.push(sheet.display);
+                              row.push(formatPoints2(sheet.display));
                             }
 
                             csv += row.map(escapeCsv).join(",") + "\n";
@@ -2056,7 +2181,7 @@ export default function ScoreboardPage() {
                               }
                               return sum + t;
                             }, 0);
-                            return String(teamTotal % 1 === 0 ? teamTotal : teamTotal.toFixed(1));
+                            return formatPoints2(teamTotal);
                           })()}
                         </div>
                       </div>
@@ -2261,12 +2386,18 @@ export default function ScoreboardPage() {
                                   const ptsKey = mObj ? `${p.id}_${mObj.id}` : "";
                                   const mpDet = ptsKey ? matchPointsDetailByKey.get(ptsKey) : undefined;
                                   const basePts = mpDet?.base != null ? mpDet.base : undefined;
+                                  const haulAppCol = mpDet?.haulApp ?? null;
                                   const dKey = mObj?.date_time ? matchDateKeyIST(mObj.date_time) : "";
                                   const iconId =
                                     franchiseIconRows.find((r) => r.team_id === franchise.id)?.player_id ?? null;
                                   const activeCvc = mObj
                                     ? activeCvcForMatchDate(franchiseCvcRows, franchise.id, dKey)
                                     : null;
+                                  const momRecCell = mObj ? momByMatchId.get(mObj.id) : undefined;
+                                  const momBonusCell =
+                                    momRecCell && momRecCell.player_id === p.id
+                                      ? Number(momRecCell.bonus_points) || MOM_BONUS_DEFAULT
+                                      : 0;
                                   const sheet: {
                                     display: number;
                                     breakdown: FranchiseMatchSheetBreakdown;
@@ -2280,6 +2411,8 @@ export default function ScoreboardPage() {
                                         matchDateKeyIST: dKey,
                                         boosterRows: franchiseBoosterRows,
                                         activeCvc,
+                                        momBonusPoints: momBonusCell,
+                                        haulAppliedMult: haulAppCol,
                                       })
                                     : {
                                         display: rawPts,
@@ -2292,6 +2425,17 @@ export default function ScoreboardPage() {
                                       };
                                   const displayPts = sheet.display;
                                   const { breakdown } = sheet;
+                                  const synthAfterHaul =
+                                    basePts != null
+                                      ? syntheticStoredAfterHaulWithMom({
+                                          basePoints: basePts,
+                                          dbStoredPoints: rawPts,
+                                          haulAppliedMult: haulAppCol,
+                                          momBonus: momBonusCell,
+                                        })
+                                      : rawPts;
+                                  const baseForHaulLine =
+                                    basePts != null ? basePts + momBonusCell : null;
                                   const hasHaulCols =
                                     mpDet?.haulRun != null &&
                                     mpDet?.haulWick != null &&
@@ -2302,14 +2446,22 @@ export default function ScoreboardPage() {
                                   const showPjHaulLine =
                                     breakdown.mode !== "booster" && basePts != null && basePts > 0;
                                   const effHaulMult =
-                                    basePts != null && basePts > 0 ? rawPts / basePts : null;
+                                    baseForHaulLine != null && baseForHaulLine > 0
+                                      ? synthAfterHaul / baseForHaulLine
+                                      : basePts != null && basePts > 0
+                                        ? rawPts / basePts
+                                        : null;
+                                  const storedLabel =
+                                    breakdown.mode === "franchise_mult" ? breakdown.storedPoints : rawPts;
+                                  const momNote =
+                                    momBonusCell > 0 ? ` MoM +${momBonusCell} base before haul.` : "";
                                   const titleBooster =
                                     breakdown.mode === "booster"
-                                      ? `Booster day: base ${breakdown.baseUsed} × ${breakdown.sheetMult} (${breakdown.isFranchiseIcon ? "Franchise Icon" : "booster"}) = ${displayPts}`
+                                      ? `Booster day: base ${formatPoints2(breakdown.baseUsed)} × ${breakdown.sheetMult} (${breakdown.isFranchiseIcon ? "Franchise Icon" : "booster"}) = ${formatPoints2(displayPts)}${momNote}`
                                       : null;
                                   const titleFranchise =
                                     breakdown.mode === "franchise_mult" && breakdown.mult > 1
-                                      ? `Stored ${rawPts} × ${breakdown.mult} (${breakdown.tag === "icon" ? "Icon" : breakdown.tag === "c" ? "C" : "VC"}) = ${displayPts}`
+                                      ? `After haul ${formatPoints2(Number(storedLabel))} × ${breakdown.mult} (${breakdown.tag === "icon" ? "Icon" : breakdown.tag === "c" ? "C" : "VC"}) = ${formatPoints2(displayPts)}${momNote}`
                                       : null;
                                   return (
                                     <td key={i} className={cn("px-1.5 py-3 text-center sm:px-3 sm:py-4", teamStyle.bg)}>
@@ -2317,7 +2469,7 @@ export default function ScoreboardPage() {
                                         <Input
                                           type="number"
                                           step="0.5"
-                                          value={String(displayPts)}
+                                          value={formatPoints2(displayPts)}
                                           readOnly={!canEdit}
                                           onChange={(e) => {
                                             if (!canEdit) return;
@@ -2335,8 +2487,8 @@ export default function ScoreboardPage() {
                                             titleBooster ??
                                             (showPjHaulLine && basePts != null
                                               ? hasHaulCols
-                                                ? `PJ base ${basePts} × max(batting haul ${fmtHaulTier(mpDet!.haulRun!)}, bowling haul ${fmtHaulTier(mpDet!.haulWick!)}) = ${fmtHaulTier(mpDet!.haulApp!)}× → stored ${rawPts}; franchise cell → ${displayPts}`
-                                                : `PJ base ${basePts} × haul (effective ${effHaulMult != null ? fmtHaulTier(effHaulMult) : "?"})× → stored ${rawPts}; franchise cell → ${displayPts}`
+                                                ? `PJ base ${momBonusCell > 0 ? `(${formatPoints2(basePts)}+${momBonusCell} MoM)` : formatPoints2(basePts)} × max(batting haul ${fmtHaulTier(mpDet!.haulRun!)}, bowling haul ${fmtHaulTier(mpDet!.haulWick!)}) = ${fmtHaulTier(mpDet!.haulApp!)}× → after haul ${formatPoints2(synthAfterHaul)}; franchise cell → ${formatPoints2(displayPts)}`
+                                                : `PJ base ${momBonusCell > 0 ? `(${formatPoints2(basePts)}+${momBonusCell} MoM)` : formatPoints2(basePts)} × haul (effective ${effHaulMult != null ? fmtHaulTier(effHaulMult) : "?"})× → after haul ${formatPoints2(synthAfterHaul)}; franchise cell → ${formatPoints2(displayPts)}`
                                               : titleFranchise ?? undefined)
                                           }
                                         />
@@ -2347,19 +2499,33 @@ export default function ScoreboardPage() {
                                           >
                                             {hasHaulCols ? (
                                               <>
-                                                base {basePts.toFixed(1)}×max(
+                                                base{" "}
+                                                {momBonusCell > 0
+                                                  ? `(${formatPoints2(basePts)}+${momBonusCell})`
+                                                  : formatPoints2(basePts)}
+                                                ×max(
                                                 {fmtHaulTier(mpDet!.haulRun!)},{fmtHaulTier(mpDet!.haulWick!)})=
-                                                {fmtHaulTier(mpDet!.haulApp!)}→{rawPts}
+                                                {fmtHaulTier(mpDet!.haulApp!)}→{formatPoints2(synthAfterHaul)}
                                               </>
                                             ) : effHaulMult != null ? (
                                               <>
-                                                base {basePts.toFixed(1)}×{fmtHaulTier(effHaulMult)}→{rawPts}
+                                                base{" "}
+                                                {momBonusCell > 0
+                                                  ? `(${formatPoints2(basePts)}+${momBonusCell})`
+                                                  : formatPoints2(basePts)}
+                                                ×{fmtHaulTier(effHaulMult)}→{formatPoints2(synthAfterHaul)}
                                                 <span className="block font-bold text-emerald-950/70 normal-case">
                                                   (re-sync for bat/bowl tiers)
                                                 </span>
                                               </>
                                             ) : (
-                                              <>base {basePts.toFixed(1)}→{rawPts}</>
+                                              <>
+                                                base{" "}
+                                                {momBonusCell > 0
+                                                  ? `(${formatPoints2(basePts)}+${momBonusCell})`
+                                                  : formatPoints2(basePts)}
+                                                →{formatPoints2(synthAfterHaul)}
+                                              </>
                                             )}
                                           </span>
                                         ) : null}
@@ -2368,21 +2534,34 @@ export default function ScoreboardPage() {
                                             className="text-[7px] font-black uppercase tracking-tight text-violet-900 tabular-nums"
                                             title="Booster day: base × 3 (× 6 franchise Icon); Captain/Vice and normal Icon 2× do not apply"
                                           >
-                                            base {breakdown.baseUsed.toFixed(1)}×{breakdown.sheetMult} booster={displayPts}
+                                            base {formatPoints2(breakdown.baseUsed)}×{breakdown.sheetMult} booster={formatPoints2(displayPts)}
                                           </span>
                                         ) : breakdown.mode === "franchise_mult" && breakdown.mult > 1 ? (
                                           <span
                                             className="text-[7px] font-black uppercase tracking-tight text-violet-900 tabular-nums"
-                                            title="Franchise multiplier on stored fantasy points"
+                                            title="Franchise multiplier on points after haul (includes MoM in base before haul)"
                                           >
-                                            {rawPts}×{breakdown.mult}
+                                            {formatPoints2(Number(storedLabel))}×{breakdown.mult}
                                             {breakdown.tag === "icon"
                                               ? " Icon"
                                               : breakdown.tag === "c"
                                                 ? " C"
                                                 : " VC"}
-                                            ={displayPts}
+                                            ={formatPoints2(displayPts)}
                                           </span>
+                                        ) : null}
+                                        {profile?.role === "Admin" && mObj && isMatchPlayed(mObj) ? (
+                                          <label className="mt-0.5 flex cursor-pointer items-center justify-center gap-1 text-[7px] font-black uppercase tracking-tight text-amber-900">
+                                            <input
+                                              type="checkbox"
+                                              className="h-3 w-3 rounded border-amber-700/40 accent-amber-700"
+                                              checked={momByMatchId.get(mObj.id)?.player_id === p.id}
+                                              onChange={(e) => {
+                                                void persistMatchMom(mObj.id, p.id, e.target.checked);
+                                              }}
+                                            />
+                                            MoM +50
+                                          </label>
                                         ) : null}
                                         {canEdit && mObj && isMatchPlayed(mObj) ? (
                                           <button
@@ -2404,7 +2583,7 @@ export default function ScoreboardPage() {
                                     teamStyle.bg
                                   )}
                                 >
-                                  {String(total % 1 === 0 ? total : total.toFixed(1))}
+                                  {formatPoints2(total)}
                                 </td>
                               </tr>
                             );
@@ -2429,11 +2608,11 @@ export default function ScoreboardPage() {
                                 </td>
                                 {teamGameTotals.map((v, idx) => (
                                   <td key={idx} className="px-1.5 py-4 text-center text-[10px] font-black tabular-nums sm:px-3 sm:py-5">
-                                    {v ? (v % 1 === 0 ? v : v.toFixed(1)) : ""}
+                                    {v ? formatPoints2(v) : ""}
                                   </td>
                                 ))}
                                 <td className="bg-slate-900 px-3 py-4 text-right font-black italic text-sm static z-auto sm:sticky sm:right-0 sm:z-10 sm:px-8 sm:py-5 max-sm:shadow-none sm:shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.3)]">
-                                  {teamGrandTotal % 1 === 0 ? teamGrandTotal : teamGrandTotal.toFixed(1)}
+                                  {formatPoints2(teamGrandTotal)}
                                 </td>
                               </tr>
                             );

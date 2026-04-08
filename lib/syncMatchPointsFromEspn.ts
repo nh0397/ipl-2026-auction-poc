@@ -5,6 +5,7 @@ import {
 } from "@/lib/espnPjBreakdownFromScorecard";
 import { lookupDbPlayerId, normPlayerName } from "@/lib/matchPointsPlayerLookup";
 import { MATCH_POINTS_ESPN_TABLE } from "@/lib/matchPointsTables";
+import { fetchReplacementAttributionMap } from "@/lib/playerReplacements";
 
 function parseScorecardJson(raw: unknown): unknown {
   if (raw == null) return null;
@@ -109,6 +110,8 @@ export async function syncMatchPointsFromEspnFixtures(admin: SupabaseClient): Pr
     if (Number.isFinite(n)) matchNoToId.set(n, String(m.id));
   }
 
+  const replacementMap = await fetchReplacementAttributionMap(admin);
+
   const batch: Record<string, string | number>[] = [];
   let rowsSkippedManual = 0;
   let rowsSkippedUnmapped = 0;
@@ -156,13 +159,22 @@ export async function syncMatchPointsFromEspnFixtures(admin: SupabaseClient): Pr
         rowsSkippedManual += 1;
         continue;
       }
+
+      const creditedPlayerId = replacementMap.get(`${matchId}_${dbPlayerId}`) ?? dbPlayerId;
+      if (creditedPlayerId !== dbPlayerId) {
+        const lockKey = `${creditedPlayerId}_${matchId}`;
+        if (manualLocked.has(lockKey)) {
+          rowsSkippedManual += 1;
+          continue;
+        }
+      }
       const pj = row.pjScoring;
       const basePts = pj?.total_pts ?? row.total ?? 0;
       const d11 = row.d11;
       if (!d11) continue;
 
       const rowPayload: Record<string, string | number> = {
-        player_id: dbPlayerId,
+        player_id: creditedPlayerId,
         match_id: matchId,
         points: d11.multipliedTotal,
         base_points: basePts,
@@ -176,10 +188,32 @@ export async function syncMatchPointsFromEspnFixtures(admin: SupabaseClient): Pr
     }
   }
 
+  /** Postgres rejects one upsert statement touching the same (player_id, match_id) twice. */
+  const dedup = new Map<string, Record<string, string | number>>();
+  let duplicateMerged = 0;
+  for (const row of batch) {
+    const k = `${row.player_id}_${row.match_id}`;
+    const prev = dedup.get(k);
+    if (!prev) {
+      dedup.set(k, row);
+      continue;
+    }
+    duplicateMerged += 1;
+    const np = Number(row.points) || 0;
+    const pp = Number(prev.points) || 0;
+    dedup.set(k, np >= pp ? row : prev);
+  }
+  const uniqueBatch = [...dedup.values()];
+  if (duplicateMerged > 0) {
+    errors.push(
+      `Merged ${duplicateMerged} duplicate ESPN row(s) for the same player/match in one sync (kept higher points total).`
+    );
+  }
+
   let rowsUpserted = 0;
   const chunk = 200;
-  for (let i = 0; i < batch.length; i += chunk) {
-    const slice = batch.slice(i, i + chunk);
+  for (let i = 0; i < uniqueBatch.length; i += chunk) {
+    const slice = uniqueBatch.slice(i, i + chunk);
     if (slice.length === 0) continue;
     const { error: upErr } = await admin.from(MATCH_POINTS_ESPN_TABLE).upsert(slice, {
       onConflict: "player_id,match_id",

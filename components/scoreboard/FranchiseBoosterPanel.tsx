@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import { dateKeyOnly, type FranchiseBoosterRow } from "@/lib/franchiseCvc";
 import { Loader2, Zap } from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -48,7 +49,7 @@ export function FranchiseBoosterPanel({ franchiseId, franchiseLabel, rows, canEd
     const dates = SLOTS.map((s) => local[s]?.trim() || "").filter(Boolean);
     const uniq = new Set(dates);
     if (dates.length !== uniq.size) {
-      alert("Booster days must be three different dates (or leave slots empty).");
+      toast.error("Booster days must be three different dates (or leave slots empty).");
       return;
     }
     setSaving(true);
@@ -61,7 +62,7 @@ export function FranchiseBoosterPanel({ franchiseId, franchiseLabel, rows, canEd
             { onConflict: "team_id,slot" }
           );
           if (error) {
-            alert(error.message);
+            toast.error(error.message);
             return;
           }
         } else {
@@ -71,11 +72,12 @@ export function FranchiseBoosterPanel({ franchiseId, franchiseLabel, rows, canEd
             .eq("team_id", franchiseId)
             .eq("slot", slot);
           if (error) {
-            alert(error.message);
+            toast.error(error.message);
             return;
           }
         }
       }
+      toast.success("Booster days saved");
       onSaved();
     } finally {
       setSaving(false);

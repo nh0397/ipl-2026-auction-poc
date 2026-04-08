@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { aggregateFantasyRowsFromCricApiMatchData } from "@/lib/cricapiFantasyAggregate";
 import { lookupDbPlayerId, normPlayerName } from "@/lib/matchPointsPlayerLookup";
 import { MATCH_POINTS_CRICAPI_TABLE } from "@/lib/matchPointsTables";
+import { fetchReplacementAttributionMap } from "@/lib/playerReplacements";
 
 /** Normalize DB `fixtures_cricapi.scorecard` to the shape expected by `aggregateFantasyRowsFromCricApiMatchData` (CricAPI `data` object). */
 function toMatchScorecardData(raw: unknown): Record<string, unknown> | null {
@@ -94,6 +95,8 @@ export async function syncMatchPointsFromStoredScorecards(admin: SupabaseClient)
     if (Number.isFinite(n)) matchNoToId.set(n, String(m.id));
   }
 
+  const replacementMap = await fetchReplacementAttributionMap(admin);
+
   const batch: Record<string, string | number>[] = [];
   let rowsSkippedManual = 0;
   let rowsSkippedUnmapped = 0;
@@ -133,8 +136,17 @@ export async function syncMatchPointsFromStoredScorecards(admin: SupabaseClient)
         rowsSkippedManual += 1;
         continue;
       }
+
+      const creditedPlayerId = replacementMap.get(`${matchId}_${dbPlayerId}`) ?? dbPlayerId;
+      if (creditedPlayerId !== dbPlayerId) {
+        const lockKey = `${creditedPlayerId}_${matchId}`;
+        if (manualLocked.has(lockKey)) {
+          rowsSkippedManual += 1;
+          continue;
+        }
+      }
       const rowPayload: Record<string, string | number> = {
-        player_id: dbPlayerId,
+        player_id: creditedPlayerId,
         match_id: matchId,
         points: row.d11.multipliedTotal,
         base_points: row.scoring.total_pts,

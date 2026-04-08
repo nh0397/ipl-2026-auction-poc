@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import { Loader2, Sparkles } from "lucide-react";
+import { toast } from "sonner";
 import type { FranchiseIconRow } from "@/lib/franchiseCvc";
 
 type Player = { id: string; player_name: string; team?: string | null };
@@ -39,9 +40,10 @@ export function FranchiseIconPanel({ franchiseId, franchiseLabel, squad, row, ca
         player_id: playerId,
       });
       if (error) {
-        alert(error.message);
+        toast.error(error.message);
         return;
       }
+      toast.success("Franchise Icon saved");
       onSaved();
     } finally {
       setSaving(false);

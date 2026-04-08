@@ -3,6 +3,7 @@ import "./globals.css";
 import { Navbar } from "@/components/layout/Navbar";
 import { Footer } from "@/components/layout/Footer";
 import { FloatingChat } from "@/components/chat/FloatingChat";
+import { AppToaster } from "@/components/ui/sonner";
 import { AuthProvider } from "@/components/auth/AuthProvider";
 import { createClient } from "@/lib/supabase/server";
 import type { Metadata, Viewport } from "next";
@@ -56,6 +57,7 @@ export default async function RootLayout({
           <main className="min-w-0">{children}</main>
           <Footer />
           <FloatingChat />
+          <AppToaster />
         </AuthProvider>
       </body>
     </html>

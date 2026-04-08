@@ -2,6 +2,8 @@
  * Dream11 T20 Scoring Rules (2024-2025 Standard)
  */
 
+import { toPoints2 } from "@/lib/pointsPrecision";
+
 export interface MatchStats {
   runs: number;
   balls: number;
@@ -485,7 +487,7 @@ export function d11BonusMultiplierInfo(runs: number, wickets: number): D11BonusM
 
 /** Total points after bonus multiplier (does not alter base calculation). */
 export function d11PointsAfterMultiplier(basePoints: number, appliedMultiplier: number): number {
-  return Math.round(Number(basePoints) * appliedMultiplier * 100) / 100;
+  return toPoints2(Number(basePoints) * appliedMultiplier);
 }
 
 // PJ Rules — T20 fantasy charts (batting / bowling / fielding / economy / SR) + announced XI +4; no cap multipliers for now.
@@ -499,7 +501,7 @@ export function scorePjRulesPlayer(p: IplFantasyPlayerForScoring) {
   if (p.is_playing_substitute) extra += 4;
 
   const base = bat.points + bw.points + f + extra;
-  const total = Math.round(base * 100) / 100;
+  const total = toPoints2(base);
 
   return {
     batting_pts: bat.points,

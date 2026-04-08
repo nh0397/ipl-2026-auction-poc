@@ -27,5 +27,13 @@ export function lookupDbPlayerId(
       if (id) return id;
     }
   }
+  // Heuristic: initial-prefixed names from scorecards (e.g. "M Shahrukh Khan").
+  // If DB stores full name without the initial, try dropping the first 1-letter token.
+  const parts = n.split(" ").filter(Boolean);
+  if (parts.length >= 2 && parts[0].length === 1) {
+    const dropped = parts.slice(1).join(" ");
+    const id = nameToDbPlayerId.get(dropped);
+    if (id) return id;
+  }
   return undefined;
 }

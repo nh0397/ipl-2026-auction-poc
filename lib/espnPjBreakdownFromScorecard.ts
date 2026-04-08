@@ -39,6 +39,8 @@ export type EspnPjBreakdownRow = {
   lbwB: number;
   ro: number;
   roI: number;
+  /** False for substitute fielders like `sub (Name)` so they don't get Playing XI +4. */
+  inXI?: boolean;
   dismissal?: string;
   base: number;
   b_pts: number;
@@ -60,6 +62,137 @@ function normalizeScorecardPlayerName(raw: string) {
     .replace(/\(c\)/gi, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function parseSubFielder(raw: string): { name: string; isSub: boolean } {
+  const s = normalizeScorecardPlayerName(raw);
+  const m = s.match(/^sub\s*\((.+)\)$/i);
+  if (m?.[1]) return { name: normalizeScorecardPlayerName(m[1]), isSub: true };
+  return { name: s, isSub: false };
+}
+
+const TABLE_HEADER_PLAYERS = new Set(["batting", "bowling"]);
+
+function emptyAggregatedStatRow(
+  n: string,
+  team: string,
+  role: string,
+  inXI: boolean
+): Record<string, unknown> {
+  return {
+    n,
+    team,
+    r: 0,
+    b: 0,
+    f: 0,
+    s: 0,
+    w: 0,
+    m: 0,
+    o: 0,
+    r_conc: 0,
+    c: 0,
+    st: 0,
+    dots: 0,
+    lbwB: 0,
+    ro: 0,
+    roI: 0,
+    isDuck: false,
+    role,
+    dismissal: "",
+    inXI,
+  };
+}
+
+/** Add one roster name → stats key; substitutes (`sub (…)`) never get announced XI +4. */
+function addAnnouncedPlayerToStats(stats: Record<string, any>, raw: unknown, team: string) {
+  const teamTrim = String(team || "").trim();
+  if (!teamTrim) return;
+  const sub = parseSubFielder(normalizeScorecardPlayerName(String(raw ?? "")));
+  const n = sub.name;
+  if (!n || TABLE_HEADER_PLAYERS.has(n.toLowerCase())) return;
+  const key = `${n}_${teamTrim}`;
+  if (!stats[key]) {
+    stats[key] = emptyAggregatedStatRow(n, teamTrim, "Batter", !sub.isSub);
+  } else if (sub.isSub) {
+    stats[key].inXI = false;
+  }
+}
+
+function inferOpposingBattingTeam(sc: any, battingTeam: string): string {
+  const bt = String(battingTeam || "").trim();
+  if (!bt) return "";
+  const labels = new Set<string>();
+  for (const inn of sc?.innings || []) {
+    const a = String(inn.team || inn.batting_team || "").trim();
+    const b = String(inn.bowling_team || "").trim();
+    if (a) labels.add(a);
+    if (b) labels.add(b);
+  }
+  const arr = [...labels].filter(Boolean);
+  if (arr.length === 2) {
+    const other = arr.find((t) => t !== bt);
+    if (other) return other;
+  }
+  const opp = (sc?.innings || []).find((i: any) => {
+    const t = String(i.team || i.batting_team || "").trim();
+    return t && t !== bt;
+  });
+  return String(opp?.team || opp?.batting_team || "").trim();
+}
+
+/**
+ * Seed every player in the match-day squads (both XIs) before reading dismissals / aggregates.
+ * Uses `team_a` / `team_b` from the ESPN scraper when present; otherwise the same union as Python:
+ * per innings, batting side = batting + did not bat + yet to bat; bowling side = bowling table.
+ */
+function seedAnnouncedSquadsIntoStats(stats: Record<string, any>, sc: any) {
+  const ta = sc?.team_a;
+  const tb = sc?.team_b;
+  const teamAName = String(ta?.name ?? "").trim();
+  const teamBName = String(tb?.name ?? "").trim();
+  const useTopLevelSquads =
+    teamAName &&
+    teamBName &&
+    Array.isArray(ta?.unique) &&
+    Array.isArray(tb?.unique) &&
+    ta.unique.length > 0 &&
+    tb.unique.length > 0;
+
+  if (useTopLevelSquads) {
+    for (const raw of ta.unique) addAnnouncedPlayerToStats(stats, raw, teamAName);
+    for (const raw of tb.unique) addAnnouncedPlayerToStats(stats, raw, teamBName);
+    return;
+  }
+
+  for (const inn of sc?.innings || []) {
+    const batTeam = String(inn.team || inn.batting_team || "").trim();
+    let bowlTeam = String(inn.bowling_team || "").trim();
+    if (!bowlTeam && batTeam) bowlTeam = inferOpposingBattingTeam(sc, batTeam);
+
+    const squadBat = inn.squad_batting;
+    const squadBowl = inn.squad_bowling;
+    if (Array.isArray(squadBat) && batTeam) {
+      for (const raw of squadBat) addAnnouncedPlayerToStats(stats, raw, batTeam);
+    }
+    if (Array.isArray(squadBowl) && bowlTeam) {
+      for (const raw of squadBowl) addAnnouncedPlayerToStats(stats, raw, bowlTeam);
+    }
+
+    if (batTeam) {
+      for (const b of inn.batting || []) {
+        const raw = b.player;
+        if (raw && raw !== "BATTING") addAnnouncedPlayerToStats(stats, raw, batTeam);
+      }
+      for (const raw of inn.did_not_bat || inn.didNotBat || []) addAnnouncedPlayerToStats(stats, raw, batTeam);
+      for (const raw of inn.yet_to_bat || []) addAnnouncedPlayerToStats(stats, raw, batTeam);
+    }
+    if (bowlTeam) {
+      for (const bw of inn.bowling || []) {
+        const raw = bw.bowler;
+        if (raw && raw !== "BOWLING") addAnnouncedPlayerToStats(stats, raw, bowlTeam);
+      }
+    }
+  }
 }
 
 function catalogNameMatches(scorecardNorm: string, dbName: string): boolean {
@@ -130,26 +263,8 @@ export function computeEspnPjBreakdownRows(
 
   const stats: Record<string, any> = {};
 
-  sc.innings.forEach((inn: any) => {
-    const battingTeam = inn.team;
-    const bowlingTeam = sc.innings.find((i: any) => i.team !== battingTeam)?.team || "Opponent";
-    (inn.batting || []).forEach((b: any) => {
-      const raw = b.player || "";
-      if (!raw || raw === "BATTING") return;
-      const n = normalizeScorecardPlayerName(raw);
-      const key = `${n}_${battingTeam}`;
-      if (!stats[key])
-        stats[key] = { n, team: battingTeam, r: 0, b: 0, f: 0, s: 0, w: 0, m: 0, o: 0, r_conc: 0, c: 0, st: 0, dots: 0, lbwB: 0, ro: 0, roI: 0, isDuck: false, role: "Batter" };
-    });
-    (inn.bowling || []).forEach((bw: any) => {
-      const raw = bw.bowler || "";
-      if (!raw || raw === "BOWLING") return;
-      const n = normalizeScorecardPlayerName(raw);
-      const key = `${n}_${bowlingTeam}`;
-      if (!stats[key])
-        stats[key] = { n, team: bowlingTeam, r: 0, b: 0, f: 0, s: 0, w: 0, m: 0, o: 0, r_conc: 0, c: 0, st: 0, dots: 0, lbwB: 0, ro: 0, roI: 0, isDuck: false, role: "Bowler" };
-    });
-  });
+  // Full squads first (both XIs): everyone gets announced-lineup +4 in scoring; then we add stats from the card.
+  seedAnnouncedSquadsIntoStats(stats, sc);
 
   const findKeyForTeamRoster = (name: string, team: string) => {
     const n = normalizeScorecardPlayerName(name);
@@ -177,9 +292,11 @@ export function computeEspnPjBreakdownRows(
   const ensureStatRow = (key: string, team: string, role: string, displayName?: string) => {
     if (stats[key]) return;
     const suffix = `_${team}`;
-    const playerName =
+    const rawName =
       displayName ||
       (key.endsWith(suffix) ? key.slice(0, -suffix.length) : normalizeScorecardPlayerName(String(key).split("_")[0] || ""));
+    const sub = parseSubFielder(rawName);
+    const playerName = sub.name;
     stats[key] = {
       n: playerName,
       team,
@@ -200,6 +317,7 @@ export function computeEspnPjBreakdownRows(
       isDuck: false,
       role,
       dismissal: "",
+      inXI: !sub.isSub,
     };
   };
 
@@ -320,8 +438,9 @@ export function computeEspnPjBreakdownRows(
         const parts = d.split(" b ");
         let nRaw = parts[0].replace(/^(?:c|st)\s+(?:†)?/, "").trim();
         if (nRaw && !["sub", "batting", "retired"].includes(nRaw)) {
-          const key = findKeyForTeamRoster(nRaw, opposingTeam);
-          ensureStatRow(key, opposingTeam, "Fielder", nRaw);
+          const sub = parseSubFielder(nRaw);
+          const key = findKeyForTeamRoster(sub.name, opposingTeam);
+          ensureStatRow(key, opposingTeam, "Fielder", sub.name);
           if (d.startsWith("c ")) stats[key].c += 1;
           if (d.startsWith("st ")) stats[key].st += 1;
         }
@@ -367,7 +486,7 @@ export function computeEspnPjBreakdownRows(
         dot_balls: p.dots,
       },
       fielding: { catches: p.c, stumpings: p.st, runout_direct: p.ro, runout_indirect: p.roI ?? 0 },
-      in_announced_lineup: true,
+      in_announced_lineup: p.inXI !== false,
       playerRole: resolvedRole,
     };
     const scored = scorePjRulesPlayer(pjInput);

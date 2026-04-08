@@ -1,3 +1,6 @@
+import { dbStoredPointsFromSyntheticAfterHaul, syntheticStoredAfterHaulWithMom } from "@/lib/matchMomBonus";
+import { toPoints2 } from "@/lib/pointsPrecision";
+
 export const CAPTAIN_MULT = 2;
 export const VICE_CAPTAIN_MULT = 1.5;
 /** Franchise Icon pick (not `players.type`) — 2× stored points for every game. */
@@ -144,17 +147,18 @@ function effectiveBaseForSheet(
 }
 
 export type FranchiseMatchSheetBreakdown =
-  | { mode: "booster"; sheetMult: number; baseUsed: number; isFranchiseIcon: boolean }
+  | { mode: "booster"; sheetMult: number; baseUsed: number; isFranchiseIcon: boolean; momBonus?: number }
   | {
       mode: "franchise_mult";
       mult: number;
       tag: "icon" | "c" | "vc" | null;
       storedPoints: number;
+      momBonus?: number;
     };
 
 /**
- * Franchise-facing points for one played cell: booster day → base × 3 (or × 6 for franchise Icon);
- * otherwise stored fantasy × Icon / C / VC.
+ * Franchise-facing points for one played cell: booster day → PJ base × 3 (or × 6 franchise Icon);
+ * otherwise (PJ base + MoM) × haul × Icon / C / VC. MoM bonus is not stored on match_points.
  */
 export function franchiseMatchSheetDisplay(args: {
   storedPoints: number;
@@ -165,18 +169,36 @@ export function franchiseMatchSheetDisplay(args: {
   matchDateKeyIST: string;
   boosterRows: FranchiseBoosterRow[];
   activeCvc: ReturnType<typeof activeCvcForMatchDate>;
+  momBonusPoints?: number;
+  haulAppliedMult?: number | null;
 }): { display: number; breakdown: FranchiseMatchSheetBreakdown } {
+  const mom = Math.max(0, Number(args.momBonusPoints) || 0);
   const booster = isFranchiseBoosterDay(args.boosterRows, args.franchiseId, args.matchDateKeyIST);
   const isFIcon = !!(args.franchiseIconPlayerId && args.playerId === args.franchiseIconPlayerId);
 
   if (booster) {
-    const baseUsed = effectiveBaseForSheet(args.basePoints, args.storedPoints);
+    const b0 = args.basePoints != null && Number.isFinite(Number(args.basePoints)) ? Number(args.basePoints) : null;
+    const baseUsed =
+      b0 !== null ? b0 + mom : effectiveBaseForSheet(args.basePoints, args.storedPoints);
     const sheetMult = isFIcon ? BOOSTER_DAY_ICON_MULT : BOOSTER_DAY_MULT;
     return {
       display: Math.round(baseUsed * sheetMult * 100) / 100,
-      breakdown: { mode: "booster", sheetMult, baseUsed, isFranchiseIcon: isFIcon },
+      breakdown: {
+        mode: "booster",
+        sheetMult,
+        baseUsed,
+        isFranchiseIcon: isFIcon,
+        ...(mom > 0 ? { momBonus: mom } : {}),
+      },
     };
   }
+
+  const synth = syntheticStoredAfterHaulWithMom({
+    basePoints: args.basePoints,
+    dbStoredPoints: args.storedPoints,
+    haulAppliedMult: args.haulAppliedMult,
+    momBonus: mom,
+  });
 
   const { mult, tag } = franchiseFantasyMultiplier(
     args.playerId,
@@ -184,8 +206,14 @@ export function franchiseMatchSheetDisplay(args: {
     args.activeCvc
   );
   return {
-    display: Math.round(args.storedPoints * mult * 100) / 100,
-    breakdown: { mode: "franchise_mult", mult, tag, storedPoints: args.storedPoints },
+    display: toPoints2(synth * mult),
+    breakdown: {
+      mode: "franchise_mult",
+      mult,
+      tag,
+      storedPoints: synth,
+      ...(mom > 0 ? { momBonus: mom } : {}),
+    },
   };
 }
 
@@ -200,15 +228,31 @@ export function storedPointsFromFranchiseSheetDisplay(args: {
   matchDateKeyIST: string;
   boosterRows: FranchiseBoosterRow[];
   activeCvc: ReturnType<typeof activeCvcForMatchDate>;
+  momBonusPoints?: number;
+  haulAppliedMult?: number | null;
 }): number {
+  const mom = Math.max(0, Number(args.momBonusPoints) || 0);
   const booster = isFranchiseBoosterDay(args.boosterRows, args.franchiseId, args.matchDateKeyIST);
   const isFIcon = !!(args.franchiseIconPlayerId && args.playerId === args.franchiseIconPlayerId);
 
   if (booster) {
+    const b0 = args.basePoints != null && Number.isFinite(Number(args.basePoints)) ? Number(args.basePoints) : null;
+    const sheetMult = isFIcon ? BOOSTER_DAY_ICON_MULT : BOOSTER_DAY_MULT;
+    const haul =
+      args.haulAppliedMult != null &&
+      Number.isFinite(Number(args.haulAppliedMult)) &&
+      Number(args.haulAppliedMult) > 0
+        ? Number(args.haulAppliedMult)
+        : null;
+
+    if (b0 !== null && haul !== null) {
+      const newBase = args.displayPts / sheetMult - mom;
+      return toPoints2(newBase * haul);
+    }
+
     const baseUsed = effectiveBaseForSheet(args.basePoints, args.storedPoints);
     const perfMult = baseUsed > 0 ? args.storedPoints / baseUsed : 1;
-    const sheetMult = isFIcon ? BOOSTER_DAY_ICON_MULT : BOOSTER_DAY_MULT;
-    return Math.round((args.displayPts / sheetMult) * perfMult * 100) / 100;
+    return toPoints2((args.displayPts / sheetMult) * perfMult);
   }
 
   const { mult } = franchiseFantasyMultiplier(
@@ -216,8 +260,13 @@ export function storedPointsFromFranchiseSheetDisplay(args: {
     args.franchiseIconPlayerId,
     args.activeCvc
   );
-  if (mult <= 0) return args.displayPts;
-  return Math.round((args.displayPts / mult) * 100) / 100;
+  if (mult <= 0) return toPoints2(args.displayPts);
+  const synthTarget = args.displayPts / mult;
+  return dbStoredPointsFromSyntheticAfterHaul({
+    syntheticAfterHaul: synthTarget,
+    haulAppliedMult: args.haulAppliedMult,
+    momBonus: mom,
+  });
 }
 
 export function isIconPlayer(p: { type?: string | null }): boolean {

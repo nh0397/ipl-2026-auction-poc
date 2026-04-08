@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { MatchStats } from "@/lib/scoring";
+import { formatPoints2 } from "@/lib/pointsPrecision";
 import { supabase } from "@/lib/supabase";
 import { Loader2, Zap, Trophy, User, ShieldCheck, ChevronDown, ChevronUp, Star, Activity, Target, Fingerprint, AlertCircle, RefreshCw, Save, Database, Globe } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -227,7 +228,12 @@ export default function ScorecardAuditPage() {
           <AlertCircle size={60} className="mx-auto text-rose-500 mb-6" />
           <h2 className="text-xl font-black uppercase italic tracking-tighter text-slate-900 mb-4">Audit Failed</h2>
           <Badge variant="outline" className="text-rose-400 border-rose-100 bg-rose-50 px-4 py-2 mb-6">ERROR: {error || 'No Data Found'}</Badge>
-          <Button onClick={() => fetchLiveScorecard(matchId)} className="w-full rounded-full bg-slate-900 text-white font-black uppercase py-6">
+          <Button
+            onClick={() => {
+              if (matchId) void fetchLiveScorecard(matchId);
+            }}
+            className="w-full rounded-full bg-slate-900 text-white font-black uppercase py-6"
+          >
              <RefreshCw size={16} className="mr-2" /> Retry Scraper
           </Button>
        </Card>
@@ -289,7 +295,13 @@ export default function ScorecardAuditPage() {
                </Badge>
             </div>
             <div className="flex gap-4 mt-6">
-                <Button onClick={() => fetchLiveScorecard(matchId)} variant="outline" className="rounded-full bg-white h-10 px-6 text-[10px] font-black uppercase tracking-widest gap-2">
+                <Button
+                  onClick={() => {
+                    if (matchId) void fetchLiveScorecard(matchId);
+                  }}
+                  variant="outline"
+                  className="rounded-full bg-white h-10 px-6 text-[10px] font-black uppercase tracking-widest gap-2"
+                >
                     <RefreshCw size={14} /> Refresh Live
                 </Button>
                 {source === 'live' && (
@@ -302,7 +314,7 @@ export default function ScorecardAuditPage() {
           <Card className="p-8 min-w-[300px] rounded-[2rem] border-none shadow-xl">
              <div className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-2">Total Points Distributed</div>
              <div className="text-6xl font-black italic text-slate-950 tracking-tighter">
-                {Math.floor(leaderboard.reduce((acc, p) => acc + p.breakdown.total, 0))}
+                {formatPoints2(leaderboard.reduce((acc, p) => acc + p.breakdown.total, 0))}
              </div>
           </Card>
         </div>
