@@ -159,53 +159,81 @@ export function FranchiseCvcPanel({
             <div
               key={slot}
               className={cn(
-                "grid gap-2 rounded-xl border border-amber-200/80 bg-white/70 p-3 sm:grid-cols-[auto_1fr_1fr_1fr_auto] sm:items-center",
+                "grid gap-2 rounded-xl border border-amber-200/80 bg-white/70 p-3 sm:grid-cols-[auto_1fr_1fr] sm:items-start",
                 !canEdit && "opacity-80"
               )}
             >
               <span className="text-[10px] font-black text-amber-900">Slot {slot}</span>
-              <select
-                disabled={!canEdit}
-                value={st.captain_id}
-                onChange={(e) => setLocal((prev) => ({ ...prev, [slot]: { ...prev[slot], captain_id: e.target.value } }))}
-                className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-[11px] font-bold text-slate-800"
-              >
-                <option value="">Captain…</option>
-                {eligible.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.player_name}
-                  </option>
-                ))}
-              </select>
-              <select
-                disabled={!canEdit}
-                value={st.vice_id}
-                onChange={(e) => setLocal((prev) => ({ ...prev, [slot]: { ...prev[slot], vice_id: e.target.value } }))}
-                className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-[11px] font-bold text-slate-800"
-              >
-                <option value="">Vice…</option>
-                {eligible.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.player_name}
-                  </option>
-                ))}
-              </select>
-              <input
-                type="date"
-                disabled={!canEdit}
-                value={st.captain_from}
-                onChange={(e) => setLocal((prev) => ({ ...prev, [slot]: { ...prev[slot], captain_from: e.target.value } }))}
-                className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-[11px] font-bold text-slate-800"
-                title="Captain effective from (IST date)"
-              />
-              <input
-                type="date"
-                disabled={!canEdit}
-                value={st.vice_from}
-                onChange={(e) => setLocal((prev) => ({ ...prev, [slot]: { ...prev[slot], vice_from: e.target.value } }))}
-                className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-[11px] font-bold text-slate-800"
-                title="Vice effective from (IST date)"
-              />
+
+              {/* Captain group: name + effective date */}
+              <div className="rounded-lg border border-slate-200 bg-white p-2">
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">Captain</span>
+                  <span className="text-[9px] font-bold text-slate-400">2×</span>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-[1fr_auto] sm:items-center">
+                  <select
+                    disabled={!canEdit}
+                    value={st.captain_id}
+                    onChange={(e) =>
+                      setLocal((prev) => ({ ...prev, [slot]: { ...prev[slot], captain_id: e.target.value } }))
+                    }
+                    className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-[11px] font-bold text-slate-800"
+                  >
+                    <option value="">Captain…</option>
+                    {eligible.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.player_name}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    type="date"
+                    disabled={!canEdit}
+                    value={st.captain_from}
+                    onChange={(e) =>
+                      setLocal((prev) => ({ ...prev, [slot]: { ...prev[slot], captain_from: e.target.value } }))
+                    }
+                    className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-[11px] font-bold text-slate-800"
+                    title="Captain effective from (IST date)"
+                  />
+                </div>
+              </div>
+
+              {/* Vice group: name + effective date */}
+              <div className="rounded-lg border border-slate-200 bg-white p-2">
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">Vice</span>
+                  <span className="text-[9px] font-bold text-slate-400">1.5×</span>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-[1fr_auto] sm:items-center">
+                  <select
+                    disabled={!canEdit}
+                    value={st.vice_id}
+                    onChange={(e) =>
+                      setLocal((prev) => ({ ...prev, [slot]: { ...prev[slot], vice_id: e.target.value } }))
+                    }
+                    className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-[11px] font-bold text-slate-800"
+                  >
+                    <option value="">Vice…</option>
+                    {eligible.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.player_name}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    type="date"
+                    disabled={!canEdit}
+                    value={st.vice_from}
+                    onChange={(e) =>
+                      setLocal((prev) => ({ ...prev, [slot]: { ...prev[slot], vice_from: e.target.value } }))
+                    }
+                    className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-[11px] font-bold text-slate-800"
+                    title="Vice effective from (IST date)"
+                  />
+                </div>
+              </div>
             </div>
           );
         })}
