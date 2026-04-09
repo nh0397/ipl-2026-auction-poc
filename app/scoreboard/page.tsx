@@ -15,7 +15,6 @@ import {
   Legend,
 } from "recharts";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { 
@@ -26,7 +25,11 @@ import {
   MapPin, BarChart3, Target, Loader2, ArrowUpDown, Radio, Database, XCircle
 } from "lucide-react";
 import { cn, getPlayerImage, iplColors } from "@/lib/utils";
-import { SHOW_CRICAPI_FIXTURE_UI, SHEET_MATCH_POINTS_TABLE } from "@/lib/featureFlags";
+import {
+  DISABLE_SHEET_AUTOCOMPUTE_ON_MANUAL_OVERRIDE,
+  SHOW_CRICAPI_FIXTURE_UI,
+  SHEET_MATCH_POINTS_TABLE,
+} from "@/lib/featureFlags";
 import { MATCH_POINTS_CRICAPI_TABLE, MATCH_POINTS_ESPN_TABLE } from "@/lib/matchPointsTables";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/auth/AuthProvider";
@@ -34,12 +37,14 @@ import React from "react";
 import { toast } from "sonner";
 import ScorecardViewer from "@/components/scoreboard/ScorecardViewer";
 import { adaptCricApiToScorecardViewer } from "@/lib/adapters/cricapiScorecard";
-import { aggregateFantasyRowsFromCricApiMatchData } from "@/lib/cricapiFantasyAggregate";
 import {
   computeEspnPjBreakdownRows,
   type PlayerCatalogRow,
 } from "@/lib/espnPjBreakdownFromScorecard";
+import { aggregateFantasyRowsFromCricApiMatchData } from "@/lib/cricapiFantasyAggregate";
 import { FantasyPjBreakdownPanel } from "@/components/fantasy/FantasyPjBreakdownPanel";
+import { PersistedFantasyMatchTable } from "@/components/fantasy/PersistedFantasyMatchTable";
+import { buildPersistedFantasyRowsForMatch, type PersistedFantasyRow } from "@/lib/persistedFantasyRowsFromMatchPoints";
 import { FranchiseBoosterPanel } from "@/components/scoreboard/FranchiseBoosterPanel";
 import { FranchiseCvcPanel } from "@/components/scoreboard/FranchiseCvcPanel";
 import { FranchiseIconPanel } from "@/components/scoreboard/FranchiseIconPanel";
@@ -121,6 +126,15 @@ function cleanShort(short: string | null): string {
 function espnMatchNo(f: { match_no?: number | null }): number | null {
   const n = Number(f?.match_no);
   return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function normFantasyLookupKeyPart(s: string | null | undefined) {
+  return String(s ?? "")
+    .replace(/†/g, "")
+    .replace(/\(c\)/gi, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
 }
 
 function getIplTeamStyle(team: string | null | undefined) {
@@ -224,6 +238,15 @@ function fmtHaulTier(n: number): string {
   return String(Math.round(n * 100) / 100);
 }
 
+/** Parse after the user leaves the cell; `undefined` = do not write (empty / invalid). */
+function parseSheetPointsBlur(raw: string): number | undefined {
+  const t = raw.trim().replace(/,/g, "");
+  if (t === "" || t === "." || t === "-" || t === "-.") return undefined;
+  const n = parseFloat(t);
+  if (!Number.isFinite(n)) return undefined;
+  return n;
+}
+
 // ─── Main page ──────────────────────────────────────────────────────
 export default function ScoreboardPage() {
   const { user, profile: authProfile, isLoading: authLoading } = useAuth();
@@ -251,6 +274,9 @@ export default function ScoreboardPage() {
   const [pendingEdits, setPendingEdits] = useState<
     Record<string, { player_id: string; match_id: string; points: number | null; manual_override: boolean }>
   >({});
+  /** `${playerId}_${matchId}` — while focused, edits are draft-only so `formatPoints2` does not fight the caret. */
+  const [sheetCellFocusKey, setSheetCellFocusKey] = useState<string | null>(null);
+  const [sheetCellDraft, setSheetCellDraft] = useState<Record<string, string>>({});
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState<"sheets" | "standings" | "fixtures">("sheets");
   const [analyticsTeamId, setAnalyticsTeamId] = useState<string | null>(null);
@@ -273,8 +299,9 @@ export default function ScoreboardPage() {
   const [fixtureModalTab, setFixtureModalTab] = useState<"scorecard" | "fantasy">("scorecard");
   const [modalFixtureFresh, setModalFixtureFresh] = useState<Fixture | null>(null);
   const [modalRefreshing, setModalRefreshing] = useState(false);
-  const [expandedCricapiFantasyId, setExpandedCricapiFantasyId] = useState<string | null>(null);
-  const [expandedEspnFantasyKey, setExpandedEspnFantasyKey] = useState<string | null>(null);
+  const [expandedPersistedFantasyPlayerId, setExpandedPersistedFantasyPlayerId] = useState<string | null>(null);
+  const [fixtureModalPersistedRows, setFixtureModalPersistedRows] = useState<PersistedFantasyRow[]>([]);
+  const [fixtureModalPersistedLoading, setFixtureModalPersistedLoading] = useState(false);
   const [syncingPoints, setSyncingPoints] = useState(false); // legacy combined sync (kept for now)
   const [syncingEspn, setSyncingEspn] = useState(false);
   const [syncingCricapi, setSyncingCricapi] = useState(false);
@@ -354,8 +381,9 @@ export default function ScoreboardPage() {
   const closeFixtureModal = useCallback(() => {
     setFixtureModal(null);
     setFixtureModalTab("scorecard");
-    setExpandedCricapiFantasyId(null);
-    setExpandedEspnFantasyKey(null);
+    setExpandedPersistedFantasyPlayerId(null);
+    setFixtureModalPersistedRows([]);
+    setFixtureModalPersistedLoading(false);
   }, []);
 
   const cricapiModalData = fixtureModal?.source === "cricapi" ? modalFixtureFresh ?? fixtureModal.fixture : null;
@@ -365,19 +393,9 @@ export default function ScoreboardPage() {
     return adaptCricApiToScorecardViewer(raw);
   }, [cricapiModalData?.scorecard]);
 
-  const cricapiFantasyRows = useMemo(() => {
-    const raw = cricapiModalData?.scorecard as Record<string, unknown> | null | undefined;
-    if (!raw) return [];
-    return aggregateFantasyRowsFromCricApiMatchData(raw);
-  }, [cricapiModalData?.scorecard]);
-
   const espnModalMn = fixtureModal?.source === "espn" ? espnMatchNo(fixtureModal.fixture) : null;
   const espnModalScore = espnModalMn != null ? espnScorecardByMatchNo[espnModalMn] : undefined;
   const espnModalLoading = espnModalMn != null ? !!espnScorecardLoadingByMatchNo[espnModalMn] : false;
-  const espnModalPjRows = useMemo(() => {
-    if (fixtureModal?.source !== "espn" || !espnModalScore?.innings?.length || !fixtureModal) return [];
-    return computeEspnPjBreakdownRows(espnModalScore, fixtureModal.fixture, playersCatalog);
-  }, [fixtureModal, espnModalScore, playersCatalog]);
 
   const today = useMemo(() => getTodayIST(), []);
 
@@ -389,6 +407,106 @@ export default function ScoreboardPage() {
     });
     return map;
   }, [allMatches]);
+
+  const fixtureModalMatchNo = fixtureModal ? espnMatchNo(fixtureModal.fixture) : null;
+  const fixtureModalLeagueMatchId =
+    fixtureModalMatchNo != null ? (matchByNo.get(fixtureModalMatchNo)?.id as string | undefined) : undefined;
+
+  useEffect(() => {
+    if (!fixtureModal || !fixtureModalLeagueMatchId) {
+      setFixtureModalPersistedRows([]);
+      setFixtureModalPersistedLoading(false);
+      return;
+    }
+    const matchId = fixtureModalLeagueMatchId;
+    let cancelled = false;
+    setFixtureModalPersistedLoading(true);
+    (async () => {
+      const { data: pts, error } = await supabase.from(sheetMatchPointsTable).select("*").eq("match_id", matchId);
+      if (cancelled) return;
+      if (error) {
+        console.error("[fixture modal] persisted fantasy fetch", error);
+        setFixtureModalPersistedRows([]);
+        setFixtureModalPersistedLoading(false);
+        return;
+      }
+      if (!pts?.length) {
+        setFixtureModalPersistedRows([]);
+        setFixtureModalPersistedLoading(false);
+        return;
+      }
+      const ids = [...new Set(pts.map((p: { player_id?: string }) => p.player_id).filter(Boolean))] as string[];
+      const { data: pls, error: pErr } = await supabase.from("players").select("id, player_name, team").in("id", ids);
+      if (cancelled) return;
+      if (pErr) {
+        console.error("[fixture modal] players fetch", pErr);
+        setFixtureModalPersistedRows([]);
+        setFixtureModalPersistedLoading(false);
+        return;
+      }
+      setFixtureModalPersistedRows(buildPersistedFantasyRowsForMatch(matchId, pts, pls || []));
+      setFixtureModalPersistedLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [fixtureModal, fixtureModalLeagueMatchId, sheetMatchPointsTable]);
+
+  const fixtureModalCricapiFantasyById = useMemo(() => {
+    if (fixtureModal?.source !== "cricapi") return new Map<string, ReturnType<typeof aggregateFantasyRowsFromCricApiMatchData>[number]>();
+    const raw = cricapiModalData?.scorecard as Record<string, unknown> | null | undefined;
+    if (!raw) return new Map();
+    const rows = aggregateFantasyRowsFromCricApiMatchData(raw);
+    return new Map(rows.map((r) => [r.player_id, r] as const));
+  }, [fixtureModal?.source, cricapiModalData?.scorecard]);
+
+  const fixtureModalEspnFantasyByNameTeam = useMemo(() => {
+    if (fixtureModal?.source !== "espn" || !espnModalScore?.innings?.length || !fixtureModal) {
+      return new Map<string, ReturnType<typeof computeEspnPjBreakdownRows>[number]>();
+    }
+    const rows = computeEspnPjBreakdownRows(espnModalScore, fixtureModal.fixture, playersCatalog);
+    const m = new Map<string, (typeof rows)[number]>();
+    for (const r of rows) {
+      m.set(`${normFantasyLookupKeyPart(r.n)}_${normFantasyLookupKeyPart(r.team)}`, r);
+    }
+    return m;
+  }, [fixtureModal, espnModalScore, playersCatalog]);
+
+  const renderFixtureModalScorecardDetail = useCallback(
+    (row: PersistedFantasyRow): React.ReactNode => {
+      if (!fixtureModal) return null;
+      if (fixtureModal.source === "cricapi") {
+        const d = fixtureModalCricapiFantasyById.get(row.player_id);
+        if (!d?.breakdown || !d.scoring) return null;
+        return (
+          <>
+            <div className="text-[10px] font-black uppercase tracking-wide text-slate-500">Rule-by-rule (from scorecard)</div>
+            <FantasyPjBreakdownPanel
+              breakdown={d.breakdown}
+              scoring={d.scoring}
+              d11={d.d11}
+              baseTotalLabel="Base from scorecard rules"
+            />
+          </>
+        );
+      }
+      const k = `${normFantasyLookupKeyPart(row.player_name)}_${normFantasyLookupKeyPart(row.team)}`;
+      const e = fixtureModalEspnFantasyByNameTeam.get(k);
+      if (!e?.pjDetail || !e.pjScoring) return null;
+      return (
+        <>
+          <div className="text-[10px] font-black uppercase tracking-wide text-slate-500">Rule-by-rule (from scorecard)</div>
+          <FantasyPjBreakdownPanel
+            breakdown={e.pjDetail}
+            scoring={e.pjScoring}
+            d11={e.d11}
+            baseTotalLabel="Base from scorecard rules"
+          />
+        </>
+      );
+    },
+    [fixtureModal, fixtureModalCricapiFantasyById, fixtureModalEspnFantasyByNameTeam]
+  );
 
   const teamSchedules = useMemo(() => buildTeamSchedules(iplScheduleRows), [iplScheduleRows]);
 
@@ -424,6 +542,21 @@ export default function ScoreboardPage() {
       else map.set(key, Number(raw) || 0);
     });
     return map;
+  }, [allMatchPoints, pendingEdits]);
+
+  /** Keys that should bypass sheet auto-compute (manual override). */
+  const manualOverrideKeySet = useMemo(() => {
+    const s = new Set<string>();
+    (allMatchPoints || []).forEach((pt: any) => {
+      if (!pt?.player_id || !pt?.match_id) return;
+      if (pt.manual_override === true) s.add(`${pt.player_id}_${pt.match_id}`);
+    });
+    Object.values(pendingEdits || {}).forEach((ed: any) => {
+      if (!ed?.player_id || !ed?.match_id) return;
+      // pending edits are always manual_override: true
+      s.add(`${ed.player_id}_${ed.match_id}`);
+    });
+    return s;
   }, [allMatchPoints, pendingEdits]);
 
   /**
@@ -468,6 +601,9 @@ export default function ScoreboardPage() {
       const v = matchPointsCellMap.get(key);
       if (v === null) return 0;
       const raw = Number(v) || 0;
+      if (DISABLE_SHEET_AUTOCOMPUTE_ON_MANUAL_OVERRIDE && manualOverrideKeySet.has(key)) {
+        return raw;
+      }
       const d = matchDateKeyIST(m.date_time);
       const iconId = franchiseIconRows.find((r) => r.team_id === franchiseId)?.player_id ?? null;
       const active = activeCvcForMatchDate(franchiseCvcRows, franchiseId, d);
@@ -497,6 +633,7 @@ export default function ScoreboardPage() {
       matchByNo,
       matchPointsCellMap,
       matchPointsDetailByKey,
+      manualOverrideKeySet,
       franchiseCvcRows,
       franchiseIconRows,
       franchiseBoosterRows,
@@ -551,6 +688,8 @@ export default function ScoreboardPage() {
 
   useEffect(() => {
     setPendingEdits({});
+    setSheetCellFocusKey(null);
+    setSheetCellDraft({});
   }, [sheetFranchiseId]);
   useEffect(() => { fetchInitialData(); }, []);
   useEffect(() => { if (selectedMatchId) fetchMatchSpecificData(selectedMatchId); }, [selectedMatchId]);
@@ -856,6 +995,10 @@ export default function ScoreboardPage() {
   const updateSeasonPoint = (pId: string, teamGameSlot: number, val: string) => {
     const ptsIn = parseFloat(val);
     const displayPts = Number.isFinite(ptsIn) ? ptsIn : 0;
+    if (DISABLE_SHEET_AUTOCOMPUTE_ON_MANUAL_OVERRIDE) {
+      setSeasonMatchPoints(pId, teamGameSlot, toPoints2(displayPts));
+      return;
+    }
     const fr = franchises.find((f) => f.id === sheetFranchiseId);
     const player = allPlayers.find((p) => p.id === pId);
     if (!fr || !player) return;
@@ -1551,7 +1694,7 @@ export default function ScoreboardPage() {
                                   const mn = espnMatchNo(match);
                                   if (mn != null) void fetchEspnScorecardForMatchNo(mn);
                                   setFixtureModalTab("scorecard");
-                                  setExpandedCricapiFantasyId(null);
+                                  setExpandedPersistedFantasyPlayerId(null);
                                   setFixtureModal({ source: "espn", fixture: match });
                                 }}
                                 className={cn(
@@ -1571,7 +1714,7 @@ export default function ScoreboardPage() {
                                   onClick={() => {
                                     if (!cricReady) return;
                                     setFixtureModalTab("scorecard");
-                                    setExpandedCricapiFantasyId(null);
+                                    setExpandedPersistedFantasyPlayerId(null);
                                     setFixtureModal({ source: "cricapi", fixture: match });
                                   }}
                                   className={cn(
@@ -1714,167 +1857,25 @@ export default function ScoreboardPage() {
                   </TabsContent>
 
                   <TabsContent value="fantasy" className="flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-6 mt-0 min-h-0">
-                    {fixtureModal.source === "cricapi" && (
-                      <>
-                        {modalRefreshing ? (
-                          <div className="flex justify-center py-16">
-                            <Loader2 className="h-8 w-8 text-blue-600 animate-spin" />
-                          </div>
-                        ) : cricapiFantasyRows.length === 0 ? (
-                          <p className="text-center text-sm font-bold text-slate-400 py-16 px-2 leading-relaxed">
-                            No fantasy rows — sync ESPN scorecard to the DB, then use Sync points on Sheets.
-                          </p>
-                        ) : (
-                          <div className="w-full min-w-0 overflow-x-auto rounded-lg border border-slate-100">
-                            <Table>
-                              <TableHeader>
-                                <TableRow>
-                                  <TableHead className="w-8 sm:w-10 px-2 sm:px-4" />
-                                  <TableHead className="min-w-[7rem] max-w-[40vw]">Player</TableHead>
-                                  <TableHead className="min-w-[4rem]">Team</TableHead>
-                                  <TableHead className="text-right whitespace-nowrap">PJ</TableHead>
-                                </TableRow>
-                              </TableHeader>
-                              <TableBody>
-                                {cricapiFantasyRows.map((row) => {
-                                  const open = expandedCricapiFantasyId === row.player_id;
-                                  const { breakdown, scoring, d11 } = row;
-                                  const mult = d11.appliedMultiplier;
-                                  return (
-                                    <React.Fragment key={row.player_id}>
-                                      <TableRow
-                                        className="cursor-pointer touch-manipulation"
-                                        onClick={() => setExpandedCricapiFantasyId(open ? null : row.player_id)}
-                                      >
-                                        <TableCell className="px-2 sm:px-4 align-top">{open ? "▼" : "▶"}</TableCell>
-                                        <TableCell className="max-w-[40vw] sm:max-w-none">
-                                          <div className="font-semibold text-slate-900 text-sm leading-snug break-words">
-                                            {row.player_name}
-                                          </div>
-                                          <div className="text-[10px] text-slate-500 break-words">{row.fantasy.playerRole}</div>
-                                        </TableCell>
-                                        <TableCell className="align-top">
-                                          {row.team ? (
-                                            <Badge
-                                              variant="secondary"
-                                              className="whitespace-normal text-center max-w-[6rem] sm:max-w-none break-words"
-                                            >
-                                              {row.team}
-                                            </Badge>
-                                          ) : (
-                                            "—"
-                                          )}
-                                        </TableCell>
-                                        <TableCell className="text-right align-top whitespace-nowrap">
-                                          <div className="font-bold tabular-nums text-slate-900">
-                                            {formatPoints2(d11.multipliedTotal)}
-                                          </div>
-                                          {mult > 1 ? (
-                                            <div className="text-[10px] font-medium text-amber-800">
-                                              ×{mult} on {scoring.total_pts} base
-                                            </div>
-                                          ) : (
-                                            <div className="text-[10px] text-slate-500">Base (1×)</div>
-                                          )}
-                                        </TableCell>
-                                      </TableRow>
-                                      {open ? (
-                                        <TableRow>
-                                          <TableCell colSpan={4} className="bg-slate-50 p-3 sm:p-4">
-                                            <FantasyPjBreakdownPanel breakdown={breakdown} scoring={scoring} d11={d11} />
-                                          </TableCell>
-                                        </TableRow>
-                                      ) : null}
-                                    </React.Fragment>
-                                  );
-                                })}
-                              </TableBody>
-                            </Table>
-                          </div>
-                        )}
-                      </>
-                    )}
-                    {fixtureModal.source === "espn" && (
-                      <>
-                        {espnModalMn == null ? (
-                          <p className="text-center text-sm font-bold text-slate-400 py-16 uppercase tracking-wide">
-                            Need <code className="font-mono">match_no</code> for ESPN PJ breakdown.
-                          </p>
-                        ) : espnModalLoading ? (
-                          <div className="flex justify-center py-16">
-                            <Loader2 className="h-8 w-8 text-slate-600 animate-spin" />
-                          </div>
-                        ) : espnModalPjRows.length === 0 ? (
-                          <p className="text-center text-sm font-bold text-slate-400 py-16">
-                            Load an ESPN scorecard from the database (Scorecard tab) to compute PJ points.
-                          </p>
-                        ) : (
-                          <div className="w-full min-w-0 overflow-x-auto rounded-lg border border-slate-100">
-                            <Table>
-                              <TableHeader>
-                                <TableRow>
-                                  <TableHead className="min-w-[10rem]">Player</TableHead>
-                                  <TableHead className="min-w-[5rem]">Team</TableHead>
-                                  <TableHead className="text-right whitespace-nowrap">PJ</TableHead>
-                                </TableRow>
-                              </TableHeader>
-                              <TableBody>
-                                {espnModalPjRows.map((row) => {
-                                  const key = `${row.n}_${row.team}`;
-                                  const open = expandedEspnFantasyKey === key;
-                                  const d11 = row.d11;
-                                  const mult = d11?.appliedMultiplier ?? 1;
-                                  const pj = row.pjDetail;
-                                  const sc = row.pjScoring;
-                                  return (
-                                    <React.Fragment key={key}>
-                                      <TableRow
-                                        className="cursor-pointer touch-manipulation"
-                                        onClick={() => setExpandedEspnFantasyKey(open ? null : key)}
-                                      >
-                                        <TableCell className="align-top font-medium text-sm">
-                                          <span className="mr-2 inline-block w-4 text-slate-400">{open ? "▼" : "▶"}</span>
-                                          <span className="break-words max-w-[50vw] sm:max-w-none">{row.n}</span>
-                                        </TableCell>
-                                        <TableCell className="align-top">
-                                          <Badge variant="outline" className="whitespace-normal break-words max-w-[7rem]">
-                                            {row.team}
-                                          </Badge>
-                                        </TableCell>
-                                        <TableCell className="text-right whitespace-nowrap">
-                                          <div className="font-bold tabular-nums text-slate-900">
-                                            {d11 ? formatPoints2(d11.multipliedTotal) : formatPoints2(Number(row.total) || 0)}
-                                          </div>
-                                          {d11 && mult > 1 ? (
-                                            <div className="text-[10px] font-medium text-amber-800">
-                                              ×{mult} on {row.total} base
-                                            </div>
-                                          ) : (
-                                            <div className="text-[10px] text-slate-500">Base (1×)</div>
-                                          )}
-                                        </TableCell>
-                                      </TableRow>
-                                      {open && pj && sc ? (
-                                        <TableRow>
-                                          <TableCell colSpan={3} className="bg-slate-50 p-3 sm:p-4">
-                                            <FantasyPjBreakdownPanel breakdown={pj} scoring={sc} d11={d11} />
-                                          </TableCell>
-                                        </TableRow>
-                                      ) : open ? (
-                                        <TableRow>
-                                          <TableCell colSpan={3} className="bg-slate-50 p-4 text-sm text-slate-500">
-                                            Breakdown not available for this row.
-                                          </TableCell>
-                                        </TableRow>
-                                      ) : null}
-                                    </React.Fragment>
-                                  );
-                                })}
-                              </TableBody>
-                            </Table>
-                          </div>
-                        )}
-                      </>
+                    {fixtureModalMatchNo == null ? (
+                      <p className="text-center text-sm font-bold text-slate-400 py-16 uppercase tracking-wide px-2">
+                        Need <code className="font-mono">match_no</code> to load sheet points for this fixture.
+                      </p>
+                    ) : !fixtureModalLeagueMatchId ? (
+                      <p className="text-center text-sm font-bold text-slate-400 py-16 uppercase tracking-wide px-2 leading-relaxed">
+                        No league match in <code className="font-mono">matches</code> for this{" "}
+                        <code className="font-mono">match_no</code>.
+                      </p>
+                    ) : (
+                      <PersistedFantasyMatchTable
+                        rows={fixtureModalPersistedRows}
+                        sourceTableLabel={sheetMatchPointsTable}
+                        expandedPlayerId={expandedPersistedFantasyPlayerId}
+                        onToggleExpand={setExpandedPersistedFantasyPlayerId}
+                        loading={fixtureModalPersistedLoading}
+                        emptyMessage="No persisted points for this match yet — run Sync on the Sheets tab."
+                        renderScorecardDetail={renderFixtureModalScorecardDetail}
+                      />
                     )}
                   </TabsContent>
                 </Tabs>
@@ -2323,19 +2324,45 @@ export default function ScoreboardPage() {
                                         </td>
                                       );
                                     }
+                                    const noDataKey = `${p.id}_${mObj.id}`;
+                                    const noDataCommitted = "";
+                                    const noDataFocused = sheetCellFocusKey === noDataKey;
+                                    const noDataValue = noDataFocused
+                                      ? (sheetCellDraft[noDataKey] ?? noDataCommitted)
+                                      : noDataCommitted;
+
                                     return (
                                       <td key={i} className={cn("px-1.5 py-3 text-center sm:px-3 sm:py-4", teamStyle.bg)}>
                                         <div className="flex flex-col items-center gap-0.5">
                                           <Input
-                                            type="number"
-                                            step="0.5"
-                                            value=""
+                                            type="text"
+                                            inputMode="decimal"
+                                            autoComplete="off"
+                                            value={noDataValue}
+                                            onFocus={() => {
+                                              setSheetCellFocusKey(noDataKey);
+                                              setSheetCellDraft((prev) => ({ ...prev, [noDataKey]: noDataCommitted }));
+                                            }}
                                             onChange={(e) => {
-                                              if (!canEdit) return;
-                                              updateSeasonPoint(p.id, slot, e.target.value);
+                                              setSheetCellDraft((prev) => ({ ...prev, [noDataKey]: e.target.value }));
+                                            }}
+                                            onBlur={() => {
+                                              const raw = (sheetCellDraft[noDataKey] ?? noDataCommitted).trim();
+                                              setSheetCellFocusKey((k) => (k === noDataKey ? null : k));
+                                              setSheetCellDraft((prev) => {
+                                                const n = { ...prev };
+                                                delete n[noDataKey];
+                                                return n;
+                                              });
+                                              const n = parseSheetPointsBlur(raw);
+                                              if (n === undefined) return;
+                                              updateSeasonPoint(p.id, slot, String(n));
+                                            }}
+                                            onKeyDown={(e) => {
+                                              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
                                             }}
                                             className={cn(
-                                              "h-8 w-11 sm:w-14 mx-auto text-[10px] font-black text-center border-none rounded-lg",
+                                              "h-8 min-w-[4rem] sm:min-w-[4.5rem] mx-auto text-[10px] font-black text-center border-none rounded-lg",
                                               isDirty
                                                 ? "bg-amber-100 text-amber-900 ring-1 ring-amber-300"
                                                 : "bg-white/70 text-slate-900"
@@ -2398,23 +2425,15 @@ export default function ScoreboardPage() {
                                     momRecCell && momRecCell.player_id === p.id
                                       ? Number(momRecCell.bonus_points) || MOM_BONUS_DEFAULT
                                       : 0;
+                                  const isManualOverride =
+                                    !!ptsKey &&
+                                    DISABLE_SHEET_AUTOCOMPUTE_ON_MANUAL_OVERRIDE &&
+                                    manualOverrideKeySet.has(ptsKey);
                                   const sheet: {
                                     display: number;
                                     breakdown: FranchiseMatchSheetBreakdown;
-                                  } = mObj
-                                    ? franchiseMatchSheetDisplay({
-                                        storedPoints: rawPts,
-                                        basePoints: basePts,
-                                        franchiseId: franchise.id,
-                                        playerId: p.id,
-                                        franchiseIconPlayerId: iconId,
-                                        matchDateKeyIST: dKey,
-                                        boosterRows: franchiseBoosterRows,
-                                        activeCvc,
-                                        momBonusPoints: momBonusCell,
-                                        haulAppliedMult: haulAppCol,
-                                      })
-                                    : {
+                                  } = isManualOverride
+                                    ? {
                                         display: rawPts,
                                         breakdown: {
                                           mode: "franchise_mult",
@@ -2422,7 +2441,29 @@ export default function ScoreboardPage() {
                                           tag: null,
                                           storedPoints: rawPts,
                                         },
-                                      };
+                                      }
+                                    : mObj
+                                      ? franchiseMatchSheetDisplay({
+                                          storedPoints: rawPts,
+                                          basePoints: basePts,
+                                          franchiseId: franchise.id,
+                                          playerId: p.id,
+                                          franchiseIconPlayerId: iconId,
+                                          matchDateKeyIST: dKey,
+                                          boosterRows: franchiseBoosterRows,
+                                          activeCvc,
+                                          momBonusPoints: momBonusCell,
+                                          haulAppliedMult: haulAppCol,
+                                        })
+                                      : {
+                                          display: rawPts,
+                                          breakdown: {
+                                            mode: "franchise_mult",
+                                            mult: 1,
+                                            tag: null,
+                                            storedPoints: rawPts,
+                                          },
+                                        };
                                   const displayPts = sheet.display;
                                   const { breakdown } = sheet;
                                   const synthAfterHaul =
@@ -2463,20 +2504,51 @@ export default function ScoreboardPage() {
                                     breakdown.mode === "franchise_mult" && breakdown.mult > 1
                                       ? `After haul ${formatPoints2(Number(storedLabel))} × ${breakdown.mult} (${breakdown.tag === "icon" ? "Icon" : breakdown.tag === "c" ? "C" : "VC"}) = ${formatPoints2(displayPts)}${momNote}`
                                       : null;
+                                  const cellKey = ptsKey;
+                                  const committedStr = formatPoints2(displayPts);
+                                  const isCellFocused = canEdit && !!cellKey && sheetCellFocusKey === cellKey;
+                                  const inputValue = !canEdit
+                                    ? committedStr
+                                    : isCellFocused
+                                      ? (sheetCellDraft[cellKey] ?? committedStr)
+                                      : committedStr;
+
                                   return (
                                     <td key={i} className={cn("px-1.5 py-3 text-center sm:px-3 sm:py-4", teamStyle.bg)}>
                                       <div className="flex flex-col items-center gap-0.5">
                                         <Input
-                                          type="number"
-                                          step="0.5"
-                                          value={formatPoints2(displayPts)}
+                                          type="text"
+                                          inputMode="decimal"
+                                          autoComplete="off"
+                                          value={inputValue}
                                           readOnly={!canEdit}
+                                          onFocus={() => {
+                                            if (!canEdit || !cellKey) return;
+                                            setSheetCellFocusKey(cellKey);
+                                            setSheetCellDraft((prev) => ({ ...prev, [cellKey]: committedStr }));
+                                          }}
                                           onChange={(e) => {
-                                            if (!canEdit) return;
-                                            updateSeasonPoint(p.id, slot, e.target.value);
+                                            if (!canEdit || !cellKey) return;
+                                            setSheetCellDraft((prev) => ({ ...prev, [cellKey]: e.target.value }));
+                                          }}
+                                          onBlur={() => {
+                                            if (!canEdit || !cellKey) return;
+                                            const raw = (sheetCellDraft[cellKey] ?? committedStr).trim();
+                                            setSheetCellFocusKey((k) => (k === cellKey ? null : k));
+                                            setSheetCellDraft((prev) => {
+                                              const n = { ...prev };
+                                              delete n[cellKey];
+                                              return n;
+                                            });
+                                            const n = parseSheetPointsBlur(raw);
+                                            if (n === undefined) return;
+                                            updateSeasonPoint(p.id, slot, String(n));
+                                          }}
+                                          onKeyDown={(e) => {
+                                            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
                                           }}
                                           className={cn(
-                                            "h-8 w-11 sm:w-14 mx-auto text-[10px] font-black text-center border-none rounded-lg",
+                                            "h-8 min-w-[4rem] sm:min-w-[4.5rem] mx-auto text-[10px] font-black text-center border-none rounded-lg",
                                             isDirty
                                               ? "bg-amber-100 text-amber-900 ring-1 ring-amber-300"
                                               : "bg-white/70 text-slate-900",
@@ -2484,6 +2556,9 @@ export default function ScoreboardPage() {
                                           )}
                                           placeholder="0"
                                           title={
+                                            isManualOverride
+                                              ? "Manual override: this cell is not auto-computed (no Icon/C/VC/booster multipliers)."
+                                              :
                                             titleBooster ??
                                             (showPjHaulLine && basePts != null
                                               ? hasHaulCols

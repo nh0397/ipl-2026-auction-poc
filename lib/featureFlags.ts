@@ -14,3 +14,9 @@ export const USE_CRICAPI_MATCH_POINTS_SYNC = false;
  * Default: ESPN table. To use CricAPI rows instead: import `MATCH_POINTS_CRICAPI_TABLE` from `./matchPointsTables` and assign it here.
  */
 export const SHEET_MATCH_POINTS_TABLE: MatchPointsTableName = MATCH_POINTS_ESPN_TABLE;
+
+/**
+ * When true, any row with `manual_override = true` is treated as a "final sheet total" override:
+ * the entered value is displayed as-is and no sheet auto-compute (Icon/C/VC/booster) is applied.
+ */
+export const DISABLE_SHEET_AUTOCOMPUTE_ON_MANUAL_OVERRIDE = true;
