@@ -1,6 +1,4 @@
--- ATOMIC BIDDING RPC (keep in sync with supabase/migrations/*place_bid*.sql)
--- Rounds amounts to 2 dp so JSON float noise cannot reject valid bids.
-
+-- Lock exactly one auction_state row (singleton) for concurrent bidding.
 CREATE OR REPLACE FUNCTION public.place_bid(
   p_player_id UUID,
   p_bidder_id UUID,
@@ -14,10 +12,7 @@ AS $$
 DECLARE
   v_state public.auction_state;
   v_min_required NUMERIC;
-  v_amt NUMERIC;
 BEGIN
-  v_amt := round(p_amount::numeric, 2);
-
   SELECT *
   INTO v_state
   FROM public.auction_state
@@ -38,12 +33,12 @@ BEGIN
   END IF;
 
   IF v_state.current_bidder_id IS NULL THEN
-    v_min_required := round(v_state.base_price::numeric, 2);
+    v_min_required := v_state.base_price;
   ELSE
-    v_min_required := round(v_state.current_bid + v_state.min_increment, 2);
+    v_min_required := v_state.current_bid + v_state.min_increment;
   END IF;
 
-  IF v_amt < v_min_required THEN
+  IF p_amount < v_min_required THEN
     RETURN jsonb_build_object(
       'success',
       false,
@@ -54,7 +49,7 @@ BEGIN
 
   UPDATE public.auction_state
   SET
-    current_bid = v_amt,
+    current_bid = p_amount,
     current_bidder_id = p_bidder_id,
     current_bidder_name = p_bidder_name,
     passed_user_ids = v_state.passed_user_ids,
@@ -62,7 +57,7 @@ BEGIN
   WHERE id = v_state.id;
 
   INSERT INTO public.bids (player_id, bidder_id, bidder_name, amount)
-  VALUES (p_player_id, p_bidder_id, p_bidder_name, v_amt);
+  VALUES (p_player_id, p_bidder_id, p_bidder_name, p_amount);
 
   RETURN jsonb_build_object('success', true, 'message', 'Bid placed successfully');
 

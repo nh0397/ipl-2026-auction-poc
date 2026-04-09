@@ -1,6 +1,4 @@
--- ATOMIC BIDDING RPC (keep in sync with supabase/migrations/*place_bid*.sql)
--- Rounds amounts to 2 dp so JSON float noise cannot reject valid bids.
-
+-- Normalize bid amount to 2 dp so JSON float noise (e.g. 0.7999999999) cannot fail valid 0.8 Cr bids.
 CREATE OR REPLACE FUNCTION public.place_bid(
   p_player_id UUID,
   p_bidder_id UUID,

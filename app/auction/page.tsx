@@ -24,6 +24,11 @@ const POOL_CONFIG: Record<string, { basePrice: number; minIncrement: number }> =
 
 const POOL_ORDER = ["Marquee", "Pool 1", "Pool 2", "Pool 3", "Unsold"];
 
+/** Crore amounts: JS binary floats break sums like 0.7 + 0.1 (RPC would see 0.799999… and reject). */
+function roundCr(n: number): number {
+  return Number((Number(n) || 0).toFixed(2));
+}
+
 export default function AuctionPage() {
   const { user, profile, isLoading: authLoading } = useAuth();
   const role = profile?.role;
@@ -160,9 +165,10 @@ export default function AuctionPage() {
     }
   }, [user]);
 
-  const fetchAll = useCallback(async () => {
+  const fetchAll = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = opts?.silent === true;
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const { data: config } = await supabase.from("auction_config").select("*").limit(1).single();
       if (config) setAuctionConfig(config);
 
@@ -182,26 +188,37 @@ export default function AuctionPage() {
     } catch (error) {
       console.error("Error fetching auction data:", error);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [fetchAuctionState, fetchPoolData, fetchProfileData]);
 
   useEffect(() => {
     fetchAll();
 
+    /** Tab sleep / background: realtime can miss events; resync when user returns. */
+    let visibilityDebounce: ReturnType<typeof setTimeout> | null = null;
+    const scheduleResync = () => {
+      if (document.visibilityState !== "visible") return;
+      if (visibilityDebounce) clearTimeout(visibilityDebounce);
+      visibilityDebounce = setTimeout(() => {
+        void fetchAll({ silent: true });
+      }, 250);
+    };
+    document.addEventListener("visibilitychange", scheduleResync);
+    window.addEventListener("focus", scheduleResync);
+
     // Real-time subscriptions with Payload-First Sync
     const channel = supabase
       .channel("auction-room", { config: { broadcast: { self: false } } })
-      
-      // 1. Sync Auction State (Status, Current Bid, etc.)
-      .on("postgres_changes", { event: "*", schema: "public", table: "auction_state" }, (payload: any) => {
-        const newState = payload.new;
-        setAuctionState((prev: any) => ({ ...prev, ...newState }));
-        
-        // If player changed, we need a full sync for that player
-        if (payload.old?.current_player_id !== newState?.current_player_id) {
-           fetchAuctionState(); 
-        }
+
+      // 0. Config (live/paused/completed, pool) — was missing; "Start auction" only touched this table
+      .on("postgres_changes", { event: "*", schema: "public", table: "auction_config" }, () => {
+        void fetchAll({ silent: true });
+      })
+
+      // 1. Auction state — always refetch row + current player + bids (avoids partial merge / stale fields)
+      .on("postgres_changes", { event: "*", schema: "public", table: "auction_state" }, () => {
+        void fetchAuctionState();
       })
 
       // 2. Sync Bids (Instant History Update + Clear Lock)
@@ -263,11 +280,32 @@ export default function AuctionPage() {
 
     channelRef.current = channel;
 
-    return () => { 
-      supabase.removeChannel(channel); 
+    return () => {
+      document.removeEventListener("visibilitychange", scheduleResync);
+      window.removeEventListener("focus", scheduleResync);
+      if (visibilityDebounce) clearTimeout(visibilityDebounce);
+      supabase.removeChannel(channel);
       channelRef.current = null;
     };
-  }, [profile?.id, fetchAuctionState, fetchPoolData]); // Profile ID is okay here as it only changes on login
+  }, [profile?.id, fetchAuctionState, fetchPoolData, fetchAll]);
+
+  /**
+   * While the auction is live, poll DB state — Realtime WebSocket can miss updates (sleeping tabs,
+   * reconnect gaps, browser quirks). Polling keeps all participants in sync without refresh.
+   */
+  useEffect(() => {
+    if (auctionConfig?.status !== "live") return;
+
+    const poll = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      void fetchAuctionState();
+      void fetchPoolData();
+    };
+
+    poll();
+    const id = setInterval(poll, 2500);
+    return () => clearInterval(id);
+  }, [auctionConfig?.status, fetchAuctionState, fetchPoolData]);
 
   // Helper: get singleton row IDs fresh from DB (avoids stale React state)
   const getAuctionIds = async () => {
@@ -315,7 +353,7 @@ export default function AuctionPage() {
         previous_buyer: player.sold_to,
         previous_price: player.sold_price
       });
-      await fetchAll();
+      await fetchAll({ silent: true });
     }
     
     setActionLoading(false);
@@ -327,7 +365,7 @@ export default function AuctionPage() {
     const { configId } = await getAuctionIds();
     await supabase.from("auction_config").update({ pools_frozen: true, status: "frozen", updated_at: new Date().toISOString() }).eq("id", configId);
     await logAction("FREEZE_POOLS");
-    await fetchAll();
+    await fetchAll({ silent: true });
     setActionLoading(false);
   };
 
@@ -337,7 +375,7 @@ export default function AuctionPage() {
     await supabase.from("auction_config").update({ status: "live", current_pool: startPool, updated_at: new Date().toISOString() }).eq("id", configId);
     await logAction("START_AUCTION", { initial_pool: startPool });
     // Removed auto-pickNextPlayer(startPool) to ensure manual selection
-    await fetchAll();
+    await fetchAll({ silent: true });
     setActionLoading(false);
   };
 
@@ -346,7 +384,7 @@ export default function AuctionPage() {
     const { configId } = await getAuctionIds();
     await supabase.from("auction_config").update({ status: "paused", updated_at: new Date().toISOString() }).eq("id", configId);
     await logAction("PAUSE_AUCTION");
-    await fetchAll();
+    await fetchAll({ silent: true });
     setActionLoading(false);
   };
 
@@ -356,7 +394,7 @@ export default function AuctionPage() {
     await supabase.from("auction_config").update({ current_pool: pool, updated_at: new Date().toISOString() }).eq("id", configId);
     await logAction("SWITCH_POOL", { new_pool: pool });
     // Removed auto-pickNextPlayer(pool) to ensure manual selection
-    await fetchAll();
+    await fetchAll({ silent: true });
     setActionLoading(false);
   };
 
@@ -379,7 +417,7 @@ export default function AuctionPage() {
         await logAction("POOL_EXHAUSTED_MOVING_TO_NEXT", { exhausted_pool: pool, next_pool: nextPool });
         // Instead of pickNextPlayer(nextPool), just pause/wait for manual intervention
         await supabase.from("auction_state").update({ status: "waiting", current_player_id: null }).eq("id", stateId);
-        await fetchAll();
+        await fetchAll({ silent: true });
       } else {
         // Pool exhausted AND no more pools left
         await supabase.from("auction_config").update({ status: "paused", updated_at: new Date().toISOString() }).eq("id", configId);
@@ -394,7 +432,7 @@ export default function AuctionPage() {
         await logAction("AUCTION_PAUSED_ALL_POOLS_FINISHED");
         alert("All players in the final pool have been auctioned. Auction paused. If you wish to end the auction, it is an irreversible action — please do so from the Admin Command Center.");
         setSelectionMethod("random");
-        await fetchAll();
+        await fetchAll({ silent: true });
       }
       return;
     }
@@ -432,7 +470,7 @@ export default function AuctionPage() {
 
     await supabase.from("players").update({ auction_status: "on_block" }).eq("id", chosenPlayer.id);
 
-    await fetchAll();
+    await fetchAll({ silent: true });
   };
 
   const markSold = async () => {
@@ -446,13 +484,14 @@ export default function AuctionPage() {
     const salePrice = auctionState.current_bid;
     const playerId = currentPlayer.id;
 
-    // Update player record
+    // Update player record (base_pool = pool before sale so admin/registry can release back)
     await supabase.from("players").update({
       status: "Sold",
       auction_status: "sold",
       sold_to: buyerName,
       sold_price: `${salePrice} Cr`,
       sold_to_id: buyerId,
+      base_pool: currentPlayer.base_pool || currentPlayer.pool || null,
     }).eq("id", playerId);
 
     // Update auction state
@@ -469,7 +508,7 @@ export default function AuctionPage() {
       sale_price: salePrice,
     });
 
-    await fetchAll();
+    await fetchAll({ silent: true });
     setActionLoading(false);
   };
 
@@ -490,7 +529,7 @@ export default function AuctionPage() {
 
     await logAction("MARK_UNSOLD", { player_id: currentPlayer.id, player_name: currentPlayer.player_name });
 
-    await fetchAll();
+    await fetchAll({ silent: true });
     setActionLoading(false);
   };
 
@@ -543,97 +582,152 @@ export default function AuctionPage() {
     const { configId } = await getAuctionIds();
     await supabase.from("auction_config").update({ status: "completed", updated_at: new Date().toISOString() }).eq("id", configId);
     await logAction("MANUAL_END_AUCTION");
-    await fetchAll();
+    await fetchAll({ silent: true });
     setActionLoading(false);
   };
 
+  /** Same row selection as place_bid RPC — avoids stale React state when computing bids. */
+  const fetchFreshAuctionStateRow = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("auction_state")
+      .select("*")
+      .order("id", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    return { row: data, error };
+  }, []);
+
+  const minRequiredFromState = (state: {
+    current_bidder_id: string | null;
+    base_price: number;
+    current_bid: number;
+    min_increment: number;
+  }) =>
+    roundCr(
+      !state.current_bidder_id
+        ? state.base_price
+        : state.current_bid + state.min_increment
+    );
+
   // ─── Participant Bid ───
   const placeBid = async () => {
-    if (!profile || !auctionState || !currentPlayer) return;
-    setActionLoading(true);
-
-    const isFirstBid = !auctionState.current_bidder_id;
-    const newBid = isFirstBid 
-      ? auctionState.base_price 
-      : auctionState.current_bid + auctionState.min_increment;
-
-    await executeBid(newBid);
+    if (!profile || !currentPlayer) return;
+    await executeBid({ mode: "quick" });
   };
 
   // Place a custom manual bid
   const placeCustomBid = async () => {
-    if (!profile || !currentPlayer || !auctionState || !customBid) return;
-    
+    if (!profile || !currentPlayer || !customBid) return;
+
     const bidAmount = parseFloat(customBid);
     if (isNaN(bidAmount)) {
       alert("Please enter a valid number");
       return;
     }
 
-    const isFirstBid = !auctionState.current_bidder_id;
-    const minRequiredBid = isFirstBid 
-      ? auctionState.base_price 
-      : auctionState.current_bid + auctionState.min_increment;
-
-    if (bidAmount < minRequiredBid) {
-      alert(`Bid must be at least ${minRequiredBid} Cr`);
-      return;
-    }
-
-    await executeBid(bidAmount);
+    await executeBid({ mode: "custom", amount: bidAmount });
     setCustomBid("");
   };
 
-  // Shared bid execution logic
-  const executeBid = async (newBid: number) => {
-    // 1. Send immediate lockout broadcast to all peers
+  // Shared bid execution: reads fresh DB row before RPC so the UI cannot lag Realtime.
+  const executeBid = async (opts: { mode: "quick" } | { mode: "custom"; amount: number }) => {
+    if (!profile || !currentPlayer) return;
+
     channelRef.current?.send({
-       type: 'broadcast',
-       event: 'bidding_start',
-       payload: { name: profile?.team_name || profile?.full_name || "Someone" }
+      type: "broadcast",
+      event: "bidding_start",
+      payload: { name: profile?.team_name || profile?.full_name || "Someone" },
     });
 
     setActionLoading(true);
 
     const totalSpent = mySquad.reduce((sum, p) => {
-      const priceValue = typeof p.sold_price === 'string' 
-        ? parseFloat(p.sold_price.replace(/[^\d.]/g, '')) 
-        : (p.sold_price || 0);
+      const priceValue =
+        typeof p.sold_price === "string"
+          ? parseFloat(p.sold_price.replace(/[^\d.]/g, ""))
+          : p.sold_price || 0;
       return sum + (isNaN(priceValue) ? 0 : priceValue);
     }, 0);
 
     const budget = auctionConfig?.budget_per_team || 150;
     const remainingPurse = budget - totalSpent;
 
-    if (newBid > remainingPurse) {
-      alert(`Insufficient purse! You have ${remainingPurse.toFixed(2)} Cr left.`);
+    const maxQuickAttempts = 2;
+
+    try {
+      for (let attempt = 1; attempt <= maxQuickAttempts; attempt++) {
+        const { row: fresh, error: fetchErr } = await fetchFreshAuctionStateRow();
+        if (fetchErr || !fresh) {
+          alert(fetchErr?.message || "Could not read auction state.");
+          break;
+        }
+
+        if (fresh.current_player_id !== currentPlayer.id || fresh.status !== "active") {
+          alert("This player is no longer on the block or bidding is not active.");
+          await fetchAuctionState();
+          break;
+        }
+
+        const playerId = fresh.current_player_id as string;
+        const minReq = minRequiredFromState(fresh);
+        let amount: number;
+        if (opts.mode === "quick") {
+          amount = minReq;
+        } else {
+          const custom = roundCr(opts.amount);
+          if (custom < minReq) {
+            alert(
+              `Minimum bid is now ${minReq.toFixed(2)} Cr (display may have been a step behind).`
+            );
+            await fetchAuctionState();
+            break;
+          }
+          amount = custom;
+        }
+
+        amount = roundCr(amount);
+
+        if (amount > remainingPurse) {
+          alert(`Insufficient purse! You have ${remainingPurse.toFixed(2)} Cr left.`);
+          break;
+        }
+
+        const { data: result, error: rpcError } = await supabase.rpc("place_bid", {
+          p_player_id: playerId,
+          p_bidder_id: profile.id,
+          p_bidder_name: profile.team_name || profile.full_name || "Unknown",
+          p_amount: amount,
+        });
+
+        if (rpcError) {
+          alert(`System Error: ${rpcError.message}`);
+          break;
+        }
+
+        if (result?.success) {
+          await logAction("PLACE_BID", {
+            player_id: playerId,
+            player_name: currentPlayer.player_name,
+            bidder_id: profile.id,
+            bidder_name: profile.team_name || profile.full_name,
+            amount,
+          });
+          break;
+        }
+
+        const msg = (result?.message as string) || "Could not place bid.";
+        const tooLow = /bid too low|minimum required/i.test(msg);
+        if (opts.mode === "quick" && tooLow && attempt < maxQuickAttempts) {
+          continue;
+        }
+
+        alert(msg);
+        break;
+      }
+    } finally {
+      await fetchAll({ silent: true });
       setActionLoading(false);
-      return;
     }
-
-    const { data: result, error: rpcError } = await supabase.rpc("place_bid", {
-      p_player_id: currentPlayer.id,
-      p_bidder_id: profile.id,
-      p_bidder_name: profile.team_name || profile.full_name || "Unknown",
-      p_amount: newBid
-    });
-
-    if (rpcError) {
-      alert(`System Error: ${rpcError.message}`);
-    } else if (result && !result.success) {
-      alert(result.message);
-    } else {
-      await logAction("PLACE_BID", { 
-        player_id: currentPlayer.id, 
-        player_name: currentPlayer.player_name, 
-        bidder_id: profile.id, 
-        bidder_name: profile.team_name || profile.full_name, 
-        amount: newBid 
-      });
-    }
-
-    await fetchAll();
-    setActionLoading(false);
   };
 
   const downloadTeamCSV = (team: any, players: any[]) => {
@@ -698,7 +792,7 @@ export default function AuctionPage() {
       await supabase.from("auction_state").update({ status: "unsold", updated_at: new Date().toISOString() }).eq("id", stateId);
     }
 
-    await fetchAll();
+    await fetchAll({ silent: true });
     setActionLoading(false);
   };
 
@@ -1146,7 +1240,12 @@ export default function AuctionPage() {
                         ) : (
                           <>
                             <ArrowUp size={18} />
-                            Bid {(!auctionState.current_bidder_id ? auctionState.base_price : auctionState.current_bid + auctionState.min_increment).toFixed(2)} Cr
+                            Bid {roundCr(
+                              !auctionState.current_bidder_id
+                                ? auctionState.base_price
+                                : auctionState.current_bid + auctionState.min_increment
+                            ).toFixed(2)}{" "}
+                            Cr
                           </>
                         )}
                       </Button>
