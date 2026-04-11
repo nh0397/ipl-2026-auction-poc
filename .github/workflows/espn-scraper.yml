@@ -43,8 +43,11 @@ jobs:
         run: |
           # Always run headless in CI for stability
           export ESPN_HEADLESS=1
-          python scripts/sync_scorecards_espn.py \
-            ${{ github.event.inputs.date_ist != '' && format('--date {0}', github.event.inputs.date_ist) || '' }}
+          DATE_ARG=""
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.date_ist }}" ]; then
+            DATE_ARG="--date ${{ github.event.inputs.date_ist }}"
+          fi
+          python scripts/sync_scorecards_espn.py $DATE_ARG
 
       - name: Send Success Email
         if: success() && steps.run_scraper.outputs.updated_count != '0'
