@@ -2,14 +2,12 @@ name: ESPNcricinfo Scraper
 
 on:
   schedule:
-    # Same slots as CricAPI scorecard sync (scripts/run_ipl_day.py) so both pipelines align on calendar days.
-    # ~06:40 IST
-    # ~22:10 IST
-    - cron: "30 18 * * *"
+    # 00:15 IST daily (18:45 UTC previous calendar day in UTC; IST = UTC+5:30).
+    - cron: "45 18 * * *"
   workflow_dispatch:
     inputs:
       date_ist:
-        description: "Target IST date (YYYY-MM-DD). Leave blank for today."
+        description: "Target IST date (YYYY-MM-DD). Leave blank for yesterday (IST), same as the scheduled run."
         required: false
         default: ""
       match_id:

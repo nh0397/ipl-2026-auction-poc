@@ -1,9 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   computeEspnPjBreakdownRows,
+  resolveDbPlayerIdForEspnRow,
   type PlayerCatalogRow,
 } from "@/lib/espnPjBreakdownFromScorecard";
-import { lookupDbPlayerId, normPlayerName } from "@/lib/matchPointsPlayerLookup";
+import { normPlayerName } from "@/lib/matchPointsPlayerLookup";
 import { MATCH_POINTS_ESPN_TABLE } from "@/lib/matchPointsTables";
 import { fetchReplacementAttributionMap } from "@/lib/playerReplacements";
 
@@ -45,22 +46,24 @@ export async function syncMatchPointsFromEspnFixtures(admin: SupabaseClient): Pr
 
   const { data: playerRows, error: playersErr } = await admin
     .from("players")
-    .select("id, player_name, team, type, role");
+    .select("id, player_name, team, type, role, auction_status");
   if (playersErr) {
     errors.push(`players: ${playersErr.message}`);
     return { fixturesProcessed: 0, rowsUpserted: 0, rowsSkippedManual: 0, rowsSkippedUnmapped: 0, unmappedNameSample: [], errors };
   }
 
   const nameToDbPlayerId = new Map<string, string>();
-  const catalog: PlayerCatalogRow[] = [];
+  const catalog: Array<PlayerCatalogRow & { id: string }> = [];
   for (const pr of playerRows ?? []) {
     const nm = normPlayerName(String(pr.player_name ?? ""));
     if (nm) nameToDbPlayerId.set(nm, String(pr.id));
     catalog.push({
+      id: String(pr.id),
       player_name: String(pr.player_name ?? ""),
       team: String(pr.team ?? ""),
       type: pr.type != null ? String(pr.type) : null,
       role: pr.role != null ? String(pr.role) : null,
+      auction_status: pr.auction_status != null ? String(pr.auction_status) : null,
     });
   }
 
@@ -148,7 +151,12 @@ export async function syncMatchPointsFromEspnFixtures(admin: SupabaseClient): Pr
 
     for (const row of rows) {
       const displayName = row.n || "";
-      const dbPlayerId = lookupDbPlayerId(displayName, nameToDbPlayerId);
+      const dbPlayerId = resolveDbPlayerIdForEspnRow(
+        { n: displayName, team: row.team },
+        catalog,
+        matchMeta,
+        nameToDbPlayerId
+      );
       if (!dbPlayerId) {
         rowsSkippedUnmapped += 1;
         if (unmappedSample.length < 15) unmappedSample.push(displayName || "?");

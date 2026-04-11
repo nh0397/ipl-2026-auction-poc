@@ -1273,21 +1273,26 @@ def upsert_fixtureapi_points_synced(api_match_id: str) -> None:
 
 async def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--date", help="Match date (YYYY-MM-DD)", default=None)
+    parser.add_argument(
+        "--date",
+        help="Match date (YYYY-MM-DD, IST). Omit to use yesterday's date in IST.",
+        default=None,
+    )
     parser.add_argument("--force", help="Force rescan", action="store_true")
     args = parser.parse_args()
 
     if not SUPABASE_URL or not SUPABASE_KEY:
         raise RuntimeError("Missing Supabase env vars (NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY).")
 
-    # Target date selection (IST)
+    # Target date selection (IST calendar day). Default: yesterday (typical nightly job syncs completed matches).
     if args.date:
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(args.date).strip()):
             raise RuntimeError(f"Invalid --date value (expected YYYY-MM-DD): {args.date!r}")
         target_date = str(args.date).strip()
     else:
         now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
-        target_date = now_ist.strftime("%Y-%m-%d")
+        yesterday_ist = (now_ist.date() - timedelta(days=1)).isoformat()
+        target_date = yesterday_ist
 
     log(f"Targeting date: {target_date} (Force: {args.force})")
     fixtures = list_fixtures_for_day(target_date)

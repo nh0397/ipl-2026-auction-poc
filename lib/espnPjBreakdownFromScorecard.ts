@@ -13,12 +13,15 @@ import {
   type PjRulesDetailedBreakdown,
   type D11BonusMultiplierInfo,
 } from "@/lib/scoring";
+import { lookupDbPlayerId, normPlayerName as normPlayerNameForId } from "@/lib/matchPointsPlayerLookup";
 
 export type PlayerCatalogRow = {
   player_name: string;
   team: string;
   type: string | null;
   role: string | null;
+  /** When set (e.g. from `players.auction_status`), used for fuzzy name fallback on subs. */
+  auction_status?: string | null;
 };
 
 export type EspnPjBreakdownRow = {
@@ -206,7 +209,7 @@ function catalogNameMatches(scorecardNorm: string, dbName: string): boolean {
   return false;
 }
 
-function catalogTeamMatches(
+export function catalogTeamMatches(
   scorecardTeam: string,
   playerTeam: string,
   match: {
@@ -229,7 +232,39 @@ function catalogTeamMatches(
   return false;
 }
 
-function findPlayerCatalogRow(
+/** Tokens like scorecard initials / surnames for DB-style %token% matching (min length 2). */
+function nameTokensForFuzzyLookup(displayNorm: string): string[] {
+  const n = normalizeScorecardPlayerName(displayNorm).toLowerCase();
+  return n.split(/\s+/).filter((t) => t.length >= 2);
+}
+
+/**
+ * If strict name match fails, find a **sold** player on the scorecard team whose `player_name`
+ * contains any token from the scorecard label (e.g. "JG" + "Bethell" vs DB "Jacob Bethell").
+ */
+function findSoldPlayerOnTeamByTokenMatch(
+  displayNorm: string,
+  scorecardTeam: string,
+  catalog: PlayerCatalogRow[],
+  match: {
+    team1_short?: string | null;
+    team1_name?: string | null;
+    team2_short?: string | null;
+    team2_name?: string | null;
+  }
+): PlayerCatalogRow | null {
+  const tokens = nameTokensForFuzzyLookup(displayNorm);
+  if (tokens.length === 0) return null;
+  const sold = catalog.filter((p) => String(p.auction_status ?? "").toLowerCase() === "sold");
+  for (const p of sold) {
+    if (!catalogTeamMatches(scorecardTeam, p.team, match)) continue;
+    const pn = String(p.player_name ?? "").toLowerCase();
+    if (tokens.some((t) => pn.includes(t))) return p;
+  }
+  return null;
+}
+
+export function findPlayerCatalogRow(
   displayName: string,
   scorecardTeam: string,
   catalog: PlayerCatalogRow[],
@@ -243,7 +278,9 @@ function findPlayerCatalogRow(
   if (!catalog?.length) return null;
   const norm = normalizeScorecardPlayerName(displayName);
   const candidates = catalog.filter((p) => catalogNameMatches(norm, p.player_name));
-  if (candidates.length === 0) return null;
+  if (candidates.length === 0) {
+    return findSoldPlayerOnTeamByTokenMatch(norm, scorecardTeam, catalog, match);
+  }
   if (candidates.length === 1) return candidates[0];
   const teamScoped = candidates.filter((p) => catalogTeamMatches(scorecardTeam, p.team, match));
   return teamScoped[0] ?? candidates[0];
@@ -290,13 +327,17 @@ export function computeEspnPjBreakdownRows(
   };
 
   const ensureStatRow = (key: string, team: string, role: string, displayName?: string) => {
-    if (stats[key]) return;
     const suffix = `_${team}`;
     const rawName =
       displayName ||
       (key.endsWith(suffix) ? key.slice(0, -suffix.length) : normalizeScorecardPlayerName(String(key).split("_")[0] || ""));
     const sub = parseSubFielder(rawName);
     const playerName = sub.name;
+    if (stats[key]) {
+      /** Squad may list "JG Bethell" in XI; dismissal `c sub (JG Bethell)` must strip Playing XI +4. */
+      if (sub.isSub) stats[key].inXI = false;
+      return;
+    }
     stats[key] = {
       n: playerName,
       team,
@@ -332,7 +373,8 @@ export function computeEspnPjBreakdownRows(
       const dStr = (b.dismissal || b["dismissal-text"] || "").toLowerCase();
       const sufCT = `_${currentTeam}`;
 
-      if (!stats[key])
+      if (!stats[key]) {
+        const subBat = parseSubFielder(normalizeScorecardPlayerName(rawN));
         stats[key] = {
           n: key.endsWith(sufCT) ? key.slice(0, -sufCT.length) : normalizeScorecardPlayerName(rawN),
           team: currentTeam,
@@ -353,7 +395,9 @@ export function computeEspnPjBreakdownRows(
           isDuck: false,
           role: "Batter",
           dismissal: "",
+          inXI: !subBat.isSub,
         };
+      }
       stats[key].r += Number(b.R || b.r) || 0;
       stats[key].b += Number(b.B || b.b) || 0;
       stats[key].f += Number(b["4s"]) || 0;
@@ -378,7 +422,8 @@ export function computeEspnPjBreakdownRows(
       const key = findKeyForTeamRoster(rawN, opposingTeam);
       const sufOpp = `_${opposingTeam}`;
 
-      if (!stats[key])
+      if (!stats[key]) {
+        const subBw = parseSubFielder(normalizeScorecardPlayerName(rawN));
         stats[key] = {
           n: key.endsWith(sufOpp) ? key.slice(0, -sufOpp.length) : normalizeScorecardPlayerName(rawN),
           team: opposingTeam,
@@ -398,7 +443,9 @@ export function computeEspnPjBreakdownRows(
           roI: 0,
           isDuck: false,
           role: "Bowler",
+          inXI: !subBw.isSub,
         };
+      }
       stats[key].w += Number(bw.W || bw.w) || 0;
       stats[key].m += Number(bw.M || bw.m) || 0;
       stats[key].r_conc += Number(bw.R || bw.r) || 0;
@@ -436,11 +483,12 @@ export function computeEspnPjBreakdownRows(
 
       if (d.startsWith("c ") || d.startsWith("st ")) {
         const parts = d.split(" b ");
-        let nRaw = parts[0].replace(/^(?:c|st)\s+(?:†)?/, "").trim();
+        const nRaw = parts[0].replace(/^(?:c|st)\s+(?:†)?/, "").trim();
         if (nRaw && !["sub", "batting", "retired"].includes(nRaw)) {
           const sub = parseSubFielder(nRaw);
           const key = findKeyForTeamRoster(sub.name, opposingTeam);
-          ensureStatRow(key, opposingTeam, "Fielder", sub.name);
+          /** Pass full `nRaw` so `sub (Name)` is detected in ensureStatRow (not just the inner name). */
+          ensureStatRow(key, opposingTeam, "Fielder", nRaw);
           if (d.startsWith("c ")) stats[key].c += 1;
           if (d.startsWith("st ")) stats[key].st += 1;
         }
@@ -460,8 +508,9 @@ export function computeEspnPjBreakdownRows(
           const indirect = parts.length >= 2;
           for (const nRaw of parts) {
             if (!nRaw || /^sub$/i.test(nRaw)) continue;
-            const key = findKeyForTeamRoster(nRaw, opposingTeam);
-            ensureStatRow(key, opposingTeam, "Fielder", nRaw);
+            const subRo = parseSubFielder(nRaw.trim());
+            const key = findKeyForTeamRoster(subRo.name, opposingTeam);
+            ensureStatRow(key, opposingTeam, "Fielder", nRaw.trim());
             if (indirect) stats[key].roI += 1;
             else stats[key].ro += 1;
           }
@@ -486,7 +535,8 @@ export function computeEspnPjBreakdownRows(
         dot_balls: p.dots,
       },
       fielding: { catches: p.c, stumpings: p.st, runout_direct: p.ro, runout_indirect: p.roI ?? 0 },
-      in_announced_lineup: p.inXI !== false,
+      /** Only strict `true` counts as Playing XI (+4). Substitutes / `sub (Name)` set `inXI` false. */
+      in_announced_lineup: p.inXI === true,
       playerRole: resolvedRole,
     };
     const scored = scorePjRulesPlayer(pjInput);
@@ -519,4 +569,31 @@ export function computeEspnPjBreakdownRows(
     const at = a.d11?.multipliedTotal ?? a.total ?? 0;
     return bt - at;
   });
+}
+
+/**
+ * Map ESPN breakdown row → `players.id` for sync: strict name map first, then same fuzzy rules as the modal
+ * (incl. sold-player token match like "JG" / "Bethell" → "Jacob Bethell").
+ */
+export function resolveDbPlayerIdForEspnRow(
+  row: { n: string; team: string },
+  catalog: Array<PlayerCatalogRow & { id: string }>,
+  match: {
+    team1_short?: string | null;
+    team1_name?: string | null;
+    team2_short?: string | null;
+    team2_name?: string | null;
+  },
+  nameToDbPlayerId: Map<string, string>
+): string | undefined {
+  const direct = lookupDbPlayerId(row.n, nameToDbPlayerId);
+  if (direct) return direct;
+  const hit = findPlayerCatalogRow(row.n, row.team, catalog, match);
+  if (!hit) return undefined;
+  const full = catalog.find(
+    (c) =>
+      normPlayerNameForId(c.player_name) === normPlayerNameForId(hit.player_name) &&
+      catalogTeamMatches(row.team, c.team, match)
+  );
+  return full?.id;
 }

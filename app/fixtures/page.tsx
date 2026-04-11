@@ -162,7 +162,7 @@ export default function FixturesPage() {
         supabase.from("auction_config").select("match_points_source").limit(1).maybeSingle(),
         supabase
           .from("players")
-          .select("player_name, team, type, role")
+          .select("player_name, team, type, role, auction_status")
           .eq("auction_status", "sold")
           .order("player_name", { ascending: true }),
       ]);

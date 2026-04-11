@@ -742,7 +742,7 @@ export default function ScoreboardPage() {
           .order("date_time_gmt", { ascending: true }),
         supabase
           .from("players")
-          .select("player_name, team, type, role")
+          .select("player_name, team, type, role, auction_status")
           .eq("auction_status", "sold")
           .order("player_name", { ascending: true }),
         supabase.from("franchise_cvc_selections").select("*"),
