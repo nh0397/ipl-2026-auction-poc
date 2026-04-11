@@ -6,7 +6,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card";
 import {
   BarChart as BarChartRecharts,
+  LineChart as LineChartRecharts,
   Bar,
+  Line,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -122,6 +124,17 @@ function cleanShort(short: string | null): string {
   return short.endsWith("W") && short.length > 2 ? short.slice(0, -1) : short;
 }
 
+/** Same label as fixture cards — team filter options and matching. */
+function teamDisplayLabel(f: Fixture, side: 1 | 2): string {
+  const short = side === 1 ? f.team1_short : f.team2_short;
+  const name = side === 1 ? f.team1_name : f.team2_name;
+  return (cleanShort(short) || name || "").trim();
+}
+
+function isFixtureResult(f: Fixture, today: string): boolean {
+  return f.match_ended || f.match_date < today;
+}
+
 /** Join key to `public.fixtures` (ESPN) — only the stored `match_no` column, never parsed from titles. */
 function espnMatchNo(f: { match_no?: number | null }): number | null {
   const n = Number(f?.match_no);
@@ -224,14 +237,9 @@ const SHEET_GAME_SLOTS = 17;
 // ─── Constants ───
 const TEAM_COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899", "#ef4444", "#06b6d4", "#f97316"];
 
-/** Map DB `players.role` into chart buckets (pie used strict equality and missed most rows). */
-function normalizePlayerRoleForChart(role: string | null | undefined): string {
-  const r = String(role ?? "").toLowerCase();
-  if (r.includes("wk") || r.includes("wicket") || r.includes("keeper")) return "WK";
-  if (r.includes("bowl")) return "Bowler";
-  if (r.includes("all")) return "All-Rounder";
-  if (r.includes("bat")) return "Batter";
-  return "Other";
+function cleanRoleLabel(role: string | null | undefined): string {
+  const s = String(role ?? "").trim();
+  return s ? s : "Unknown";
 }
 
 function fmtHaulTier(n: number): string {
@@ -312,7 +320,9 @@ export default function ScoreboardPage() {
   const [fixturePointsSyncedByMatchNo, setFixturePointsSyncedByMatchNo] = useState<Record<number, boolean>>({});
 
   const [fixtures, setFixtures] = useState<Fixture[]>([]);
-  const [fixtureFilter, setFixtureFilter] = useState<"all" | "upcoming" | "completed">("all");
+  /** Fixtures sub-tab: scheduled vs finished (aligned with /fixtures page). */
+  const [fixtureListView, setFixtureListView] = useState<"scheduled" | "results">("scheduled");
+  const [fixtureTeamFilter, setFixtureTeamFilter] = useState<string | null>(null);
 
   const [subLoading, setSubLoading] = useState(false);
   const [tabLoading, setTabLoading] = useState(false);
@@ -1236,11 +1246,38 @@ export default function ScoreboardPage() {
     setSaving(false);
   };
 
-  const filteredFixtures = useMemo(() => {
-    if (fixtureFilter === "upcoming") return fixtures.filter(f => f.match_date >= today);
-    if (fixtureFilter === "completed") return fixtures.filter(f => f.match_ended || f.match_date < today);
-    return fixtures;
-  }, [fixtures, fixtureFilter, today]);
+  const fixtureTeamOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const f of fixtures) {
+      const a = teamDisplayLabel(f, 1);
+      const b = teamDisplayLabel(f, 2);
+      if (a) set.add(a);
+      if (b) set.add(b);
+    }
+    return Array.from(set).sort((x, y) => x.localeCompare(y));
+  }, [fixtures]);
+
+  const fixturesForTeam = useMemo(() => {
+    if (!fixtureTeamFilter) return fixtures;
+    return fixtures.filter(
+      (f) => teamDisplayLabel(f, 1) === fixtureTeamFilter || teamDisplayLabel(f, 2) === fixtureTeamFilter
+    );
+  }, [fixtures, fixtureTeamFilter]);
+
+  const scheduledFixturesTab = useMemo(
+    () => fixturesForTeam.filter((f) => !isFixtureResult(f, today)),
+    [fixturesForTeam, today]
+  );
+
+  const resultFixturesTab = useMemo(
+    () => fixturesForTeam.filter((f) => isFixtureResult(f, today)),
+    [fixturesForTeam, today]
+  );
+
+  const filteredFixtures = useMemo(
+    () => (fixtureListView === "scheduled" ? scheduledFixturesTab : resultFixturesTab),
+    [fixtureListView, scheduledFixturesTab, resultFixturesTab]
+  );
 
   const groupedFixtures = useMemo(() => {
     const map = new Map<string, Fixture[]>();
@@ -1274,19 +1311,33 @@ export default function ScoreboardPage() {
     gamesToShow = Math.min(SHEET_GAME_SLOTS, Math.max(1, gamesToShow));
 
     const marginalPerGame: Record<string, string | number>[] = [];
+    const cumulativePerGame: Record<string, string | number>[] = [];
+    const running = new Map<string, number>();
     for (let s = 1; s <= gamesToShow; s++) {
       const row: Record<string, string | number> = { game: `G${s}` };
+      const cumRow: Record<string, string | number> = { game: `G${s}` };
       for (const team of standings) {
         let colSum = 0;
         for (const tp of squadForTeam(team)) {
           colSum += getFranchiseSheetPoints(tp.id, tp.team, s, team.id);
         }
-        row[team.team_name] = Math.round(colSum * 100) / 100;
+        const teamName = String(team.team_name ?? "");
+        const rounded = Math.round(colSum * 100) / 100;
+        row[teamName] = rounded;
+        running.set(teamName, (running.get(teamName) || 0) + rounded);
+        cumRow[teamName] = Math.round((running.get(teamName) || 0) * 100) / 100;
       }
       marginalPerGame.push(row);
+      cumulativePerGame.push(cumRow);
     }
 
-    return { gamesToShow, marginalPerGame };
+    const baseline: Record<string, string | number> = { game: "0" };
+    for (const team of standings) {
+      baseline[String(team.team_name ?? "")] = 0;
+    }
+    const cumulativeWithStart = [baseline, ...cumulativePerGame];
+
+    return { gamesToShow, marginalPerGame, cumulativePerGame: cumulativeWithStart };
   }, [standings, allPlayers, getFranchiseSheetPoints]);
 
   const squadPointsBreakdown = useMemo(() => {
@@ -1307,7 +1358,7 @@ export default function ScoreboardPage() {
       return {
         name: String(p.player_name ?? ""),
         points: pts,
-        role: normalizePlayerRoleForChart(p.role),
+        role: cleanRoleLabel(p.role),
       };
     });
     withPts.sort((a, b) => b.points - a.points);
@@ -1319,12 +1370,11 @@ export default function ScoreboardPage() {
     for (const p of withPts) {
       roleBuckets.set(p.role, (roleBuckets.get(p.role) || 0) + p.points);
     }
-    const roles = (["Batter", "Bowler", "All-Rounder", "WK", "Other"] as const)
-      .map((name) => ({
-        name,
-        value: Math.round((roleBuckets.get(name) || 0) * 10) / 10,
-      }))
-      .filter((x) => x.value > 0);
+    const roles = [...roleBuckets.entries()]
+      .map(([name, value]) => ({ name, value: Math.round((value || 0) * 10) / 10 }))
+      .filter((x) => x.value > 0)
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 10);
     return { contributors, roles };
   }, [analyticsTeamId, franchises, standings, allPlayers, standingsFranchiseChart.gamesToShow, getFranchiseSheetPoints]);
 
@@ -1369,7 +1419,7 @@ export default function ScoreboardPage() {
             <>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div className="bg-white rounded-[2rem] p-6 border shadow-sm min-h-[20rem] flex flex-col">
-                      <h3 className="text-sm font-black uppercase italic">Points per gameweek</h3>
+                      <h3 className="text-sm font-black uppercase italic">Points per game</h3>
                       <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wide mb-3 leading-snug">
                         Grouped bars = each franchise’s total for that sheet column (G1, G2, …). Uses the same rules as the
                         score sheet (Icon, Captain/Vice, booster days). Only G1–G{standingsFranchiseChart.gamesToShow} are shown — trailing empty
@@ -1409,6 +1459,55 @@ export default function ScoreboardPage() {
                         ) : (
                           <div className="flex h-full min-h-[180px] items-center justify-center text-[10px] font-bold uppercase text-slate-400">
                             No standings data yet
+                          </div>
+                        )}
+                      </div>
+                      <div className="mt-4 min-h-[180px] w-full min-w-0">
+                        <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wide mb-2 leading-snug">
+                          Cumulative total
+                        </p>
+                        {standings.length && standingsFranchiseChart.cumulativePerGame.length ? (
+                          <ResponsiveContainer width="100%" height={180}>
+                            <LineChartRecharts
+                              data={standingsFranchiseChart.cumulativePerGame}
+                              margin={{ top: 8, right: 8, left: 0, bottom: 0 }}
+                            >
+                              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+                              <XAxis
+                                dataKey="game"
+                                tick={{ fontSize: 10, fontWeight: 700 }}
+                                type="category"
+                              />
+                              <YAxis
+                                domain={[0, "auto"]}
+                                tick={{ fontSize: 10, fontWeight: 700 }}
+                                width={36}
+                              />
+                              <Tooltip
+                                formatter={formatRechartsTooltipPoints}
+                                contentStyle={{
+                                  borderRadius: 12,
+                                  border: "none",
+                                  boxShadow: "0 5px 15px rgba(0,0,0,0.1)",
+                                }}
+                              />
+                              <Legend wrapperStyle={{ fontSize: 10 }} />
+                              {standings.map((t, i) => (
+                                <Line
+                                  key={t.id}
+                                  type="monotone"
+                                  dataKey={t.team_name}
+                                  stroke={TEAM_COLORS[i % TEAM_COLORS.length]}
+                                  strokeWidth={2}
+                                  dot={false}
+                                  name={t.team_name}
+                                />
+                              ))}
+                            </LineChartRecharts>
+                          </ResponsiveContainer>
+                        ) : (
+                          <div className="flex h-[180px] items-center justify-center text-[10px] font-bold uppercase text-slate-400">
+                            No cumulative totals yet
                           </div>
                         )}
                       </div>
@@ -1453,7 +1552,7 @@ export default function ScoreboardPage() {
                             Top contributors
                           </p>
                           {squadPointsBreakdown.contributors.length ? (
-                            <ResponsiveContainer width="100%" height={200}>
+                            <ResponsiveContainer width="100%" height={240}>
                               <BarChartRecharts
                                 layout="vertical"
                                 data={squadPointsBreakdown.contributors}
@@ -1468,9 +1567,10 @@ export default function ScoreboardPage() {
                                 <YAxis
                                   type="category"
                                   dataKey="name"
-                                  width={92}
+                                  width={96}
                                   stroke="#64748b"
                                   tick={{ fill: "#cbd5e1", fontSize: 8 }}
+                                  interval={0}
                                 />
                                 <Tooltip
                                   formatter={formatRechartsTooltipPoints}
@@ -1485,15 +1585,13 @@ export default function ScoreboardPage() {
                               </BarChartRecharts>
                             </ResponsiveContainer>
                           ) : (
-                            <div className="flex h-[200px] items-center justify-center text-[9px] font-bold uppercase text-slate-500">
+                            <div className="flex h-[240px] items-center justify-center text-[9px] font-bold uppercase text-slate-500">
                               No points yet
                             </div>
                           )}
                         </div>
                         <div className="min-h-[160px] w-full min-w-0">
-                          <p className="text-[8px] font-black uppercase tracking-widest text-slate-500 mb-1">
-                            By role (normalized)
-                          </p>
+                          <p className="text-[8px] font-black uppercase tracking-widest text-slate-500 mb-1">By role</p>
                           {squadPointsBreakdown.roles.length ? (
                             <ResponsiveContainer width="100%" height={200}>
                               <BarChartRecharts
@@ -1624,14 +1722,89 @@ export default function ScoreboardPage() {
                   </div>
                 ))}
               </div>
-            ) : null}
-            {!tabLoading && groupedFixtures.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-24 bg-white rounded-[2rem] border border-slate-200 shadow-sm">
-                <Calendar className="h-10 w-10 text-slate-200 mb-3" />
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">No fixtures found</p>
-              </div>
-            ) : null}
-             {groupedFixtures.map(([date, matches]) => (
+            ) : (
+              <>
+                <div className="flex flex-col gap-4 rounded-[2rem] border border-slate-200 bg-white p-4 sm:p-5 shadow-sm">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
+                    <div className="flex items-center gap-2 text-slate-500 shrink-0">
+                      <Users className="h-4 w-4" aria-hidden />
+                      <span className="text-[10px] font-black uppercase tracking-widest">Team</span>
+                    </div>
+                    <select
+                      value={fixtureTeamFilter ?? ""}
+                      onChange={(e) => setFixtureTeamFilter(e.target.value ? e.target.value : null)}
+                      className={cn(
+                        "w-full sm:max-w-md min-h-[44px] touch-manipulation rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5 text-sm font-bold text-slate-900",
+                        "focus:outline-none focus:ring-2 focus:ring-slate-900/15 focus:border-slate-400"
+                      )}
+                      aria-label="Filter fixtures by team"
+                    >
+                      <option value="">All teams</option>
+                      {fixtureTeamOptions.map((t) => (
+                        <option key={t} value={t}>
+                          {t}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setFixtureListView("scheduled")}
+                      className={cn(
+                        "touch-manipulation px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
+                        fixtureListView === "scheduled"
+                          ? "bg-slate-900 text-white shadow-lg"
+                          : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+                      )}
+                    >
+                      Scheduled
+                      <span
+                        className={cn(
+                          "ml-2 text-[9px] px-1.5 py-0.5 rounded-md font-black",
+                          fixtureListView === "scheduled" ? "bg-white/20" : "bg-slate-200"
+                        )}
+                      >
+                        {scheduledFixturesTab.length}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFixtureListView("results")}
+                      className={cn(
+                        "touch-manipulation px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
+                        fixtureListView === "results"
+                          ? "bg-slate-900 text-white shadow-lg"
+                          : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+                      )}
+                    >
+                      Results
+                      <span
+                        className={cn(
+                          "ml-2 text-[9px] px-1.5 py-0.5 rounded-md font-black",
+                          fixtureListView === "results" ? "bg-white/20" : "bg-slate-200"
+                        )}
+                      >
+                        {resultFixturesTab.length}
+                      </span>
+                    </button>
+                  </div>
+                </div>
+
+                {groupedFixtures.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center gap-2 py-24 bg-white rounded-[2rem] border border-slate-200 shadow-sm px-4">
+                    <Calendar className="h-10 w-10 text-slate-200 shrink-0" />
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">
+                      {fixtureListView === "scheduled" ? "No scheduled matches" : "No results yet"}
+                    </p>
+                    {fixtureTeamFilter ? (
+                      <p className="text-xs font-bold text-slate-400 text-center max-w-sm">
+                        Try &quot;All teams&quot; or switch between Scheduled and Results.
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+                {groupedFixtures.map(([date, matches]) => (
                 <div key={date} className="space-y-3">
                    <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-2">{formatDate(date)}</div>
                    {matches.map(match => {
@@ -1744,9 +1917,12 @@ export default function ScoreboardPage() {
                          </div>
                       </div>
                       </div>
-                   )})}
+                   );
+                   })}
                 </div>
              ))}
+              </>
+            )}
           {fixtureModal && (
             <div className="fixed inset-0 z-[100] flex items-stretch sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-300">
               <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={closeFixtureModal} />

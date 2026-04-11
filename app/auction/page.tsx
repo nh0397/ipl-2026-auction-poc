@@ -29,6 +29,9 @@ function roundCr(n: number): number {
   return Number((Number(n) || 0).toFixed(2));
 }
 
+/** Lowest possible base price (for purse reservation when filling remaining squad slots). */
+const MIN_PLAYER_BASE_PRICE_CR = 0.25;
+
 export default function AuctionPage() {
   const { user, profile, isLoading: authLoading } = useAuth();
   const role = profile?.role;
@@ -481,8 +484,61 @@ export default function AuctionPage() {
     // Capture values before any updates
     const buyerId = auctionState.current_bidder_id;
     const buyerName = auctionState.current_bidder_name;
-    const salePrice = auctionState.current_bid;
+    const salePrice = roundCr(auctionState.current_bid);
     const playerId = currentPlayer.id;
+
+    // Enforce roster + purse constraints at the moment of signing (source of truth).
+    try {
+      const maxPlayersCfg = auctionConfig?.max_players || 28;
+      const budgetCfg = auctionConfig?.budget_per_team || 150;
+
+      const { data: buyerRoster, error: rosterErr } = await supabase
+        .from("players")
+        .select("sold_price, auction_status, sold_to_id")
+        .eq("sold_to_id", buyerId)
+        .eq("auction_status", "sold");
+
+      if (rosterErr) {
+        alert(`Could not validate buyer roster: ${rosterErr.message}`);
+        return;
+      }
+
+      const boughtCount = buyerRoster?.length || 0;
+      if (boughtCount >= maxPlayersCfg) {
+        alert(`Cannot sign: this franchise already has ${boughtCount}/${maxPlayersCfg} players.`);
+        return;
+      }
+
+      const spent = roundCr(
+        (buyerRoster || []).reduce((sum, p: any) => {
+          const priceValue =
+            typeof p.sold_price === "string"
+              ? parseFloat(p.sold_price.replace(/[^\d.]/g, ""))
+              : Number(p.sold_price || 0);
+          return sum + (isNaN(priceValue) ? 0 : priceValue);
+        }, 0)
+      );
+
+      const purseBefore = roundCr(budgetCfg - spent);
+      const purseAfter = roundCr(purseBefore - salePrice);
+      if (purseAfter < 0) {
+        alert(
+          `Cannot sign: purse would go negative (${purseAfter.toFixed(2)} Cr).`
+        );
+        return;
+      }
+
+      const slotsAfter = Math.max(0, maxPlayersCfg - (boughtCount + 1));
+      const minReserve = roundCr(slotsAfter * MIN_PLAYER_BASE_PRICE_CR);
+      if (purseAfter < minReserve) {
+        alert(
+          `Cannot sign: you must reserve at least ${minReserve.toFixed(2)} Cr for the remaining ${slotsAfter} player(s) (min ${MIN_PLAYER_BASE_PRICE_CR.toFixed(2)} Cr each).`
+        );
+        return;
+      }
+    } finally {
+      // no-op; keeps structure consistent with early returns above
+    }
 
     // Update player record (base_pool = pool before sale so admin/registry can release back)
     await supabase.from("players").update({
@@ -651,6 +707,13 @@ export default function AuctionPage() {
 
     const budget = auctionConfig?.budget_per_team || 150;
     const remainingPurse = budget - totalSpent;
+    const maxPlayersCfg = auctionConfig?.max_players || 28;
+    const slotsRemaining = Math.max(0, maxPlayersCfg - mySquad.length);
+    if (slotsRemaining <= 0) {
+      alert(`Squad full: you already have ${mySquad.length}/${maxPlayersCfg} players.`);
+      setActionLoading(false);
+      return;
+    }
 
     const maxQuickAttempts = 2;
 
@@ -689,6 +752,17 @@ export default function AuctionPage() {
 
         if (amount > remainingPurse) {
           alert(`Insufficient purse! You have ${remainingPurse.toFixed(2)} Cr left.`);
+          break;
+        }
+
+        // Reserve purse so the team can still fill remaining slots at minimum base price.
+        const slotsAfterWin = Math.max(0, slotsRemaining - 1);
+        const minReserve = roundCr(slotsAfterWin * MIN_PLAYER_BASE_PRICE_CR);
+        const purseAfterWin = roundCr(remainingPurse - amount);
+        if (purseAfterWin < minReserve) {
+          alert(
+            `You must keep at least ${minReserve.toFixed(2)} Cr reserved for the remaining ${slotsAfterWin} player(s) (min ${MIN_PLAYER_BASE_PRICE_CR.toFixed(2)} Cr each).`
+          );
           break;
         }
 

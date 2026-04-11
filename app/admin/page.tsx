@@ -27,9 +27,10 @@ export default function AdminDashboard() {
 
   // Override States
   const [allPlayers, setAllPlayers] = useState<any[]>([]);
-  const [overrideMode, setOverrideMode] = useState<"reallocate" | "direct" | "release">("reallocate");
+  const [overrideMode, setOverrideMode] = useState<"reallocate" | "direct" | "release" | "replace">("reallocate");
   const [sourceTeamId, setSourceTeamId] = useState<string>("");
   const [selectedOverridePlayer, setSelectedOverridePlayer] = useState<string>("");
+  const [replacementPlayerId, setReplacementPlayerId] = useState<string>("");
   const [overrideBuyer, setOverrideBuyer] = useState<string>("");
   const [overridePrice, setOverridePrice] = useState<string>("");
   const [overrideLoading, setOverrideLoading] = useState(false);
@@ -226,6 +227,118 @@ export default function AdminDashboard() {
     }
   };
 
+  // Replacement mode: default price = outgoing sold price; target team = source team.
+  useEffect(() => {
+    if (overrideMode !== "replace") return;
+    setOverrideBuyer(sourceTeamId || "");
+  }, [overrideMode, sourceTeamId]);
+
+  useEffect(() => {
+    if (overrideMode !== "replace") return;
+    const outPlayer = allPlayers.find(p => p.id === selectedOverridePlayer);
+    const parsed =
+      typeof outPlayer?.sold_price === "string"
+        ? parseFloat(outPlayer.sold_price.replace(/[^\d.]/g, ""))
+        : Number(outPlayer?.sold_price || 0);
+    if (outPlayer && !Number.isNaN(parsed) && parsed > 0) {
+      setOverridePrice(parsed.toFixed(2));
+    }
+  }, [overrideMode, selectedOverridePlayer, allPlayers]);
+
+  const executeReplace = async () => {
+    if (!sourceTeamId || !selectedOverridePlayer || !replacementPlayerId) return;
+
+    const outPlayer = allPlayers.find(p => p.id === selectedOverridePlayer);
+    const inPlayer = allPlayers.find(p => p.id === replacementPlayerId);
+    const team = users.find(u => u.id === sourceTeamId);
+    if (!outPlayer || !inPlayer || !team) return;
+
+    const price =
+      overridePrice && !Number.isNaN(parseFloat(overridePrice))
+        ? parseFloat(overridePrice)
+        : (typeof outPlayer.sold_price === "string"
+            ? parseFloat(outPlayer.sold_price.replace(/[^\d.]/g, ""))
+            : Number(outPlayer.sold_price || 0));
+
+    if (!price || Number.isNaN(price)) return alert("Invalid price");
+
+    if (outPlayer.sold_to_id !== sourceTeamId || outPlayer.auction_status !== "sold") {
+      return alert("Outgoing player must be SOLD and belong to the selected team.");
+    }
+
+    if (inPlayer.auction_status === "sold") {
+      return alert("Replacement player is already SOLD.");
+    }
+
+    if (!confirm(`Replace ${outPlayer.player_name} with ${inPlayer.player_name} for ${team.team_name || team.full_name} at ${price.toFixed(2)} Cr?`)) {
+      return;
+    }
+
+    setOverrideLoading(true);
+
+    // 1) Release outgoing player back to a pool (prefer base_pool if present; otherwise keep their pool).
+    const outPool = outPlayer.base_pool || outPlayer.pool || "Unsold";
+    const { error: outErr } = await supabase
+      .from("players")
+      .update({
+        status: "Available",
+        auction_status: "pending",
+        sold_to: null,
+        sold_to_id: null,
+        sold_price: null,
+        pool: outPool,
+      })
+      .eq("id", outPlayer.id);
+    if (outErr) {
+      setOverrideLoading(false);
+      return alert(`Failed to release outgoing player: ${outErr.message}`);
+    }
+
+    // 2) Assign replacement player to the same team at the outgoing price.
+    const stampBasePool = inPlayer.base_pool || inPlayer.pool || null;
+    const { error: inErr } = await supabase
+      .from("players")
+      .update({
+        status: "Sold",
+        auction_status: "sold",
+        sold_to_id: sourceTeamId,
+        sold_to: team.team_name || team.full_name,
+        sold_price: `${price.toFixed(2)} Cr`,
+        base_pool: stampBasePool,
+      })
+      .eq("id", inPlayer.id);
+    if (inErr) {
+      setOverrideLoading(false);
+      return alert(`Failed to assign replacement player: ${inErr.message}`);
+    }
+
+    // 3) Audit log
+    await supabase.from("audit_logs").insert({
+      admin_id: currentUser.id,
+      admin_name: "Admin Override",
+      action_type: "REPLACE_PLAYER",
+      details: {
+        team_id: sourceTeamId,
+        team_name: team.team_name || team.full_name,
+        out_player_id: outPlayer.id,
+        out_player_name: outPlayer.player_name,
+        in_player_id: inPlayer.id,
+        in_player_name: inPlayer.player_name,
+        price,
+      },
+    });
+
+    alert("Replacement completed.");
+    setSelectedOverridePlayer("");
+    setReplacementPlayerId("");
+    setOverridePrice("");
+    setSourceTeamId("");
+    setOverrideBuyer("");
+    fetchUsers();
+    fetchPlayers();
+    setOverrideLoading(false);
+  };
+
   const executeOverride = async () => {
     if (!selectedOverridePlayer || !overrideBuyer || !overridePrice) return;
     const newPrice = parseFloat(overridePrice);
@@ -295,13 +408,15 @@ export default function AdminDashboard() {
       }).eq("id", newBuyer.id);
     }
 
-    // 3. Update player record
+    // 3. Update player record (stamp base_pool on first sale for release-back)
+    const stampBasePool = player.base_pool || player.pool || null;
     await supabase.from("players").update({
       status: "Sold",
       auction_status: "sold",
       sold_to_id: newBuyer.id,
       sold_to: newBuyer.team_name || newBuyer.full_name,
       sold_price: `${newPrice.toFixed(2)} Cr`,
+      base_pool: stampBasePool,
     }).eq("id", player.id);
 
     // 4. Update Auction State if this player is currently live
@@ -724,12 +839,13 @@ export default function AdminDashboard() {
 
               {/* Mode Toggle */}
               <div className="flex bg-slate-800 p-1 rounded-xl">
-                {["reallocate", "direct", "release"].map((mode) => (
+                {["reallocate", "direct", "replace", "release"].map((mode) => (
                   <button 
                     key={mode}
                     onClick={() => {
                       setOverrideMode(mode as any);
                       setSelectedOverridePlayer("");
+                      setReplacementPlayerId("");
                       setSourceTeamId("");
                       setOverrideBuyer("");
                       setOverridePrice("");
@@ -739,7 +855,13 @@ export default function AdminDashboard() {
                       overrideMode === mode ? "bg-amber-500 text-white" : "text-slate-400 hover:text-white"
                     )}
                   >
-                    {mode === "reallocate" ? "Re-allocate" : mode === "direct" ? "Direct Assign" : "Release to Pool"}
+                    {mode === "reallocate"
+                      ? "Re-allocate"
+                      : mode === "direct"
+                        ? "Direct Assign"
+                        : mode === "replace"
+                          ? "Replace Player"
+                          : "Release to Pool"}
                   </button>
                 ))}
               </div>
@@ -752,14 +874,15 @@ export default function AdminDashboard() {
               {/* Step 1: Select Source (Conditional) */}
               <div className="space-y-3">
                 <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">
-                  {overrideMode === "reallocate" || overrideMode === "release" ? "1. From Team" : "1. Focus Pool"}
+                  {overrideMode === "reallocate" || overrideMode === "release" || overrideMode === "replace" ? "1. From Team" : "1. Focus Pool"}
                 </label>
-                {overrideMode === "reallocate" || overrideMode === "release" ? (
+                {overrideMode === "reallocate" || overrideMode === "release" || overrideMode === "replace" ? (
                   <select 
                     value={sourceTeamId}
                     onChange={(e) => {
                       setSourceTeamId(e.target.value);
                       setSelectedOverridePlayer("");
+                      setReplacementPlayerId("");
                     }}
                     className="w-full h-14 bg-slate-50 border border-slate-200 rounded-2xl px-5 font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 transition-all cursor-pointer"
                   >
@@ -791,13 +914,14 @@ export default function AdminDashboard() {
                 <select 
                   value={selectedOverridePlayer}
                   onChange={(e) => setSelectedOverridePlayer(e.target.value)}
-                  disabled={(overrideMode === "reallocate" || overrideMode === "release") && !sourceTeamId}
+                  disabled={(overrideMode === "reallocate" || overrideMode === "release" || overrideMode === "replace") && !sourceTeamId}
                   className="w-full h-14 bg-slate-50 border border-slate-200 rounded-2xl px-5 font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 transition-all disabled:opacity-30 cursor-pointer"
                 >
                   <option value="">Choose Player...</option>
                   {allPlayers
                     .filter(p => {
                       if (overrideMode === "reallocate" || overrideMode === "release") return p.sold_to_id === sourceTeamId;
+                      if (overrideMode === "replace") return p.sold_to_id === sourceTeamId && p.auction_status === "sold";
                       // Direct assign filters by pool if chosen
                       if (playerSearch) return p.pool === playerSearch && p.auction_status !== "sold";
                       return p.auction_status !== "sold";
@@ -810,21 +934,42 @@ export default function AdminDashboard() {
               </div>
 
               {/* Step 3: Select Destination */}
-              <div className={cn("space-y-3", overrideMode === "release" && "opacity-20 pointer-events-none")}>
-                <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">3. Target Team</label>
-                <select 
-                  value={overrideBuyer}
-                  onChange={(e) => setOverrideBuyer(e.target.value)}
-                  className="w-full h-14 bg-slate-50 border border-slate-200 rounded-2xl px-5 font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 transition-all cursor-pointer"
-                >
-                  <option value="">Select Team...</option>
-                  {users.filter(u => u.role !== "Viewer").map(u => (
-                    <option key={u.id} value={u.id}>
-                      {u.team_name || u.full_name} ({u.budget} Cr left)
-                    </option>
-                  ))}
-                </select>
-              </div>
+              {overrideMode === "replace" ? (
+                <div className="space-y-3">
+                  <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">3. Replacement Player</label>
+                  <select
+                    value={replacementPlayerId}
+                    onChange={(e) => setReplacementPlayerId(e.target.value)}
+                    disabled={!selectedOverridePlayer}
+                    className="w-full h-14 bg-slate-50 border border-slate-200 rounded-2xl px-5 font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 transition-all disabled:opacity-30 cursor-pointer"
+                  >
+                    <option value="">Choose replacement...</option>
+                    {allPlayers
+                      .filter(p => p.id !== selectedOverridePlayer && p.auction_status !== "sold")
+                      .map(p => (
+                        <option key={p.id} value={p.id}>
+                          {p.player_name} ({p.pool || "—"} · {p.auction_status})
+                        </option>
+                      ))}
+                  </select>
+                </div>
+              ) : (
+                <div className={cn("space-y-3", overrideMode === "release" && "opacity-20 pointer-events-none")}>
+                  <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">3. Target Team</label>
+                  <select 
+                    value={overrideBuyer}
+                    onChange={(e) => setOverrideBuyer(e.target.value)}
+                    className="w-full h-14 bg-slate-50 border border-slate-200 rounded-2xl px-5 font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 transition-all cursor-pointer"
+                  >
+                    <option value="">Select Team...</option>
+                    {users.filter(u => u.role !== "Viewer").map(u => (
+                      <option key={u.id} value={u.id}>
+                        {u.team_name || u.full_name} ({u.budget} Cr left)
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               {/* Step 4: Final Price */}
               <div className={cn("space-y-3", overrideMode === "release" && "opacity-20 pointer-events-none")}>
@@ -883,15 +1028,21 @@ export default function AdminDashboard() {
                  )}
               </div>
               <Button 
-                onClick={overrideMode === "release" ? executeRelease : executeOverride} 
-                disabled={overrideLoading || !selectedOverridePlayer || (overrideMode !== "release" && (!overrideBuyer || !overridePrice))} 
+                onClick={overrideMode === "release" ? executeRelease : overrideMode === "replace" ? executeReplace : executeOverride} 
+                disabled={
+                  overrideLoading ||
+                  !selectedOverridePlayer ||
+                  (overrideMode === "replace"
+                    ? (!sourceTeamId || !replacementPlayerId)
+                    : (overrideMode !== "release" && (!overrideBuyer || !overridePrice)))
+                } 
                 className={cn(
                   "font-black uppercase tracking-widest rounded-2xl h-14 px-10 shadow-xl shadow-slate-200 active:scale-95 transition-all",
                   overrideMode === "release" ? "bg-orange-600 hover:bg-orange-700 text-white" : "bg-slate-900 hover:bg-black text-white"
                 )}
               >
                 {overrideLoading ? <RefreshCw className="h-5 w-5 animate-spin mr-3" /> : (overrideMode === "release" ? <LogOut className="h-5 w-5 mr-3" /> : <Save className="h-5 w-5 mr-3" />)}
-                {overrideMode === "release" ? "Release to Pool" : "Process Allocation"}
+                {overrideMode === "release" ? "Release to Pool" : overrideMode === "replace" ? "Replace Player" : "Process Allocation"}
               </Button>
             </div>
           </CardContent>

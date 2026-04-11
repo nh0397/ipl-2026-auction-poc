@@ -12,6 +12,7 @@ import {
   Zap,
   Radio,
   Database,
+  Users,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SHOW_CRICAPI_FIXTURE_UI, SHEET_MATCH_POINTS_TABLE } from "@/lib/featureFlags";
@@ -83,6 +84,17 @@ function cleanShort(short: string | null): string {
   return short.endsWith("W") && short.length > 2 ? short.slice(0, -1) : short;
 }
 
+/** Same label as team rows on cards — used for filter options and matching. */
+function teamDisplayLabel(f: Fixture, side: 1 | 2): string {
+  const short = side === 1 ? f.team1_short : f.team2_short;
+  const name = side === 1 ? f.team1_name : f.team2_name;
+  return (cleanShort(short) || name || "").trim();
+}
+
+function isFixtureResult(f: Fixture, today: string): boolean {
+  return f.match_ended || f.match_date < today;
+}
+
 function deriveMatchNo(f: any): number | null {
   const n = Number(f?.match_no);
   if (Number.isFinite(n) && n > 0) return n;
@@ -112,7 +124,10 @@ function normFantasyLookupKeyPart(s: string | null | undefined) {
 export default function FixturesPage() {
   const [fixtures, setFixtures] = useState<Fixture[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<"all" | "upcoming" | "completed">("all");
+  /** Scheduled = not yet a result; Results = finished or past date (same as match cards). */
+  const [listView, setListView] = useState<"scheduled" | "results">("scheduled");
+  /** Filter to fixtures involving this team (display label); null = all teams. */
+  const [teamFilter, setTeamFilter] = useState<string | null>(null);
   /** Modal: which data source + which CricAPI fixture row. */
   const [modal, setModal] = useState<{ source: "espn" | "cricapi"; fixture: Fixture } | null>(null);
   const [modalTab, setModalTab] = useState<"scorecard" | "fantasy">("scorecard");
@@ -339,11 +354,35 @@ export default function FixturesPage() {
     [modal, modalCricapiFantasyById, modalEspnFantasyByNameTeam]
   );
 
-  const filtered = useMemo(() => {
-    if (filter === "upcoming") return fixtures.filter(f => f.match_date >= today);
-    if (filter === "completed") return fixtures.filter(f => f.match_ended || f.match_date < today);
-    return fixtures;
-  }, [fixtures, filter, today]);
+  const teamOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const f of fixtures) {
+      const a = teamDisplayLabel(f, 1);
+      const b = teamDisplayLabel(f, 2);
+      if (a) set.add(a);
+      if (b) set.add(b);
+    }
+    return Array.from(set).sort((x, y) => x.localeCompare(y));
+  }, [fixtures]);
+
+  const fixturesForTeam = useMemo(() => {
+    if (!teamFilter) return fixtures;
+    return fixtures.filter((f) => {
+      return teamDisplayLabel(f, 1) === teamFilter || teamDisplayLabel(f, 2) === teamFilter;
+    });
+  }, [fixtures, teamFilter]);
+
+  const scheduledFixtures = useMemo(
+    () => fixturesForTeam.filter((f) => !isFixtureResult(f, today)),
+    [fixturesForTeam, today]
+  );
+
+  const resultFixtures = useMemo(
+    () => fixturesForTeam.filter((f) => isFixtureResult(f, today)),
+    [fixturesForTeam, today]
+  );
+
+  const filtered = listView === "scheduled" ? scheduledFixtures : resultFixtures;
 
   // Group by date
   const grouped = useMemo(() => {
@@ -356,15 +395,15 @@ export default function FixturesPage() {
     return Array.from(map.entries());
   }, [filtered]);
 
-  // Scroll to today on load
+  // Scroll to today on load (scheduled list — where “today” matters most)
   useEffect(() => {
-    if (!loading) {
+    if (!loading && listView === "scheduled") {
       setTimeout(() => {
         const el = document.getElementById(`date-${today}`);
         if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
       }, 300);
     }
-  }, [loading, today]);
+  }, [loading, listView, today]);
 
   if (loading) {
     return (
@@ -391,9 +430,8 @@ export default function FixturesPage() {
     );
   }
 
-  const totalMatches = fixtures.length;
-  const completedCount = fixtures.filter(f => f.match_ended || f.match_date < today).length;
-  const todayMatches = fixtures.filter(f => f.match_date === today);
+  const totalMatches = fixturesForTeam.length;
+  const completedCount = fixturesForTeam.filter((f) => isFixtureResult(f, today)).length;
 
   return (
     <div className="min-h-screen min-w-0 bg-slate-50">
@@ -422,29 +460,57 @@ export default function FixturesPage() {
             />
           </div>
 
-          {/* Filter tabs — scroll on narrow screens */}
+          {/* Team filter */}
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3 mb-4">
+            <div className="flex items-center gap-2 text-slate-500 shrink-0">
+              <Users className="h-4 w-4" aria-hidden />
+              <span className="text-[10px] font-black uppercase tracking-widest">Team</span>
+            </div>
+            <select
+              value={teamFilter ?? ""}
+              onChange={(e) => {
+                const v = e.target.value;
+                setTeamFilter(v ? v : null);
+              }}
+              className={cn(
+                "w-full sm:max-w-xs min-h-[44px] touch-manipulation rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold text-slate-800 shadow-sm",
+                "focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+              )}
+              aria-label="Filter by team name"
+            >
+              <option value="">All teams</option>
+              {teamOptions.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Scheduled vs Results */}
           <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1 sm:overflow-visible sm:pb-0 sm:mx-0 sm:px-0">
             {([
-              { key: "all", label: "All Matches", count: totalMatches },
-              { key: "upcoming", label: "Upcoming", count: totalMatches - completedCount },
-              { key: "completed", label: "Completed", count: completedCount },
-            ] as const).map(tab => (
+              { key: "scheduled" as const, label: "Scheduled", count: scheduledFixtures.length },
+              { key: "results" as const, label: "Results", count: resultFixtures.length },
+            ]).map((tab) => (
               <button
                 key={tab.key}
                 type="button"
-                onClick={() => setFilter(tab.key)}
+                onClick={() => setListView(tab.key)}
                 className={cn(
                   "shrink-0 touch-manipulation px-3 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all",
-                  filter === tab.key
+                  listView === tab.key
                     ? "bg-slate-900 text-white shadow-lg"
                     : "bg-slate-100 text-slate-500 hover:bg-slate-200"
                 )}
               >
                 {tab.label}
-                <span className={cn(
-                  "ml-1.5 text-[10px] px-1.5 py-0.5 rounded-md font-black",
-                  filter === tab.key ? "bg-white/20" : "bg-slate-200"
-                )}>
+                <span
+                  className={cn(
+                    "ml-1.5 text-[10px] px-1.5 py-0.5 rounded-md font-black",
+                    listView === tab.key ? "bg-white/20" : "bg-slate-200"
+                  )}
+                >
                   {tab.count}
                 </span>
               </button>
@@ -498,7 +564,7 @@ export default function FixturesPage() {
               <div className="space-y-3">
                 {matches.map(match => {
                   const isMatchToday = match.match_date === today;
-                  const isCompleted = match.match_ended || match.match_date < today;
+                  const isCompleted = isFixtureResult(match, today);
                   const isLive = match.match_started && !match.match_ended;
 
                   return (
@@ -703,9 +769,16 @@ export default function FixturesPage() {
         })}
 
         {filtered.length === 0 && (
-          <div className="text-center py-16">
+          <div className="text-center py-16 px-2">
             <Calendar className="h-12 w-12 text-slate-200 mx-auto mb-4" />
-            <p className="text-lg font-black text-slate-300 uppercase tracking-tight">No matches found</p>
+            <p className="text-lg font-black text-slate-300 uppercase tracking-tight">
+              {listView === "scheduled" ? "No scheduled matches" : "No results yet"}
+            </p>
+            {teamFilter ? (
+              <p className="mt-2 text-sm font-bold text-slate-400">
+                Try &quot;All teams&quot; or switch between Scheduled and Results.
+              </p>
+            ) : null}
           </div>
         )}
       </div>
