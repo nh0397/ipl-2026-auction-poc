@@ -95,6 +95,16 @@ function isFixtureResult(f: Fixture, today: string): boolean {
   return f.match_ended || f.match_date < today;
 }
 
+/** Results list: latest finish first (uses `date_time_gmt`; falls back to `match_date`). */
+function compareCompletedFixturesByDateTimeDesc(a: Fixture, b: Fixture): number {
+  const ta = Date.parse(a.date_time_gmt || "");
+  const tb = Date.parse(b.date_time_gmt || "");
+  if (Number.isFinite(tb) && Number.isFinite(ta)) return tb - ta;
+  if (Number.isFinite(tb)) return 1;
+  if (Number.isFinite(ta)) return -1;
+  return String(b.match_date || "").localeCompare(String(a.match_date || ""));
+}
+
 function deriveMatchNo(f: any): number | null {
   const n = Number(f?.match_no);
   if (Number.isFinite(n) && n > 0) return n;
@@ -384,16 +394,18 @@ export default function FixturesPage() {
 
   const filtered = listView === "scheduled" ? scheduledFixtures : resultFixtures;
 
-  // Group by date
+  // Group by date (completed matches: newest date/time first)
   const grouped = useMemo(() => {
+    const ordered =
+      listView === "results" ? [...filtered].sort(compareCompletedFixturesByDateTimeDesc) : filtered;
     const map = new Map<string, Fixture[]>();
-    filtered.forEach(f => {
+    ordered.forEach((f) => {
       const key = f.match_date;
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(f);
     });
     return Array.from(map.entries());
-  }, [filtered]);
+  }, [filtered, listView]);
 
   // Scroll to today on load (scheduled list — where “today” matters most)
   useEffect(() => {

@@ -135,6 +135,16 @@ function isFixtureResult(f: Fixture, today: string): boolean {
   return f.match_ended || f.match_date < today;
 }
 
+/** Results tab: latest finish first (`date_time_gmt`; fallback `match_date`). */
+function compareCompletedFixturesByDateTimeDesc(a: Fixture, b: Fixture): number {
+  const ta = Date.parse(a.date_time_gmt || "");
+  const tb = Date.parse(b.date_time_gmt || "");
+  if (Number.isFinite(tb) && Number.isFinite(ta)) return tb - ta;
+  if (Number.isFinite(tb)) return 1;
+  if (Number.isFinite(ta)) return -1;
+  return String(b.match_date || "").localeCompare(String(a.match_date || ""));
+}
+
 /** Join key to `public.fixtures` (ESPN) — only the stored `match_no` column, never parsed from titles. */
 function espnMatchNo(f: { match_no?: number | null }): number | null {
   const n = Number(f?.match_no);
@@ -1280,10 +1290,17 @@ export default function ScoreboardPage() {
   );
 
   const groupedFixtures = useMemo(() => {
+    const ordered =
+      fixtureListView === "results"
+        ? [...filteredFixtures].sort(compareCompletedFixturesByDateTimeDesc)
+        : filteredFixtures;
     const map = new Map<string, Fixture[]>();
-    filteredFixtures.forEach(f => { if (!map.has(f.match_date)) map.set(f.match_date, []); map.get(f.match_date)!.push(f); });
+    ordered.forEach((f) => {
+      if (!map.has(f.match_date)) map.set(f.match_date, []);
+      map.get(f.match_date)!.push(f);
+    });
     return Array.from(map.entries());
-  }, [filteredFixtures]);
+  }, [filteredFixtures, fixtureListView]);
 
   /** Standings charts: franchise-adjusted column totals; X-axis only through last gameweek with any points. */
   const standingsFranchiseChart = useMemo(() => {
