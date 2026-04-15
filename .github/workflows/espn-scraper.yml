@@ -2,8 +2,8 @@ name: ESPNcricinfo Scraper
 
 on:
   schedule:
-    # 00:15 IST daily (18:45 UTC previous calendar day in UTC; IST = UTC+5:30).
-    - cron: "45 18 * * *"
+    - cron: "30 13 * * *"
+      timezone: "America/Chicago"
   workflow_dispatch:
     inputs:
       date_ist:
