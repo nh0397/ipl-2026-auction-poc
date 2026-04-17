@@ -1162,23 +1162,6 @@ async def run(
             log("Browser closed")
 
 
-def parse_utc_dt(v: Any) -> Optional[datetime]:
-    if not v:
-        return None
-    s = str(v).strip()
-    if not s:
-        return None
-    try:
-        if s.endswith("Z"):
-            s = s[:-1] + "+00:00"
-        dt = datetime.fromisoformat(s)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc)
-    except Exception:
-        return None
-
-
 def today_ist_date_str(now_utc: datetime) -> str:
     ist = now_utc.astimezone(timezone(timedelta(hours=5, minutes=30)))
     return ist.strftime("%Y-%m-%d")
