@@ -374,75 +374,6 @@ def is_plausible_match_result(text: str) -> bool:
     return False
 
 
-def result_suggests_match_in_progress(result: str) -> bool:
-    """
-    Four scorecard tables can exist while the chase is live. Reject common ESPN in-progress copy.
-    """
-    t = clean(result).lower()
-    if not t:
-        return True
-    if re.search(r"\b(live|innings break|drinks break)\b", t):
-        return True
-    if re.search(r"\b(need|needs|needed|requires|requiring)\s+\d+\s+runs?\b", t):
-        return True
-    if re.search(r"\b\d+\s+runs?\s+(needed|required|more)\b", t):
-        return True
-    if re.search(r"\b\d+\s+balls?\s+(left|remaining)\b", t):
-        return True
-    if re.search(r"\b(rrr|crr|req\.?rr|required\s+run\s+rate)\b", t):
-        return True
-    return False
-
-
-def result_indicates_finished_match(result: str) -> bool:
-    """Trust a clear finished outcome — not table count (live games can have four tables)."""
-    if result_suggests_match_in_progress(result):
-        return False
-    if is_plausible_match_result(result):
-        return True
-    t = clean(result).lower()
-    if re.search(r"\b(match\s+)?(tied|drawn|abandoned|called\s+off)\b", t):
-        return True
-    if re.match(r"^no result\b", t):
-        return True
-    return False
-
-
-def innings_have_minimal_structure(innings: List[Any]) -> bool:
-    """Sanity check only — does not prove the match is over."""
-    if not isinstance(innings, list) or len(innings) < 2:
-        return False
-    for inn in innings[:2]:
-        if not isinstance(inn, dict):
-            return False
-        batting = inn.get("batting") or []
-        if not isinstance(batting, list) or len(batting) < 2:
-            return False
-    return True
-
-
-def is_final_scorecard_payload(data: Optional[Dict[str, Any]]) -> bool:
-    """
-    Finished match = explicit result line that looks final, not live chase text.
-    """
-    if not isinstance(data, dict):
-        return False
-
-    match_info = data.get("match_info") or {}
-    result = clean(str(match_info.get("result") or match_info.get("status") or ""))
-
-    innings = data.get("innings") or []
-    if not innings_have_minimal_structure(innings if isinstance(innings, list) else []):
-        log("Rejecting payload: innings structure too thin")
-        return False
-
-    if not result_indicates_finished_match(result):
-        log(f"Skipping non-final or live scorecard (result={result[:160]!r})")
-        return False
-
-    return True
-
-
 def first_plausible_result_line(text: str) -> str:
     for line in (text or "").split("\n"):
         line = clean(line)
@@ -1447,9 +1378,6 @@ async def main():
 
         data = await run(dynamic_url, player_catalog)
         if not data:
-            continue
-        if not is_final_scorecard_payload(data):
-            log(f"Skipping incomplete/non-final scorecard {match_id} ({f.get('title')})")
             continue
 
         mi = data.get("match_info") or {}

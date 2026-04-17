@@ -1274,7 +1274,9 @@ export default function ScoreboardPage() {
         toast.error(typeof json?.error === "string" ? json.error : `Workflow trigger failed (${res.status})`);
         return;
       }
-      toast.success(`ESPN workflow queued for ${workflowDateIst}. Participants get an email when it finishes.`);
+      toast.success(
+        `ESPN workflow queued for ${workflowDateIst}. Participants get an email when at least one scorecard is written to the database.`
+      );
       void refreshWorkflowRuns();
     } finally {
       setTriggeringWorkflow(false);

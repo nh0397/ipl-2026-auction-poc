@@ -413,7 +413,7 @@ export default function FixturesPage() {
         throw new Error(msg);
       }
       alert(
-        `Workflow queued for ${workflowDateIst || "default date"}. All participants get an email when the run finishes.`
+        `Workflow queued for ${workflowDateIst || "default date"}. Participants get an email when at least one scorecard is written to the database.`
       );
       void refreshWorkflowRuns();
     } catch (e) {
