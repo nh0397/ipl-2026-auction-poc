@@ -1311,7 +1311,6 @@ async def main():
         help="Match date (YYYY-MM-DD, IST). Omit to use yesterday's date in IST.",
         default=None,
     )
-    parser.add_argument("--force", help="Force rescan", action="store_true")
     parser.add_argument(
         "--clear-day",
         dest="clear_day",
@@ -1334,7 +1333,7 @@ async def main():
         yesterday_ist = (now_ist.date() - timedelta(days=1)).isoformat()
         target_date = yesterday_ist
 
-    log(f"Targeting date: {target_date} (Force: {args.force})")
+    log(f"Targeting date: {target_date}")
     fixtures = list_fixtures_for_day(target_date)
     log(f"{len(fixtures)} row(s) from fixtures where match_date={target_date!r}")
 
@@ -1359,10 +1358,6 @@ async def main():
 
         match_id = f.get("api_match_id")
         if not match_id:
-            continue
-
-        if not args.force and f.get("points_synced") is True and f.get("scorecard"):
-            log(f"Skipping already-synced match {match_id} ({f.get('title')})")
             continue
 
         t1 = slugify_team(f.get("team1_name") or f.get("team1_short") or "").replace(" ", "-")

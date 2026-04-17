@@ -1275,7 +1275,7 @@ export default function ScoreboardPage() {
         return;
       }
       toast.success(
-        `ESPN workflow queued for ${workflowDateIst}. Participants get an email when at least one scorecard is written to the database.`
+        `ESPN workflow queued for ${workflowDateIst}. Same as Actions: scrape → DB → points_synced → email on success.`
       );
       void refreshWorkflowRuns();
     } finally {

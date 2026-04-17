@@ -413,7 +413,7 @@ export default function FixturesPage() {
         throw new Error(msg);
       }
       alert(
-        `Workflow queued for ${workflowDateIst || "default date"}. Participants get an email when at least one scorecard is written to the database.`
+        `Workflow queued for ${workflowDateIst || "default date"}. It runs the same steps as GitHub Actions: scrape → write scorecards → set points_synced → email participants when the run succeeds.`
       );
       void refreshWorkflowRuns();
     } catch (e) {

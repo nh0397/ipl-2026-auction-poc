@@ -68,25 +68,26 @@ jobs:
           fi
           python scripts/sync_scorecards_espn.py $DATE_ARG $CLEAR_ARG
 
-      - name: Email participants — scorecards written
-        if: success() && steps.run_scraper.outputs.updated_count != '0'
+      - name: Email participants — ESPN scraper finished
+        if: success()
         uses: dawidd6/action-send-mail@v4
         with:
           server_address: smtp.gmail.com
           server_port: 587
           username: ${{ secrets.MAIL_USERNAME || secrets.SMTP_USER }}
           password: ${{ secrets.MAIL_PASSWORD || secrets.SMTP_PASS }}
-          subject: "Points updated for match: ${{ steps.run_scraper.outputs.target_date }} (${{ steps.run_scraper.outputs.updated_count }} updated)"
+          subject: "ESPN scraper finished — ${{ steps.run_scraper.outputs.target_date }} (${{ steps.run_scraper.outputs.updated_count }} match(es) written)"
           to: ${{ steps.emails.outputs.list }}
           from: "IPL Auction System <${{ secrets.MAIL_USERNAME || secrets.SMTP_USER || 'noreply@ipl2026.com' }}>"
           body: |
             Hi,
 
-            Points have been updated successfully for the following match(es):
-
-            ${{ steps.run_scraper.outputs.updated_details }}
+            The ESPN scorecard run finished successfully.
 
             Date (IST): ${{ steps.run_scraper.outputs.target_date }}
+            Rows written to the database (scorecard + points_synced): ${{ steps.run_scraper.outputs.updated_count }}
+
+            ${{ steps.run_scraper.outputs.updated_details }}
 
             View this run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
