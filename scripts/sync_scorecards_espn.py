@@ -1347,15 +1347,8 @@ async def main():
         log("Not clearing day (--clear-day not set); existing rows are updated only on successful scrape.")
     player_catalog = fetch_players_team_catalog()
 
-    now_utc = datetime.now(timezone.utc)
     updated: List[Dict[str, Any]] = []
     for f in fixtures:
-        # Skip future-starting matches for today's run (keep old behavior for backfills: still respects cutoff)
-        dt = parse_utc_dt(f.get("date_time_gmt"))
-        if dt and dt > now_utc:
-            log(f"Skipping future match {f.get('api_match_id')} date_time_gmt={f.get('date_time_gmt')}")
-            continue
-
         match_id = f.get("api_match_id")
         if not match_id:
             continue
