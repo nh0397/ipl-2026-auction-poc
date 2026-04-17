@@ -14,6 +14,11 @@ on:
         description: "Match ID to sync (optional). (Not wired yet)"
         required: false
         default: ""
+      clear_day:
+        description: "Clear scorecards + sync flags for this IST date before scraping (use on manual rerun)."
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   scrape_and_notify:
@@ -47,7 +52,11 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.date_ist }}" ]; then
             DATE_ARG="--date ${{ github.event.inputs.date_ist }}"
           fi
-          python scripts/sync_scorecards_espn.py $DATE_ARG
+          CLEAR_ARG=""
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.clear_day }}" = "true" ]; then
+            CLEAR_ARG="--clear-day"
+          fi
+          python scripts/sync_scorecards_espn.py $DATE_ARG $CLEAR_ARG
 
       - name: Send Success Email
         if: success() && steps.run_scraper.outputs.updated_count != '0'

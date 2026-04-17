@@ -374,36 +374,71 @@ def is_plausible_match_result(text: str) -> bool:
     return False
 
 
+def result_line_looks_final(result: str) -> bool:
+    """Broader than is_plausible_match_result — ESPN copy varies (e.g. 'won' without 'won by')."""
+    if is_plausible_match_result(result):
+        return True
+    t = clean(result).lower()
+    if len(t) < 8 or len(t) > 320:
+        return False
+    if re.search(r"\b(match\s+)?(tied|drawn|abandoned|called off|no result)\b", t):
+        return True
+    if re.search(r"\b(won|beat|defeated)\b", t):
+        return True
+    return False
+
+
+def innings_batting_looks_complete(inn: Dict[str, Any]) -> bool:
+    """Enough structure that we are past a few overs of a live innings, not an empty card."""
+    if not isinstance(inn, dict):
+        return False
+    batting = inn.get("batting") or []
+    if not isinstance(batting, list) or len(batting) < 2:
+        return False
+    total = inn.get("total") or {}
+    if not isinstance(total, dict):
+        total = {}
+    total_score = clean(str(total.get("score") or ""))
+    overs = clean(str(total.get("overs") or ""))
+    if total_score or overs:
+        return True
+    # Parsing sometimes misses Total row; long batting card usually means innings progressed.
+    return len(batting) >= 8
+
+
 def is_final_scorecard_payload(data: Optional[Dict[str, Any]]) -> bool:
     """
-    True only when the scraped payload looks like a completed/official outcome.
-    This avoids writing partial live scorecards into DB.
+    True when the scraped payload looks like a finished match, not a thin live snapshot.
+    Avoids writing obvious partials; intentionally looser on result text / total dict quirks.
     """
     if not isinstance(data, dict):
         return False
 
     match_info = data.get("match_info") or {}
     result = clean(str(match_info.get("result") or match_info.get("status") or ""))
-    if not is_plausible_match_result(result):
-        return False
 
     innings = data.get("innings") or []
     if not isinstance(innings, list) or len(innings) < 2:
         return False
 
-    # Require both innings to have at least some batting rows and a total.
     for inn in innings[:2]:
-        if not isinstance(inn, dict):
-            return False
-        batting = inn.get("batting") or []
-        total = inn.get("total") or {}
-        total_score = clean(str((total or {}).get("score") or ""))
-        if not isinstance(batting, list) or len(batting) == 0:
-            return False
-        if not total_score:
+        if not innings_batting_looks_complete(inn if isinstance(inn, dict) else {}):
             return False
 
-    return True
+    if result_line_looks_final(result):
+        return True
+
+    # Strong structural signal both sides batted deep enough for a typical completed T20.
+    try:
+        b0 = len((innings[0] or {}).get("batting") or [])
+        b1 = len((innings[1] or {}).get("batting") or [])
+        if b0 >= 10 and b1 >= 10:
+            return True
+    except Exception:
+        pass
+
+    log(f"Rejecting payload: result not final-looking ({result[:120]!r}…)")
+    return False
 
 
 def first_plausible_result_line(text: str) -> str:
@@ -1344,6 +1379,13 @@ async def main():
         default=None,
     )
     parser.add_argument("--force", help="Force rescan", action="store_true")
+    parser.add_argument(
+        "--clear-day",
+        dest="clear_day",
+        action="store_true",
+        help="Clear scorecard + points_synced for this IST date before scraping (manual rerun). "
+        "Default off so a failed run does not leave the day empty.",
+    )
     args = parser.parse_args()
 
     if not SUPABASE_URL or not SUPABASE_KEY:
@@ -1367,7 +1409,10 @@ async def main():
         log(f"No matches found for {target_date}. Exiting.")
         return
 
-    clear_day_scorecards_and_flags(fixtures, target_date)
+    if args.clear_day:
+        clear_day_scorecards_and_flags(fixtures, target_date)
+    else:
+        log("Not clearing day (--clear-day not set); existing rows are updated only on successful scrape.")
     player_catalog = fetch_players_team_catalog()
 
     now_utc = datetime.now(timezone.utc)
