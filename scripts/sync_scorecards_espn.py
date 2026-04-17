@@ -374,6 +374,38 @@ def is_plausible_match_result(text: str) -> bool:
     return False
 
 
+def is_final_scorecard_payload(data: Optional[Dict[str, Any]]) -> bool:
+    """
+    True only when the scraped payload looks like a completed/official outcome.
+    This avoids writing partial live scorecards into DB.
+    """
+    if not isinstance(data, dict):
+        return False
+
+    match_info = data.get("match_info") or {}
+    result = clean(str(match_info.get("result") or match_info.get("status") or ""))
+    if not is_plausible_match_result(result):
+        return False
+
+    innings = data.get("innings") or []
+    if not isinstance(innings, list) or len(innings) < 2:
+        return False
+
+    # Require both innings to have at least some batting rows and a total.
+    for inn in innings[:2]:
+        if not isinstance(inn, dict):
+            return False
+        batting = inn.get("batting") or []
+        total = inn.get("total") or {}
+        total_score = clean(str((total or {}).get("score") or ""))
+        if not isinstance(batting, list) or len(batting) == 0:
+            return False
+        if not total_score:
+            return False
+
+    return True
+
+
 def first_plausible_result_line(text: str) -> str:
     for line in (text or "").split("\n"):
         line = clean(line)
@@ -1213,6 +1245,39 @@ def list_fixtures_for_day(match_date: str) -> List[Dict[str, Any]]:
     return out
 
 
+def clear_day_scorecards_and_flags(fixtures: List[Dict[str, Any]], match_date: str) -> None:
+    """
+    For a rerun day, clear stale scorecards + synced flags first so UI/state is consistent
+    while fresh scraping is in progress.
+    """
+    if not fixtures:
+        return
+
+    ids = [str(f.get("id")) for f in fixtures if f.get("id")]
+    if not ids:
+        return
+
+    fixtures_url = f"{SUPABASE_URL}/rest/v1/fixtures?match_date=eq.{match_date}"
+    reset_payload = {"scorecard": None, "points_synced": False}
+    res = requests.patch(fixtures_url, headers=HEADERS, json=reset_payload, timeout=30)
+    res.raise_for_status()
+    log(f"Cleared scorecard + points_synced for {len(ids)} fixture row(s) on {match_date}.")
+
+    # Keep fixtureapi_points in sync with the same reset so no consumer sees stale `synced=true`.
+    for f in fixtures:
+        api_match_id = str(f.get("api_match_id") or "").strip()
+        if not api_match_id:
+            continue
+        fap = f"{SUPABASE_URL}/rest/v1/fixtureapi_points"
+        up = requests.post(
+            fap,
+            headers={**HEADERS, "Prefer": "resolution=merge-duplicates"},
+            json={"api_match_id": api_match_id, "synced": False},
+            timeout=30,
+        )
+        up.raise_for_status()
+
+
 def fetch_legacy_fixture_by_api_match_id(api_match_id: str) -> Optional[Dict[str, Any]]:
     """ESPN JSON is stored on public.fixtures (match_no, points_synced for the app)."""
     sel = "id,api_match_id,match_no,points_synced,scorecard,team1_name,team2_name,title,status"
@@ -1302,6 +1367,7 @@ async def main():
         log(f"No matches found for {target_date}. Exiting.")
         return
 
+    clear_day_scorecards_and_flags(fixtures, target_date)
     player_catalog = fetch_players_team_catalog()
 
     now_utc = datetime.now(timezone.utc)
@@ -1334,6 +1400,9 @@ async def main():
 
         data = await run(dynamic_url, player_catalog)
         if not data:
+            continue
+        if not is_final_scorecard_payload(data):
+            log(f"Skipping incomplete/non-final scorecard {match_id} ({f.get('title')})")
             continue
 
         mi = data.get("match_info") or {}

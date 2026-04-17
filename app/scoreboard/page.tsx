@@ -323,6 +323,8 @@ export default function ScoreboardPage() {
   const [syncingPoints, setSyncingPoints] = useState(false); // legacy combined sync (kept for now)
   const [syncingEspn, setSyncingEspn] = useState(false);
   const [syncingCricapi, setSyncingCricapi] = useState(false);
+  const [workflowDateIst, setWorkflowDateIst] = useState<string>(getTodayIST());
+  const [triggeringWorkflow, setTriggeringWorkflow] = useState(false);
 
   const [espnScorecardByMatchNo, setEspnScorecardByMatchNo] = useState<Record<number, any | null>>({});
   const [espnScorecardLoadingByMatchNo, setEspnScorecardLoadingByMatchNo] = useState<Record<number, boolean>>({});
@@ -1240,6 +1242,25 @@ export default function ScoreboardPage() {
     }
   };
 
+  const handleTriggerEspnWorkflow = async () => {
+    setTriggeringWorkflow(true);
+    try {
+      const res = await fetch("/api/workflows/espn-scraper", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dateIst: workflowDateIst }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(typeof json?.error === "string" ? json.error : `Workflow trigger failed (${res.status})`);
+        return;
+      }
+      toast.success(`ESPN workflow queued for ${workflowDateIst}.`);
+    } finally {
+      setTriggeringWorkflow(false);
+    }
+  };
+
   const handleBulkSave = async () => {
     if (!profile?.id || sheetFranchiseId !== profile.id) return;
     setSaving(true);
@@ -1764,6 +1785,32 @@ export default function ScoreboardPage() {
                       ))}
                     </select>
                   </div>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex items-center gap-2 text-slate-500 shrink-0">
+                      <Zap className="h-4 w-4" aria-hidden />
+                      <span className="text-[10px] font-black uppercase tracking-widest">ESPN sync</span>
+                    </div>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end w-full">
+                      <Input
+                        type="date"
+                        value={workflowDateIst}
+                        max={today}
+                        onChange={(e) => setWorkflowDateIst(e.target.value)}
+                        className="h-11 sm:w-[12rem] border-slate-200 rounded-xl font-bold"
+                        aria-label="Target IST date for ESPN workflow"
+                      />
+                      <Button
+                        variant="outline"
+                        disabled={triggeringWorkflow}
+                        onClick={handleTriggerEspnWorkflow}
+                        className="h-11 border-slate-200 rounded-xl font-black uppercase tracking-widest flex gap-2 text-slate-700 px-4 shadow-sm text-[10px]"
+                        title="Trigger GitHub ESPN scraper workflow for selected IST date"
+                      >
+                        {triggeringWorkflow ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+                        Run ESPN Workflow
+                      </Button>
+                    </div>
+                  </div>
                   <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
@@ -1826,11 +1873,12 @@ export default function ScoreboardPage() {
                    <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-2">{formatDate(date)}</div>
                    {matches.map(match => {
                       const isToday = match.match_date === today;
+                      const isDateEligibleForScorecard = isFixtureResult(match, today);
                       const mnRow = espnMatchNo(match);
                       const espnPointsSynced = mnRow != null ? !!fixturePointsSyncedByMatchNo[mnRow] : false;
                       const cricapiPointsSynced = !!match.points_synced;
-                      const espnReady = mnRow != null && espnPointsSynced;
-                      const cricReady = cricapiPointsSynced;
+                      const espnReady = isDateEligibleForScorecard && mnRow != null && espnPointsSynced;
+                      const cricReady = isDateEligibleForScorecard && cricapiPointsSynced;
                       const syncStatusLine = (() => {
                         if (SHOW_CRICAPI_FIXTURE_UI) {
                           if (espnReady && cricReady) return null;

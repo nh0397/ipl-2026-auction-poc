@@ -153,6 +153,8 @@ export default function FixturesPage() {
   const [modalPersistedRows, setModalPersistedRows] = useState<PersistedFantasyRow[]>([]);
   const [modalPersistedLoading, setModalPersistedLoading] = useState(false);
   const [playersCatalog, setPlayersCatalog] = useState<PlayerCatalogRow[]>([]);
+  const [workflowDateIst, setWorkflowDateIst] = useState<string>(getTodayIST());
+  const [triggeringWorkflow, setTriggeringWorkflow] = useState(false);
 
   const sheetMatchPointsTable =
     matchPointsSource === "cricapi"
@@ -375,6 +377,30 @@ export default function FixturesPage() {
     return Array.from(set).sort((x, y) => x.localeCompare(y));
   }, [fixtures]);
 
+  const handleTriggerEspnWorkflow = async () => {
+    setTriggeringWorkflow(true);
+    try {
+      const res = await fetch("/api/workflows/espn-scraper", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dateIst: workflowDateIst }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msg =
+          typeof json?.error === "string"
+            ? json.error
+            : `Could not trigger workflow (${res.status})`;
+        throw new Error(msg);
+      }
+      alert(`Workflow queued for ${workflowDateIst || "default date"}.`);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed to trigger workflow.");
+    } finally {
+      setTriggeringWorkflow(false);
+    }
+  };
+
   const fixturesForTeam = useMemo(() => {
     if (!teamFilter) return fixtures;
     return fixtures.filter((f) => {
@@ -499,6 +525,38 @@ export default function FixturesPage() {
             </select>
           </div>
 
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3 mb-4">
+            <div className="flex items-center gap-2 text-slate-500 shrink-0">
+              <Zap className="h-4 w-4" aria-hidden />
+              <span className="text-[10px] font-black uppercase tracking-widest">ESPN sync</span>
+            </div>
+            <input
+              type="date"
+              value={workflowDateIst}
+              max={today}
+              onChange={(e) => setWorkflowDateIst(e.target.value)}
+              className={cn(
+                "w-full sm:w-auto min-h-[44px] touch-manipulation rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold text-slate-800 shadow-sm",
+                "focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+              )}
+              aria-label="Target IST date for ESPN workflow"
+            />
+            <button
+              type="button"
+              onClick={() => void handleTriggerEspnWorkflow()}
+              disabled={triggeringWorkflow}
+              className={cn(
+                "w-full sm:w-auto min-h-[44px] px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest border transition-all",
+                triggeringWorkflow
+                  ? "bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed"
+                  : "bg-slate-900 border-slate-900 text-white hover:bg-black shadow-sm"
+              )}
+              title="Trigger GitHub ESPN scraper workflow for selected IST date"
+            >
+              {triggeringWorkflow ? "Triggering..." : "Run ESPN Workflow"}
+            </button>
+          </div>
+
           {/* Scheduled vs Results */}
           <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1 sm:overflow-visible sm:pb-0 sm:mx-0 sm:px-0">
             {([
@@ -578,6 +636,7 @@ export default function FixturesPage() {
                   const isMatchToday = match.match_date === today;
                   const isCompleted = isFixtureResult(match, today);
                   const isLive = match.match_started && !match.match_ended;
+                  const isDateEligibleForScorecard = isFixtureResult(match, today);
 
                   return (
                     <div
@@ -720,20 +779,22 @@ export default function FixturesPage() {
                             const mn = espnMatchNo(match);
                             const espnReady = mn != null && !!espnPointsSyncedByMatchNo[mn];
                             const cricReady = !!match.points_synced;
+                            const espnReadyForDate = isDateEligibleForScorecard && espnReady;
+                            const cricReadyForDate = isDateEligibleForScorecard && cricReady;
                             return (
                               <>
                                 <button
                                   type="button"
-                                  disabled={!espnReady}
+                                  disabled={!espnReadyForDate}
                                   onClick={() => {
-                                    if (!espnReady) return;
+                                    if (!espnReadyForDate) return;
                                     setModalTab("scorecard");
                                     setExpandedPersistedFantasyPlayerId(null);
                                     setModal({ source: "espn", fixture: match });
                                   }}
                                   className={cn(
                                     "touch-manipulation min-h-[48px] flex items-center justify-center gap-1.5 py-3 px-2 rounded-xl text-[10px] sm:text-xs font-black uppercase tracking-wide sm:tracking-widest transition-all border text-center leading-tight",
-                                    espnReady
+                                    espnReadyForDate
                                       ? "bg-white border-slate-200 text-slate-800 active:bg-slate-100 hover:bg-slate-50 shadow-sm"
                                       : "bg-slate-50 border-slate-100 text-slate-300 cursor-not-allowed"
                                   )}
@@ -744,16 +805,16 @@ export default function FixturesPage() {
                                 {SHOW_CRICAPI_FIXTURE_UI ? (
                                   <button
                                     type="button"
-                                    disabled={!cricReady}
+                                    disabled={!cricReadyForDate}
                                     onClick={() => {
-                                      if (!cricReady) return;
+                                      if (!cricReadyForDate) return;
                                       setModalTab("scorecard");
                                       setExpandedPersistedFantasyPlayerId(null);
                                       setModal({ source: "cricapi", fixture: match });
                                     }}
                                     className={cn(
                                       "touch-manipulation min-h-[48px] flex items-center justify-center gap-1.5 py-3 px-2 rounded-xl text-[10px] sm:text-xs font-black uppercase tracking-wide sm:tracking-widest transition-all border text-center leading-tight",
-                                      cricReady
+                                      cricReadyForDate
                                         ? "bg-slate-900 text-white border-slate-900 active:bg-slate-800 hover:bg-black shadow-md"
                                         : "bg-slate-50 border-slate-100 text-slate-300 cursor-not-allowed"
                                     )}
