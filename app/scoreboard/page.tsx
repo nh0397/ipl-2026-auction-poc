@@ -325,6 +325,9 @@ export default function ScoreboardPage() {
   const [syncingCricapi, setSyncingCricapi] = useState(false);
   const [workflowDateIst, setWorkflowDateIst] = useState<string>(getTodayIST());
   const [triggeringWorkflow, setTriggeringWorkflow] = useState(false);
+  const [workflowRuns, setWorkflowRuns] = useState<
+    Array<{ conclusion: string | null; status: string; htmlUrl: string; createdAt: string; runNumber: number }> | null
+  >(null);
 
   const [espnScorecardByMatchNo, setEspnScorecardByMatchNo] = useState<Record<number, any | null>>({});
   const [espnScorecardLoadingByMatchNo, setEspnScorecardLoadingByMatchNo] = useState<Record<number, boolean>>({});
@@ -1242,6 +1245,22 @@ export default function ScoreboardPage() {
     }
   };
 
+  const refreshWorkflowRuns = useCallback(async () => {
+    const res = await fetch("/api/workflows/espn-scraper/runs");
+    if (!res.ok) {
+      setWorkflowRuns(null);
+      return;
+    }
+    const json = (await res.json().catch(() => ({}))) as {
+      runs?: Array<{ conclusion: string | null; status: string; htmlUrl: string; createdAt: string; runNumber: number }>;
+    };
+    setWorkflowRuns(json.runs ?? []);
+  }, []);
+
+  useEffect(() => {
+    void refreshWorkflowRuns();
+  }, [refreshWorkflowRuns]);
+
   const handleTriggerEspnWorkflow = async () => {
     setTriggeringWorkflow(true);
     try {
@@ -1255,7 +1274,8 @@ export default function ScoreboardPage() {
         toast.error(typeof json?.error === "string" ? json.error : `Workflow trigger failed (${res.status})`);
         return;
       }
-      toast.success(`ESPN workflow queued for ${workflowDateIst}.`);
+      toast.success(`ESPN workflow queued for ${workflowDateIst}. Participants get an email when it finishes.`);
+      void refreshWorkflowRuns();
     } finally {
       setTriggeringWorkflow(false);
     }
@@ -1811,6 +1831,32 @@ export default function ScoreboardPage() {
                       </Button>
                     </div>
                   </div>
+                  {workflowRuns && workflowRuns.length > 0 ? (
+                    <div className="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5 text-xs text-slate-600">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-bold text-slate-500 uppercase tracking-wide">Latest GitHub run</span>
+                        <button
+                          type="button"
+                          className="text-[10px] font-black uppercase tracking-widest text-blue-600"
+                          onClick={() => void refreshWorkflowRuns()}
+                        >
+                          Refresh
+                        </button>
+                      </div>
+                      <p className="mt-1 font-mono text-[11px]">
+                        #{workflowRuns[0].runNumber} · {workflowRuns[0].status}
+                        {workflowRuns[0].conclusion ? ` · ${workflowRuns[0].conclusion}` : ""}
+                      </p>
+                      <a
+                        href={workflowRuns[0].htmlUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-1 inline-block text-[11px] font-bold text-blue-600 underline"
+                      >
+                        Open in GitHub Actions
+                      </a>
+                    </div>
+                  ) : null}
                   <div className="flex flex-wrap gap-2">
                     <button
                       type="button"

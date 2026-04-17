@@ -374,42 +374,56 @@ def is_plausible_match_result(text: str) -> bool:
     return False
 
 
-def result_line_looks_final(result: str) -> bool:
-    """Broader than is_plausible_match_result — ESPN copy varies (e.g. 'won' without 'won by')."""
-    if is_plausible_match_result(result):
-        return True
+def result_suggests_match_in_progress(result: str) -> bool:
+    """
+    Four scorecard tables can exist while the chase is live. Reject common ESPN in-progress copy.
+    """
     t = clean(result).lower()
-    if len(t) < 8 or len(t) > 320:
-        return False
-    if re.search(r"\b(match\s+)?(tied|drawn|abandoned|called off|no result)\b", t):
+    if not t:
         return True
-    if re.search(r"\b(won|beat|defeated)\b", t):
+    if re.search(r"\b(live|innings break|drinks break)\b", t):
+        return True
+    if re.search(r"\b(need|needs|needed|requires|requiring)\s+\d+\s+runs?\b", t):
+        return True
+    if re.search(r"\b\d+\s+runs?\s+(needed|required|more)\b", t):
+        return True
+    if re.search(r"\b\d+\s+balls?\s+(left|remaining)\b", t):
+        return True
+    if re.search(r"\b(rrr|crr|req\.?rr|required\s+run\s+rate)\b", t):
         return True
     return False
 
 
-def innings_batting_looks_complete(inn: Dict[str, Any]) -> bool:
-    """Enough structure that we are past a few overs of a live innings, not an empty card."""
-    if not isinstance(inn, dict):
+def result_indicates_finished_match(result: str) -> bool:
+    """Trust a clear finished outcome — not table count (live games can have four tables)."""
+    if result_suggests_match_in_progress(result):
         return False
-    batting = inn.get("batting") or []
-    if not isinstance(batting, list) or len(batting) < 2:
-        return False
-    total = inn.get("total") or {}
-    if not isinstance(total, dict):
-        total = {}
-    total_score = clean(str(total.get("score") or ""))
-    overs = clean(str(total.get("overs") or ""))
-    if total_score or overs:
+    if is_plausible_match_result(result):
         return True
-    # Parsing sometimes misses Total row; long batting card usually means innings progressed.
-    return len(batting) >= 8
+    t = clean(result).lower()
+    if re.search(r"\b(match\s+)?(tied|drawn|abandoned|called\s+off)\b", t):
+        return True
+    if re.match(r"^no result\b", t):
+        return True
+    return False
+
+
+def innings_have_minimal_structure(innings: List[Any]) -> bool:
+    """Sanity check only — does not prove the match is over."""
+    if not isinstance(innings, list) or len(innings) < 2:
+        return False
+    for inn in innings[:2]:
+        if not isinstance(inn, dict):
+            return False
+        batting = inn.get("batting") or []
+        if not isinstance(batting, list) or len(batting) < 2:
+            return False
+    return True
 
 
 def is_final_scorecard_payload(data: Optional[Dict[str, Any]]) -> bool:
     """
-    True when the scraped payload looks like a finished match, not a thin live snapshot.
-    Avoids writing obvious partials; intentionally looser on result text / total dict quirks.
+    Finished match = explicit result line that looks final, not live chase text.
     """
     if not isinstance(data, dict):
         return False
@@ -418,27 +432,15 @@ def is_final_scorecard_payload(data: Optional[Dict[str, Any]]) -> bool:
     result = clean(str(match_info.get("result") or match_info.get("status") or ""))
 
     innings = data.get("innings") or []
-    if not isinstance(innings, list) or len(innings) < 2:
+    if not innings_have_minimal_structure(innings if isinstance(innings, list) else []):
+        log("Rejecting payload: innings structure too thin")
         return False
 
-    for inn in innings[:2]:
-        if not innings_batting_looks_complete(inn if isinstance(inn, dict) else {}):
-            return False
+    if not result_indicates_finished_match(result):
+        log(f"Skipping non-final or live scorecard (result={result[:160]!r})")
+        return False
 
-    if result_line_looks_final(result):
-        return True
-
-    # Strong structural signal both sides batted deep enough for a typical completed T20.
-    try:
-        b0 = len((innings[0] or {}).get("batting") or [])
-        b1 = len((innings[1] or {}).get("batting") or [])
-        if b0 >= 10 and b1 >= 10:
-            return True
-    except Exception:
-        pass
-
-    log(f"Rejecting payload: result not final-looking ({result[:120]!r}…)")
-    return False
+    return True
 
 
 def first_plausible_result_line(text: str) -> str:

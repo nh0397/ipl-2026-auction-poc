@@ -155,6 +155,9 @@ export default function FixturesPage() {
   const [playersCatalog, setPlayersCatalog] = useState<PlayerCatalogRow[]>([]);
   const [workflowDateIst, setWorkflowDateIst] = useState<string>(getTodayIST());
   const [triggeringWorkflow, setTriggeringWorkflow] = useState(false);
+  const [workflowRuns, setWorkflowRuns] = useState<
+    Array<{ conclusion: string | null; status: string; htmlUrl: string; createdAt: string; runNumber: number }> | null
+  >(null);
 
   const sheetMatchPointsTable =
     matchPointsSource === "cricapi"
@@ -377,6 +380,22 @@ export default function FixturesPage() {
     return Array.from(set).sort((x, y) => x.localeCompare(y));
   }, [fixtures]);
 
+  const refreshWorkflowRuns = useCallback(async () => {
+    const res = await fetch("/api/workflows/espn-scraper/runs");
+    if (!res.ok) {
+      setWorkflowRuns(null);
+      return;
+    }
+    const json = (await res.json().catch(() => ({}))) as {
+      runs?: Array<{ conclusion: string | null; status: string; htmlUrl: string; createdAt: string; runNumber: number }>;
+    };
+    setWorkflowRuns(json.runs ?? []);
+  }, []);
+
+  useEffect(() => {
+    void refreshWorkflowRuns();
+  }, [refreshWorkflowRuns]);
+
   const handleTriggerEspnWorkflow = async () => {
     setTriggeringWorkflow(true);
     try {
@@ -393,7 +412,10 @@ export default function FixturesPage() {
             : `Could not trigger workflow (${res.status})`;
         throw new Error(msg);
       }
-      alert(`Workflow queued for ${workflowDateIst || "default date"}.`);
+      alert(
+        `Workflow queued for ${workflowDateIst || "default date"}. All participants get an email when the run finishes.`
+      );
+      void refreshWorkflowRuns();
     } catch (e) {
       alert(e instanceof Error ? e.message : "Failed to trigger workflow.");
     } finally {
@@ -556,6 +578,33 @@ export default function FixturesPage() {
               {triggeringWorkflow ? "Triggering..." : "Run ESPN Workflow"}
             </button>
           </div>
+
+          {workflowRuns && workflowRuns.length > 0 ? (
+            <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5 text-xs text-slate-600">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-bold text-slate-500 uppercase tracking-wide">Latest GitHub run</span>
+                <button
+                  type="button"
+                  className="text-[10px] font-black uppercase tracking-widest text-blue-600"
+                  onClick={() => void refreshWorkflowRuns()}
+                >
+                  Refresh
+                </button>
+              </div>
+              <p className="mt-1 font-mono text-[11px]">
+                #{workflowRuns[0].runNumber} · {workflowRuns[0].status}
+                {workflowRuns[0].conclusion ? ` · ${workflowRuns[0].conclusion}` : ""}
+              </p>
+              <a
+                href={workflowRuns[0].htmlUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-1 inline-block text-[11px] font-bold text-blue-600 underline"
+              >
+                Open in GitHub Actions
+              </a>
+            </div>
+          ) : null}
 
           {/* Scheduled vs Results */}
           <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1 sm:overflow-visible sm:pb-0 sm:mx-0 sm:px-0">
