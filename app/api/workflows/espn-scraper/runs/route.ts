@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
 
@@ -72,6 +73,7 @@ export async function GET() {
       html_url: string;
       run_number: number;
       event: string;
+      actor?: { login?: string | null } | null;
     }>;
   };
 
@@ -84,7 +86,104 @@ export async function GET() {
     updatedAt: r.updated_at,
     htmlUrl: r.html_url,
     event: r.event,
+    actor: r.actor?.login ?? null,
   }));
 
-  return NextResponse.json({ ok: true, workflow: workflowId, runs });
+  let latestRunJobs: Array<{
+    id: number;
+    name: string;
+    status: string;
+    conclusion: string | null;
+    startedAt: string | null;
+    completedAt: string | null;
+    steps: Array<{ number: number; name: string; status: string; conclusion: string | null }>;
+  }> = [];
+  if (runs.length > 0) {
+    try {
+      const jobsRes = await fetch(
+        `https://api.github.com/repos/${repo.owner}/${repo.repo}/actions/runs/${runs[0].id}/jobs?per_page=50`,
+        {
+          headers: {
+            Accept: "application/vnd.github+json",
+            Authorization: `Bearer ${token}`,
+          },
+          cache: "no-store",
+        }
+      );
+      if (jobsRes.ok) {
+        const jobsJson = (await jobsRes.json()) as {
+          jobs?: Array<{
+            id: number;
+            name: string;
+            status: string;
+            conclusion: string | null;
+            started_at: string | null;
+            completed_at: string | null;
+            steps?: Array<{
+              number: number;
+              name: string;
+              status: string;
+              conclusion: string | null;
+            }>;
+          }>;
+        };
+        latestRunJobs = (jobsJson.jobs || []).map((j) => ({
+          id: j.id,
+          name: j.name,
+          status: j.status,
+          conclusion: j.conclusion,
+          startedAt: j.started_at,
+          completedAt: j.completed_at,
+          steps: (j.steps || []).map((s) => ({
+            number: s.number,
+            name: s.name,
+            status: s.status,
+            conclusion: s.conclusion,
+          })),
+        }));
+      }
+    } catch {
+      // Non-fatal.
+    }
+  }
+
+  let triggerAudit: Array<{
+    id: number;
+    created_at: string;
+    app_user_id: string;
+    app_user_email: string | null;
+    date_ist: string | null;
+    github_run_id: number | null;
+    github_run_number: number | null;
+  }> = [];
+  try {
+    const admin = createAdminClient();
+    if (admin) {
+      const { data: audits } = await admin
+        .from("workflow_dispatch_events")
+        .select("id,created_at,app_user_id,app_user_email,date_ist,github_run_id,github_run_number")
+        .order("created_at", { ascending: false })
+        .limit(12);
+      triggerAudit =
+        (audits as Array<{
+          id: number;
+          created_at: string;
+          app_user_id: string;
+          app_user_email: string | null;
+          date_ist: string | null;
+          github_run_id: number | null;
+          github_run_number: number | null;
+        }>) || [];
+    }
+  } catch {
+    // Non-fatal.
+  }
+
+  return NextResponse.json({
+    ok: true,
+    workflow: workflowId,
+    runs,
+    latestRunJobs,
+    triggerAudit,
+  });
 }

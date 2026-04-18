@@ -156,8 +156,14 @@ export default function FixturesPage() {
   const [workflowDateIst, setWorkflowDateIst] = useState<string>(getTodayIST());
   const [triggeringWorkflow, setTriggeringWorkflow] = useState(false);
   const [workflowRuns, setWorkflowRuns] = useState<
-    Array<{ conclusion: string | null; status: string; htmlUrl: string; createdAt: string; runNumber: number }> | null
+    Array<{ conclusion: string | null; status: string; htmlUrl: string; createdAt: string; updatedAt: string; event: string; actor: string | null; runNumber: number }> | null
   >(null);
+  const [workflowTriggerAudit, setWorkflowTriggerAudit] = useState<
+    Array<{ app_user_email: string | null; github_run_number: number | null; created_at: string }> | null
+  >(null);
+  const [latestRunJobs, setLatestRunJobs] = useState<
+    Array<{ name: string; status: string; conclusion: string | null; steps: Array<{ number: number; name: string; status: string; conclusion: string | null }> }>
+  >([]);
 
   const sheetMatchPointsTable =
     matchPointsSource === "cricapi"
@@ -172,7 +178,7 @@ export default function FixturesPage() {
     const load = async () => {
       const [cricRes, espnSyncRes, matchesRes, cfgRes, catRes] = await Promise.all([
         supabase.from("fixtures_cricapi").select("*").order("date_time_gmt", { ascending: true }),
-        supabase.from("fixtures").select("match_no,points_synced"),
+        supabase.from("fixtures").select("match_no,points_synced,scorecard"),
         supabase.from("matches").select("id,match_no"),
         supabase.from("auction_config").select("match_points_source").limit(1).maybeSingle(),
         supabase
@@ -185,9 +191,9 @@ export default function FixturesPage() {
       if (cricRes.data) setFixtures(cricRes.data as Fixture[]);
       if (espnSyncRes.data) {
         const m: Record<number, boolean> = {};
-        for (const row of espnSyncRes.data as { match_no?: number | null; points_synced?: boolean | null }[]) {
+        for (const row of espnSyncRes.data as { match_no?: number | null; points_synced?: boolean | null; scorecard?: unknown | null }[]) {
           const n = Number(row.match_no);
-          if (Number.isFinite(n)) m[n] = !!row.points_synced;
+          if (Number.isFinite(n)) m[n] = !!row.points_synced || !!row.scorecard;
         }
         setEspnPointsSyncedByMatchNo(m);
       }
@@ -387,9 +393,13 @@ export default function FixturesPage() {
       return;
     }
     const json = (await res.json().catch(() => ({}))) as {
-      runs?: Array<{ conclusion: string | null; status: string; htmlUrl: string; createdAt: string; runNumber: number }>;
+      runs?: Array<{ conclusion: string | null; status: string; htmlUrl: string; createdAt: string; updatedAt: string; event: string; actor: string | null; runNumber: number }>;
+      triggerAudit?: Array<{ app_user_email: string | null; github_run_number: number | null; created_at: string }>;
+      latestRunJobs?: Array<{ name: string; status: string; conclusion: string | null; steps: Array<{ number: number; name: string; status: string; conclusion: string | null }> }>;
     };
     setWorkflowRuns(json.runs ?? []);
+    setWorkflowTriggerAudit(json.triggerAudit ?? []);
+    setLatestRunJobs(json.latestRunJobs ?? []);
   }, []);
 
   useEffect(() => {
@@ -412,9 +422,7 @@ export default function FixturesPage() {
             : `Could not trigger workflow (${res.status})`;
         throw new Error(msg);
       }
-      alert(
-        `Workflow queued for ${workflowDateIst || "default date"}. It runs the same steps as GitHub Actions: scrape → write scorecards → set points_synced → email participants when the run succeeds.`
-      );
+      alert(`Scraper started for ${workflowDateIst || "selected date"}. We will save the scorecards and send an email after it finishes.`);
       void refreshWorkflowRuns();
     } catch (e) {
       alert(e instanceof Error ? e.message : "Failed to trigger workflow.");
@@ -431,12 +439,12 @@ export default function FixturesPage() {
   }, [fixtures, teamFilter]);
 
   const scheduledFixtures = useMemo(
-    () => fixturesForTeam.filter((f) => !isFixtureResult(f, today)),
+    () => fixturesForTeam.filter((f) => f.match_date > today),
     [fixturesForTeam, today]
   );
 
   const resultFixtures = useMemo(
-    () => fixturesForTeam.filter((f) => isFixtureResult(f, today)),
+    () => fixturesForTeam.filter((f) => f.match_date <= today),
     [fixturesForTeam, today]
   );
 
@@ -582,7 +590,7 @@ export default function FixturesPage() {
           {workflowRuns && workflowRuns.length > 0 ? (
             <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5 text-xs text-slate-600">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="font-bold text-slate-500 uppercase tracking-wide">Latest GitHub run</span>
+                <span className="font-bold text-slate-500 uppercase tracking-wide">Last scraper update</span>
                 <button
                   type="button"
                   className="text-[10px] font-black uppercase tracking-widest text-blue-600"
@@ -591,17 +599,38 @@ export default function FixturesPage() {
                   Refresh
                 </button>
               </div>
-              <p className="mt-1 font-mono text-[11px]">
-                #{workflowRuns[0].runNumber} · {workflowRuns[0].status}
-                {workflowRuns[0].conclusion ? ` · ${workflowRuns[0].conclusion}` : ""}
+              <p className="mt-1 text-[11px]">
+                Status:{" "}
+                <span className="font-bold">
+                  {workflowRuns[0].conclusion === "success"
+                    ? "Completed successfully"
+                    : workflowRuns[0].conclusion
+                      ? `Completed (${workflowRuns[0].conclusion})`
+                      : workflowRuns[0].status}
+                </span>
               </p>
+              <p className="mt-1 text-[11px]">
+                Started: {new Date(workflowRuns[0].createdAt).toLocaleString()} · Last updated:{" "}
+                {new Date(workflowRuns[0].updatedAt).toLocaleString()}
+              </p>
+              {(() => {
+                const audit =
+                  workflowTriggerAudit?.find((a) => a.github_run_number === workflowRuns[0].runNumber) ??
+                  workflowTriggerAudit?.[0];
+                if (!audit) return null;
+                return (
+                  <p className="mt-1 text-[11px]">
+                    Started from app by: <span className="font-bold">{audit.app_user_email || "unknown user"}</span>
+                  </p>
+                );
+              })()}
               <a
                 href={workflowRuns[0].htmlUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="mt-1 inline-block text-[11px] font-bold text-blue-600 underline"
               >
-                Open in GitHub Actions
+                View full technical log
               </a>
             </div>
           ) : null}
@@ -609,8 +638,8 @@ export default function FixturesPage() {
           {/* Scheduled vs Results */}
           <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1 sm:overflow-visible sm:pb-0 sm:mx-0 sm:px-0">
             {([
-              { key: "scheduled" as const, label: "Scheduled", count: scheduledFixtures.length },
-              { key: "results" as const, label: "Results", count: resultFixtures.length },
+              { key: "scheduled" as const, label: "Scheduled/Live", count: scheduledFixtures.length },
+              { key: "results" as const, label: "Results/Live", count: resultFixtures.length },
             ]).map((tab) => (
               <button
                 key={tab.key}
@@ -685,7 +714,6 @@ export default function FixturesPage() {
                   const isMatchToday = match.match_date === today;
                   const isCompleted = isFixtureResult(match, today);
                   const isLive = match.match_started && !match.match_ended;
-                  const isDateEligibleForScorecard = isFixtureResult(match, today);
 
                   return (
                     <div
@@ -828,22 +856,20 @@ export default function FixturesPage() {
                             const mn = espnMatchNo(match);
                             const espnReady = mn != null && !!espnPointsSyncedByMatchNo[mn];
                             const cricReady = !!match.points_synced;
-                            const espnReadyForDate = isDateEligibleForScorecard && espnReady;
-                            const cricReadyForDate = isDateEligibleForScorecard && cricReady;
                             return (
                               <>
                                 <button
                                   type="button"
-                                  disabled={!espnReadyForDate}
+                                  disabled={!espnReady}
                                   onClick={() => {
-                                    if (!espnReadyForDate) return;
+                                    if (!espnReady) return;
                                     setModalTab("scorecard");
                                     setExpandedPersistedFantasyPlayerId(null);
                                     setModal({ source: "espn", fixture: match });
                                   }}
                                   className={cn(
                                     "touch-manipulation min-h-[48px] flex items-center justify-center gap-1.5 py-3 px-2 rounded-xl text-[10px] sm:text-xs font-black uppercase tracking-wide sm:tracking-widest transition-all border text-center leading-tight",
-                                    espnReadyForDate
+                                    espnReady
                                       ? "bg-white border-slate-200 text-slate-800 active:bg-slate-100 hover:bg-slate-50 shadow-sm"
                                       : "bg-slate-50 border-slate-100 text-slate-300 cursor-not-allowed"
                                   )}
@@ -854,16 +880,16 @@ export default function FixturesPage() {
                                 {SHOW_CRICAPI_FIXTURE_UI ? (
                                   <button
                                     type="button"
-                                    disabled={!cricReadyForDate}
+                                    disabled={!cricReady}
                                     onClick={() => {
-                                      if (!cricReadyForDate) return;
+                                      if (!cricReady) return;
                                       setModalTab("scorecard");
                                       setExpandedPersistedFantasyPlayerId(null);
                                       setModal({ source: "cricapi", fixture: match });
                                     }}
                                     className={cn(
                                       "touch-manipulation min-h-[48px] flex items-center justify-center gap-1.5 py-3 px-2 rounded-xl text-[10px] sm:text-xs font-black uppercase tracking-wide sm:tracking-widest transition-all border text-center leading-tight",
-                                      cricReadyForDate
+                                      cricReady
                                         ? "bg-slate-900 text-white border-slate-900 active:bg-slate-800 hover:bg-black shadow-md"
                                         : "bg-slate-50 border-slate-100 text-slate-300 cursor-not-allowed"
                                     )}

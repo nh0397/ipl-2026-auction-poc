@@ -326,8 +326,14 @@ export default function ScoreboardPage() {
   const [workflowDateIst, setWorkflowDateIst] = useState<string>(getTodayIST());
   const [triggeringWorkflow, setTriggeringWorkflow] = useState(false);
   const [workflowRuns, setWorkflowRuns] = useState<
-    Array<{ conclusion: string | null; status: string; htmlUrl: string; createdAt: string; runNumber: number }> | null
+    Array<{ conclusion: string | null; status: string; htmlUrl: string; createdAt: string; updatedAt: string; event: string; actor: string | null; runNumber: number }> | null
   >(null);
+  const [workflowTriggerAudit, setWorkflowTriggerAudit] = useState<
+    Array<{ app_user_email: string | null; github_run_number: number | null; created_at: string }> | null
+  >(null);
+  const [latestRunJobs, setLatestRunJobs] = useState<
+    Array<{ name: string; status: string; conclusion: string | null; steps: Array<{ number: number; name: string; status: string; conclusion: string | null }> }>
+  >([]);
 
   const [espnScorecardByMatchNo, setEspnScorecardByMatchNo] = useState<Record<number, any | null>>({});
   const [espnScorecardLoadingByMatchNo, setEspnScorecardLoadingByMatchNo] = useState<Record<number, boolean>>({});
@@ -729,14 +735,14 @@ export default function ScoreboardPage() {
     try {
       const [cricRes, espnRes] = await Promise.all([
         supabase.from("fixtures_cricapi").select("*").order("date_time_gmt", { ascending: true }),
-        supabase.from("fixtures").select("match_no,points_synced"),
+        supabase.from("fixtures").select("match_no,points_synced,scorecard"),
       ]);
       if (cricRes.data) setFixtures(cricRes.data);
       if (espnRes.data) {
         const m: Record<number, boolean> = {};
-        for (const row of espnRes.data as { match_no?: number | null; points_synced?: boolean | null }[]) {
+        for (const row of espnRes.data as { match_no?: number | null; points_synced?: boolean | null; scorecard?: unknown | null }[]) {
           const n = Number(row.match_no);
-          if (Number.isFinite(n)) m[n] = !!row.points_synced;
+          if (Number.isFinite(n)) m[n] = !!row.points_synced || !!row.scorecard;
         }
         setFixturePointsSyncedByMatchNo(m);
       }
@@ -1252,9 +1258,13 @@ export default function ScoreboardPage() {
       return;
     }
     const json = (await res.json().catch(() => ({}))) as {
-      runs?: Array<{ conclusion: string | null; status: string; htmlUrl: string; createdAt: string; runNumber: number }>;
+      runs?: Array<{ conclusion: string | null; status: string; htmlUrl: string; createdAt: string; updatedAt: string; event: string; actor: string | null; runNumber: number }>;
+      triggerAudit?: Array<{ app_user_email: string | null; github_run_number: number | null; created_at: string }>;
+      latestRunJobs?: Array<{ name: string; status: string; conclusion: string | null; steps: Array<{ number: number; name: string; status: string; conclusion: string | null }> }>;
     };
     setWorkflowRuns(json.runs ?? []);
+    setWorkflowTriggerAudit(json.triggerAudit ?? []);
+    setLatestRunJobs(json.latestRunJobs ?? []);
   }, []);
 
   useEffect(() => {
@@ -1275,7 +1285,7 @@ export default function ScoreboardPage() {
         return;
       }
       toast.success(
-        `ESPN workflow queued for ${workflowDateIst}. Same as Actions: scrape → DB → points_synced → email on success.`
+        `Scraper started for ${workflowDateIst}. We will save the scorecards and send an email after it finishes.`
       );
       void refreshWorkflowRuns();
     } finally {
@@ -1318,12 +1328,12 @@ export default function ScoreboardPage() {
   }, [fixtures, fixtureTeamFilter]);
 
   const scheduledFixturesTab = useMemo(
-    () => fixturesForTeam.filter((f) => !isFixtureResult(f, today)),
+    () => fixturesForTeam.filter((f) => f.match_date > today),
     [fixturesForTeam, today]
   );
 
   const resultFixturesTab = useMemo(
-    () => fixturesForTeam.filter((f) => isFixtureResult(f, today)),
+    () => fixturesForTeam.filter((f) => f.match_date <= today),
     [fixturesForTeam, today]
   );
 
@@ -1829,14 +1839,14 @@ export default function ScoreboardPage() {
                         title="Trigger GitHub ESPN scraper workflow for selected IST date"
                       >
                         {triggeringWorkflow ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
-                        Run ESPN Workflow
+                        Scrape ESPN Scorecards
                       </Button>
                     </div>
                   </div>
                   {workflowRuns && workflowRuns.length > 0 ? (
                     <div className="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5 text-xs text-slate-600">
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="font-bold text-slate-500 uppercase tracking-wide">Latest GitHub run</span>
+                        <span className="font-bold text-slate-500 uppercase tracking-wide">Last scraper update</span>
                         <button
                           type="button"
                           className="text-[10px] font-black uppercase tracking-widest text-blue-600"
@@ -1845,17 +1855,38 @@ export default function ScoreboardPage() {
                           Refresh
                         </button>
                       </div>
-                      <p className="mt-1 font-mono text-[11px]">
-                        #{workflowRuns[0].runNumber} · {workflowRuns[0].status}
-                        {workflowRuns[0].conclusion ? ` · ${workflowRuns[0].conclusion}` : ""}
+                      <p className="mt-1 text-[11px]">
+                        Status:{" "}
+                        <span className="font-bold">
+                          {workflowRuns[0].conclusion === "success"
+                            ? "Completed successfully"
+                            : workflowRuns[0].conclusion
+                              ? `Completed (${workflowRuns[0].conclusion})`
+                              : workflowRuns[0].status}
+                        </span>
                       </p>
+                      <p className="mt-1 text-[11px]">
+                        Started: {new Date(workflowRuns[0].createdAt).toLocaleString()} · Last updated:{" "}
+                        {new Date(workflowRuns[0].updatedAt).toLocaleString()}
+                      </p>
+                      {(() => {
+                        const audit =
+                          workflowTriggerAudit?.find((a) => a.github_run_number === workflowRuns[0].runNumber) ??
+                          workflowTriggerAudit?.[0];
+                        if (!audit) return null;
+                        return (
+                          <p className="mt-1 text-[11px]">
+                            Started from app by: <span className="font-bold">{audit.app_user_email || "unknown user"}</span>
+                          </p>
+                        );
+                      })()}
                       <a
                         href={workflowRuns[0].htmlUrl}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="mt-1 inline-block text-[11px] font-bold text-blue-600 underline"
                       >
-                        Open in GitHub Actions
+                        View full technical log
                       </a>
                     </div>
                   ) : null}
@@ -1870,7 +1901,7 @@ export default function ScoreboardPage() {
                           : "bg-slate-100 text-slate-500 hover:bg-slate-200"
                       )}
                     >
-                      Scheduled
+                      Upcoming
                       <span
                         className={cn(
                           "ml-2 text-[9px] px-1.5 py-0.5 rounded-md font-black",
@@ -1890,7 +1921,7 @@ export default function ScoreboardPage() {
                           : "bg-slate-100 text-slate-500 hover:bg-slate-200"
                       )}
                     >
-                      Results
+                      Live/Results
                       <span
                         className={cn(
                           "ml-2 text-[9px] px-1.5 py-0.5 rounded-md font-black",
@@ -1921,12 +1952,11 @@ export default function ScoreboardPage() {
                    <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-2">{formatDate(date)}</div>
                    {matches.map(match => {
                       const isToday = match.match_date === today;
-                      const isDateEligibleForScorecard = isFixtureResult(match, today);
                       const mnRow = espnMatchNo(match);
                       const espnPointsSynced = mnRow != null ? !!fixturePointsSyncedByMatchNo[mnRow] : false;
                       const cricapiPointsSynced = !!match.points_synced;
-                      const espnReady = isDateEligibleForScorecard && mnRow != null && espnPointsSynced;
-                      const cricReady = isDateEligibleForScorecard && cricapiPointsSynced;
+                      const espnReady = mnRow != null && espnPointsSynced;
+                      const cricReady = cricapiPointsSynced;
                       const syncStatusLine = (() => {
                         if (SHOW_CRICAPI_FIXTURE_UI) {
                           if (espnReady && cricReady) return null;
