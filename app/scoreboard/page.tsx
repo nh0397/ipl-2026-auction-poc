@@ -737,14 +737,14 @@ export default function ScoreboardPage() {
     try {
       const [cricRes, espnRes] = await Promise.all([
         supabase.from("fixtures_cricapi").select("*").order("date_time_gmt", { ascending: true }),
-        supabase.from("fixtures").select("match_no,points_synced,scorecard"),
+        supabase.from("fixtures").select("match_no,points_synced"),
       ]);
       if (cricRes.data) setFixtures(cricRes.data);
       if (espnRes.data) {
         const m: Record<number, boolean> = {};
-        for (const row of espnRes.data as { match_no?: number | null; points_synced?: boolean | null; scorecard?: unknown | null }[]) {
+        for (const row of espnRes.data as { match_no?: number | null; points_synced?: boolean | null }[]) {
           const n = Number(row.match_no);
-          if (Number.isFinite(n)) m[n] = !!row.points_synced || !!row.scorecard;
+          if (Number.isFinite(n)) m[n] = !!row.points_synced;
         }
         setFixturePointsSyncedByMatchNo(m);
       }
