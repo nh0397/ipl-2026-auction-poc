@@ -164,6 +164,8 @@ export default function FixturesPage() {
   const [latestRunJobs, setLatestRunJobs] = useState<
     Array<{ name: string; status: string; conclusion: string | null; steps: Array<{ number: number; name: string; status: string; conclusion: string | null }> }>
   >([]);
+  const [refreshingRunStatus, setRefreshingRunStatus] = useState(false);
+  const [runStatusMessage, setRunStatusMessage] = useState<string>("");
 
   const sheetMatchPointsTable =
     matchPointsSource === "cricapi"
@@ -387,19 +389,27 @@ export default function FixturesPage() {
   }, [fixtures]);
 
   const refreshWorkflowRuns = useCallback(async () => {
-    const res = await fetch("/api/workflows/espn-scraper/runs");
-    if (!res.ok) {
-      setWorkflowRuns(null);
-      return;
+    setRefreshingRunStatus(true);
+    setRunStatusMessage("Checking latest scraper status...");
+    try {
+      const res = await fetch("/api/workflows/espn-scraper/runs");
+      if (!res.ok) {
+        setWorkflowRuns(null);
+        setRunStatusMessage("Could not refresh right now. Please try again.");
+        return;
+      }
+      const json = (await res.json().catch(() => ({}))) as {
+        runs?: Array<{ conclusion: string | null; status: string; htmlUrl: string; createdAt: string; updatedAt: string; event: string; actor: string | null; runNumber: number }>;
+        triggerAudit?: Array<{ app_user_email: string | null; github_run_number: number | null; created_at: string }>;
+        latestRunJobs?: Array<{ name: string; status: string; conclusion: string | null; steps: Array<{ number: number; name: string; status: string; conclusion: string | null }> }>;
+      };
+      setWorkflowRuns(json.runs ?? []);
+      setWorkflowTriggerAudit(json.triggerAudit ?? []);
+      setLatestRunJobs(json.latestRunJobs ?? []);
+      setRunStatusMessage(`Updated just now (${new Date().toLocaleTimeString()}).`);
+    } finally {
+      setRefreshingRunStatus(false);
     }
-    const json = (await res.json().catch(() => ({}))) as {
-      runs?: Array<{ conclusion: string | null; status: string; htmlUrl: string; createdAt: string; updatedAt: string; event: string; actor: string | null; runNumber: number }>;
-      triggerAudit?: Array<{ app_user_email: string | null; github_run_number: number | null; created_at: string }>;
-      latestRunJobs?: Array<{ name: string; status: string; conclusion: string | null; steps: Array<{ number: number; name: string; status: string; conclusion: string | null }> }>;
-    };
-    setWorkflowRuns(json.runs ?? []);
-    setWorkflowTriggerAudit(json.triggerAudit ?? []);
-    setLatestRunJobs(json.latestRunJobs ?? []);
   }, []);
 
   useEffect(() => {
@@ -593,12 +603,17 @@ export default function FixturesPage() {
                 <span className="font-bold text-slate-500 uppercase tracking-wide">Last scraper update</span>
                 <button
                   type="button"
-                  className="text-[10px] font-black uppercase tracking-widest text-blue-600"
+                  disabled={refreshingRunStatus}
+                  className={cn(
+                    "text-[10px] font-black uppercase tracking-widest",
+                    refreshingRunStatus ? "text-slate-400" : "text-blue-600"
+                  )}
                   onClick={() => void refreshWorkflowRuns()}
                 >
-                  Refresh
+                  {refreshingRunStatus ? "Refreshing..." : "Refresh"}
                 </button>
               </div>
+              {runStatusMessage ? <p className="mt-1 text-[11px] text-slate-500">{runStatusMessage}</p> : null}
               <p className="mt-1 text-[11px]">
                 Status:{" "}
                 <span className="font-bold">
