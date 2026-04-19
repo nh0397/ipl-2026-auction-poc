@@ -344,7 +344,7 @@ export default function ScoreboardPage() {
 
   const [fixtures, setFixtures] = useState<Fixture[]>([]);
   /** Fixtures sub-tab: scheduled vs finished (aligned with /fixtures page). */
-  const [fixtureListView, setFixtureListView] = useState<"scheduled" | "results">("scheduled");
+  const [fixtureListView, setFixtureListView] = useState<"scheduled" | "results">("results");
   const [fixtureTeamFilter, setFixtureTeamFilter] = useState<string | null>(null);
 
   const [subLoading, setSubLoading] = useState(false);
@@ -1908,26 +1908,6 @@ export default function ScoreboardPage() {
                   <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
-                      onClick={() => setFixtureListView("scheduled")}
-                      className={cn(
-                        "touch-manipulation px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
-                        fixtureListView === "scheduled"
-                          ? "bg-slate-900 text-white shadow-lg"
-                          : "bg-slate-100 text-slate-500 hover:bg-slate-200"
-                      )}
-                    >
-                      Upcoming
-                      <span
-                        className={cn(
-                          "ml-2 text-[9px] px-1.5 py-0.5 rounded-md font-black",
-                          fixtureListView === "scheduled" ? "bg-white/20" : "bg-slate-200"
-                        )}
-                      >
-                        {scheduledFixturesTab.length}
-                      </span>
-                    </button>
-                    <button
-                      type="button"
                       onClick={() => setFixtureListView("results")}
                       className={cn(
                         "touch-manipulation px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
@@ -1944,6 +1924,26 @@ export default function ScoreboardPage() {
                         )}
                       >
                         {resultFixturesTab.length}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFixtureListView("scheduled")}
+                      className={cn(
+                        "touch-manipulation px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
+                        fixtureListView === "scheduled"
+                          ? "bg-slate-900 text-white shadow-lg"
+                          : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+                      )}
+                    >
+                      Upcoming
+                      <span
+                        className={cn(
+                          "ml-2 text-[9px] px-1.5 py-0.5 rounded-md font-black",
+                          fixtureListView === "scheduled" ? "bg-white/20" : "bg-slate-200"
+                        )}
+                      >
+                        {scheduledFixturesTab.length}
                       </span>
                     </button>
                   </div>
