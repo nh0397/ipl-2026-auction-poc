@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <circle cx="32" cy="32" r="30" fill="#d7263d" />
+  <path
+    d="M16 20c6 4 10 10 10 18s-4 14-10 18M48 20c-6 4-10 10-10 18s4 14 10 18"
+    fill="none"
+    stroke="#ffffff"
+    stroke-width="3.5"
+    stroke-linecap="round"
+  />
+  <path d="M20 24l-2 2M22 28l-2 2M24 32l-2 2M26 36l-2 2M28 40l-2 2" stroke="#ffffff" stroke-width="2" stroke-linecap="round" />
+  <path d="M44 24l2 2M42 28l2 2M40 32l2 2M38 36l2 2M36 40l2 2" stroke="#ffffff" stroke-width="2" stroke-linecap="round" />
+</svg>

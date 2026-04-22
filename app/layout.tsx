@@ -19,7 +19,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "IPL 2026 Auction POC",
+  title: "IPL 2026 Auction Hub",
   description: "Sign in to participate",
 };
 
@@ -55,8 +55,8 @@ export default async function RootLayout({
         <AuthProvider initialSession={session} initialProfile={profile}>
           <Navbar />
           <main className="min-w-0">{children}</main>
-          <Footer />
-          <FloatingChat />
+          {session?.user ? <Footer /> : null}
+          {session?.user ? <FloatingChat /> : null}
           <AppToaster />
         </AuthProvider>
       </body>

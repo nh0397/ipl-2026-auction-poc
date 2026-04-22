@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/components/auth/AuthProvider";
-import { LayoutDashboard, ShieldCheck, LogOut, BookOpen, ChevronDown, User, Activity, Gavel, Search, Menu, X, Users, History, Trophy, Zap, Calendar } from "lucide-react";
+import { LayoutDashboard, ShieldCheck, LogOut, BookOpen, ChevronDown, User, Activity, Gavel, Search, Menu, X, Users, Trophy } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export function Navbar() {
