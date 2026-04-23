@@ -16,6 +16,39 @@ const AuthContext = createContext<{
 
 export const useAuth = () => useContext(AuthContext);
 
+const ADMIN_EMAIL = (process.env.NEXT_PUBLIC_ADMIN_EMAIL || "project7072@gmail.com").toLowerCase();
+
+async function ensureProfile(currentUser: any) {
+  if (!currentUser?.id || !currentUser?.email) return null;
+
+  const { data: existingProfile } = await supabase
+    .from("profiles")
+    .select("*")
+    .eq("id", currentUser.id)
+    .maybeSingle();
+
+  if (existingProfile) return existingProfile;
+
+  const role = currentUser.email.toLowerCase() === ADMIN_EMAIL ? "Admin" : "Viewer";
+  const { data: createdProfile } = await supabase
+    .from("profiles")
+    .upsert(
+      {
+        id: currentUser.id,
+        email: currentUser.email,
+        full_name: currentUser.user_metadata?.full_name ?? null,
+        avatar_url: currentUser.user_metadata?.avatar_url ?? null,
+        role,
+        budget: role === "Admin" ? 120 : 0,
+      },
+      { onConflict: "id" }
+    )
+    .select("*")
+    .maybeSingle();
+
+  return createdProfile || null;
+}
+
 export function AuthProvider({ 
   children, 
   initialSession,
@@ -44,11 +77,7 @@ export function AuthProvider({
       if (lastStatus.current !== currentStatus && hasInitialized.current) {
         lastStatus.current = currentStatus;
         if (event === 'SIGNED_IN') {
-          const { data: prof } = await supabase
-            .from("profiles")
-            .select("*")
-            .eq("id", currentUser?.id)
-            .single();
+          const prof = await ensureProfile(currentUser);
           setProfile(prof || null);
           router.refresh();
         } else if (event === 'SIGNED_OUT') {

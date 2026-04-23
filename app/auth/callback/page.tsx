@@ -5,6 +5,8 @@ import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
 import { AlertCircle, Loader2 } from "lucide-react";
 
+const ADMIN_EMAIL = (process.env.NEXT_PUBLIC_ADMIN_EMAIL || "project7072@gmail.com").toLowerCase();
+
 export default function AuthCallback() {
   const router = useRouter();
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -26,10 +28,36 @@ export default function AuthCallback() {
       localStorage.setItem("auth_approved", "true");
       
       if (session?.user?.id) {
-         const { data: profile } = await supabase.from('profiles').select('role').eq('id', session.user.id).single();
+         const { data: existingProfile } = await supabase
+           .from('profiles')
+           .select('id,role')
+           .eq('id', session.user.id)
+           .maybeSingle();
+
+         let profile = existingProfile;
+         if (!profile && session.user.email) {
+           const role = session.user.email.toLowerCase() === ADMIN_EMAIL ? 'Admin' : 'Viewer';
+           const { data: created } = await supabase
+             .from('profiles')
+             .upsert(
+               {
+                 id: session.user.id,
+                 email: session.user.email,
+                 full_name: session.user.user_metadata?.full_name ?? null,
+                 avatar_url: session.user.user_metadata?.avatar_url ?? null,
+                 role,
+                 budget: role === 'Admin' ? 120 : 0,
+               },
+               { onConflict: 'id' }
+             )
+             .select('id,role')
+             .maybeSingle();
+           profile = created || null;
+         }
+
          if (profile?.role === 'Viewer') {
-            router.replace('/auction');
-            return;
+           router.replace('/auction');
+           return;
          }
       }
       router.replace("/dashboard");

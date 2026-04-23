@@ -43,7 +43,7 @@ export default async function RootLayout({
       .from("profiles")
       .select("*")
       .eq("id", session.user.id)
-      .single();
+      .maybeSingle();
     profile = prof || null;
   }
 
