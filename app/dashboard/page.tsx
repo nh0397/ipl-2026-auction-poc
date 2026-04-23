@@ -177,12 +177,12 @@ export default function Dashboard() {
   const overseas = mySquad.filter(p => (p.type || '').toLowerCase() === 'overseas').length;
 
   return (
-    <div className="min-h-screen bg-slate-50 font-sans text-slate-900 leading-normal overflow-hidden pt-8 min-h-[calc(100vh-64px)] pb-12">
+    <div className="min-h-screen min-w-0 bg-slate-50 font-sans text-slate-900 leading-normal overflow-x-hidden pt-6 sm:pt-8 min-h-[calc(100vh-64px)] pb-8 sm:pb-12">
       {/* 1. FRANCHISE TABLE COMMAND ROW */}
-      <div className="w-full border-b border-slate-100 bg-white/50 backdrop-blur-sm px-6 md:px-12 py-4 flex flex-col md:flex-row justify-between items-center gap-4 z-30">
-        <div className="flex items-center gap-4">
-           <div className="h-2 w-2 bg-blue-600 rounded-full animate-pulse" />
-           <p className="text-sm font-bold tracking-tight text-slate-400">
+      <div className="w-full min-w-0 border-b border-slate-100 bg-white/50 backdrop-blur-sm px-4 sm:px-6 md:px-12 py-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 z-30">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 min-w-0 max-w-full">
+           <div className="h-2 w-2 bg-blue-600 rounded-full animate-pulse shrink-0" />
+           <p className="text-xs sm:text-sm font-bold tracking-tight text-slate-400 min-w-0 break-words">
              Franchise Delegate: <span className="text-slate-900 font-black italic">{profile?.full_name || "Owner"}</span> 
            </p>
            <div className="h-4 w-[1px] bg-slate-200 hidden md:block" />
@@ -197,7 +197,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <div className="w-full px-6 md:px-12 py-8 space-y-8">
+      <div className="w-full min-w-0 px-4 sm:px-6 md:px-12 py-6 sm:py-8 space-y-6 sm:space-y-8">
         
         {/* Team Name Prompt */}
         {profile && (
@@ -208,7 +208,7 @@ export default function Dashboard() {
           
           {/* PURSE PANEL */}
           <div className="md:col-span-12 lg:col-span-4 space-y-8">
-            <div className="bg-white rounded-[2.5rem] border border-slate-100 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.03)] p-10 relative overflow-hidden group h-full flex flex-col justify-between">
+            <div className="bg-white rounded-[1.75rem] sm:rounded-[2.5rem] border border-slate-100 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.03)] p-6 sm:p-10 relative overflow-hidden group h-full flex flex-col justify-between min-w-0">
               <div className="absolute top-0 right-0 p-8 opacity-5 group-hover:opacity-10 transition-opacity">
                  <Briefcase size={120} />
               </div>
@@ -219,21 +219,21 @@ export default function Dashboard() {
                   <h2 className="text-xl font-black tracking-tight text-slate-900 italic">Financial Cap Status</h2>
                 </div>
                 
-                <div className="flex items-baseline gap-2">
-                  <span className="text-7xl lg:text-8xl font-black tracking-tighter text-slate-900">{remainingPurse.toFixed(2)}</span>
-                  <span className="text-3xl font-black text-blue-600 italic">CR</span>
+                <div className="flex items-baseline gap-1 sm:gap-2 min-w-0 flex-wrap">
+                  <span className="text-4xl min-[400px]:text-5xl sm:text-6xl md:text-7xl lg:text-8xl font-black tracking-tighter text-slate-900 tabular-nums break-all max-w-full leading-none">{remainingPurse.toFixed(2)}</span>
+                  <span className="text-2xl sm:text-3xl font-black text-blue-600 italic shrink-0">CR</span>
                 </div>
 
                 <div className="space-y-3">
                   <div className={cn(
-                    "p-4 rounded-2xl border flex justify-between items-center transition-colors",
+                    "p-3 sm:p-4 rounded-2xl border flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 transition-colors min-w-0",
                     isMinMet ? "bg-emerald-50 border-emerald-100" : "bg-red-50 border-red-200"
                   )}>
-                    <span className={cn("text-[10px] font-black uppercase tracking-widest block", isMinMet ? "text-emerald-600" : "text-red-500")}>
+                    <span className={cn("text-[10px] font-black uppercase tracking-widest block shrink-0", isMinMet ? "text-emerald-600" : "text-red-500")}>
                       Squad Capacity
                     </span>
-                    <span className={cn("text-lg font-black italic uppercase", isMinMet ? "text-emerald-900" : "text-red-700")}>
-                      {squadSize} / {maxPlayers} <span className="text-[10px] ml-1 opacity-70">PLAYERS (MIN {minPlayers})</span>
+                    <span className={cn("text-base sm:text-lg font-black italic uppercase text-right sm:text-left break-words max-w-full", isMinMet ? "text-emerald-900" : "text-red-700")}>
+                      {squadSize} / {maxPlayers} <span className="text-[9px] sm:text-[10px] ml-1 opacity-70 block sm:inline">PLAYERS (MIN {minPlayers})</span>
                     </span>
                   </div>
 
@@ -261,20 +261,20 @@ export default function Dashboard() {
           </div>
 
           {/* RECENT ACQUISITIONS FEED */}
-          <div className="md:col-span-12 lg:col-span-8 bg-white rounded-[2.5rem] border border-slate-100 shadow-sm overflow-hidden flex flex-col relative">
-             <div className="p-8 border-b border-slate-50 flex items-center justify-between bg-slate-50/10">
-                <div className="flex items-center gap-3">
-                   <div className="h-8 w-8 bg-blue-600 rounded-lg flex items-center justify-center text-white">
+          <div className="md:col-span-12 lg:col-span-8 bg-white rounded-[1.75rem] sm:rounded-[2.5rem] border border-slate-100 shadow-sm overflow-hidden flex flex-col relative min-w-0">
+             <div className="p-4 sm:p-8 border-b border-slate-50 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-slate-50/10 min-w-0">
+                <div className="flex items-center gap-3 min-w-0">
+                   <div className="h-8 w-8 bg-blue-600 rounded-lg flex items-center justify-center text-white shrink-0">
                       <History size={16} />
                    </div>
-                   <div>
+                   <div className="min-w-0">
                       <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-0.5 block">Strategic Feed</span>
-                      <h3 className="text-xl font-black italic uppercase tracking-tighter text-slate-900">Recent Signings Portfolio</h3>
+                      <h3 className="text-lg sm:text-xl font-black italic uppercase tracking-tighter text-slate-900 break-words">Recent Signings Portfolio</h3>
                    </div>
                 </div>
-                <div className="flex items-center gap-1.5 px-3 py-1 bg-emerald-50 rounded-full">
-                   <div className="h-1.5 w-1.5 bg-emerald-500 rounded-full animate-pulse" />
-                   <span className="text-[9px] font-black uppercase tracking-widest text-emerald-600">Live Acquisition Updates</span>
+                <div className="flex items-center gap-1.5 px-2 sm:px-3 py-1 bg-emerald-50 rounded-full max-w-full">
+                   <div className="h-1.5 w-1.5 bg-emerald-500 rounded-full animate-pulse shrink-0" />
+                   <span className="text-[8px] sm:text-[9px] font-black uppercase tracking-tight sm:tracking-widest text-emerald-600 leading-snug">Live Updates</span>
                 </div>
              </div>
 
@@ -333,12 +333,12 @@ export default function Dashboard() {
                    View Complete Auction History <ArrowUpRight size={14} />
                  </Link>
               </div>
-             <div className="p-4 bg-slate-900 text-white/50 border-t border-slate-800 flex justify-between items-center px-8 shrink-0">
-                <span className="text-[9px] font-black uppercase tracking-widest flex items-center gap-2">
-                   <Activity size={10} className="text-blue-400" />
+             <div className="p-3 sm:p-4 bg-slate-900 text-white/50 border-t border-slate-800 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 px-4 sm:px-8 shrink-0">
+                <span className="text-[9px] font-black uppercase tracking-widest flex items-center gap-2 min-w-0 break-words">
+                   <Activity size={10} className="text-blue-400 shrink-0" />
                    Protocol: Real-time Signature Sync
                 </span>
-                <span className="text-[9px] font-black uppercase tracking-widest text-white/20">Auction Lifecycle 2026</span>
+                <span className="text-[9px] font-black uppercase tracking-widest text-white/20 shrink-0">Auction Lifecycle 2026</span>
              </div>
           </div>
         </div>
@@ -347,17 +347,17 @@ export default function Dashboard() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8 pt-4">
              <Link 
                href="/scoreboard"
-               className="bg-indigo-600 p-8 rounded-[2.5rem] text-white shadow-xl shadow-indigo-100 flex items-center gap-6 group hover:scale-[1.02] transition-all"
+               className="bg-indigo-600 p-6 sm:p-8 rounded-[1.75rem] sm:rounded-[2.5rem] text-white shadow-xl shadow-indigo-100 flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6 group hover:scale-[1.02] transition-all min-w-0"
              >
                 <div className="h-16 w-16 bg-white/10 rounded-[1.5rem] flex items-center justify-center text-white shadow-sm group-hover:bg-amber-500 transition-colors">
                    <Trophy size={28} className="fill-current" />
                 </div>
-                <div className="flex-1">
+                <div className="flex-1 min-w-0 w-full sm:w-auto">
                    <span className="text-[10px] font-black uppercase tracking-widest text-indigo-300 block mb-1">Match Day Hub</span>
-                   <h3 className="text-2xl font-black italic tracking-tight uppercase">Scoreboard Hub</h3>
+                   <h3 className="text-xl sm:text-2xl font-black italic tracking-tight uppercase break-words">Scoreboard Hub</h3>
                    <p className="text-xs font-bold text-indigo-200 mt-1 uppercase tracking-wide">Points, Strategy & Standings</p>
                 </div>
-                <ArrowUpRight size={20} className="text-white/30 group-hover:text-white" />
+                <ArrowUpRight size={20} className="text-white/30 group-hover:text-white self-end sm:self-center shrink-0" />
              </Link>
 
              <div className="bg-slate-900 p-8 rounded-[2.5rem] text-white shadow-xl shadow-slate-200 flex flex-col gap-6 relative overflow-hidden transition-all">

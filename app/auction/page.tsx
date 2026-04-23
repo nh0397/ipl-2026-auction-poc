@@ -479,93 +479,30 @@ export default function AuctionPage() {
   const markSold = async () => {
     if (!auctionState?.current_bidder_id || !currentPlayer) return;
     setActionLoading(true);
-    const { stateId } = await getAuctionIds();
-
-    // Capture values before any updates
-    const buyerId = auctionState.current_bidder_id;
-    const buyerName = auctionState.current_bidder_name;
-    const salePrice = roundCr(auctionState.current_bid);
-    const playerId = currentPlayer.id;
-
-    // Enforce roster + purse constraints at the moment of signing (source of truth).
     try {
-      const maxPlayersCfg = auctionConfig?.max_players || 28;
-      const budgetCfg = auctionConfig?.budget_per_team || 150;
+      const { data: result, error } = await supabase.rpc("mark_current_player_sold");
 
-      const { data: buyerRoster, error: rosterErr } = await supabase
-        .from("players")
-        .select("sold_price, auction_status, sold_to_id")
-        .eq("sold_to_id", buyerId)
-        .eq("auction_status", "sold");
-
-      if (rosterErr) {
-        alert(`Could not validate buyer roster: ${rosterErr.message}`);
+      if (error) {
+        alert(`System Error: ${error.message}`);
         return;
       }
 
-      const boughtCount = buyerRoster?.length || 0;
-      if (boughtCount >= maxPlayersCfg) {
-        alert(`Cannot sign: this franchise already has ${boughtCount}/${maxPlayersCfg} players.`);
+      if (!result?.success) {
+        alert(result?.message || "Could not mark player as sold.");
         return;
       }
 
-      const spent = roundCr(
-        (buyerRoster || []).reduce((sum, p: any) => {
-          const priceValue =
-            typeof p.sold_price === "string"
-              ? parseFloat(p.sold_price.replace(/[^\d.]/g, ""))
-              : Number(p.sold_price || 0);
-          return sum + (isNaN(priceValue) ? 0 : priceValue);
-        }, 0)
-      );
-
-      const purseBefore = roundCr(budgetCfg - spent);
-      const purseAfter = roundCr(purseBefore - salePrice);
-      if (purseAfter < 0) {
-        alert(
-          `Cannot sign: purse would go negative (${purseAfter.toFixed(2)} Cr).`
-        );
-        return;
-      }
-
-      const slotsAfter = Math.max(0, maxPlayersCfg - (boughtCount + 1));
-      const minReserve = roundCr(slotsAfter * MIN_PLAYER_BASE_PRICE_CR);
-      if (purseAfter < minReserve) {
-        alert(
-          `Cannot sign: you must reserve at least ${minReserve.toFixed(2)} Cr for the remaining ${slotsAfter} player(s) (min ${MIN_PLAYER_BASE_PRICE_CR.toFixed(2)} Cr each).`
-        );
-        return;
-      }
+      await logAction("MARK_SOLD", {
+        player_id: result?.player_id || currentPlayer.id,
+        player_name: result?.player_name || currentPlayer.player_name,
+        buyer_id: result?.buyer_id || auctionState.current_bidder_id,
+        buyer_name: result?.buyer_name || auctionState.current_bidder_name,
+        sale_price: result?.sale_price ?? roundCr(auctionState.current_bid),
+      });
     } finally {
-      // no-op; keeps structure consistent with early returns above
+      await fetchAll({ silent: true });
+      setActionLoading(false);
     }
-
-    // Update player record (base_pool = pool before sale so admin/registry can release back)
-    await supabase.from("players").update({
-      status: "Sold",
-      auction_status: "sold",
-      sold_to: buyerName,
-      sold_price: `${salePrice} Cr`,
-      sold_to_id: buyerId,
-      base_pool: currentPlayer.base_pool || currentPlayer.pool || null,
-    }).eq("id", playerId);
-
-    // Update auction state
-    await supabase.from("auction_state").update({
-      status: "sold",
-      updated_at: new Date().toISOString(),
-    }).eq("id", stateId);
-
-    await logAction("MARK_SOLD", {
-      player_id: playerId,
-      player_name: currentPlayer.player_name,
-      buyer_id: buyerId,
-      buyer_name: buyerName,
-      sale_price: salePrice,
-    });
-
-    await fetchAll({ silent: true });
-    setActionLoading(false);
   };
 
   const markUnsold = async () => {
@@ -873,8 +810,8 @@ export default function AuctionPage() {
   // ─── Render ───
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#FDFDFF] p-4 md:p-10 font-sans">
-        <div className="max-w-7xl mx-auto px-4 py-8 space-y-8">
+      <div className="min-h-screen min-w-0 bg-[#FDFDFF] p-3 sm:p-4 md:p-10 font-sans">
+        <div className="max-w-7xl mx-auto min-w-0 px-2 sm:px-4 py-6 sm:py-8 space-y-8">
           <div className="flex items-center justify-between gap-6">
             <div className="space-y-2">
               <div className="h-6 w-64 bg-slate-200 rounded-xl animate-pulse" />
@@ -927,87 +864,76 @@ export default function AuctionPage() {
   const remainingPurse = initialPurse - totalSpent;
 
   return (
-    <div className="min-h-screen bg-[#FDFDFF] p-4 md:p-10 font-sans">
-      <div className="max-w-7xl mx-auto px-4 py-8">
+    <div className="min-h-screen min-w-0 bg-[#FDFDFF] p-3 sm:p-4 md:p-10 font-sans">
+      <div className="max-w-7xl mx-auto min-w-0 px-2 sm:px-4 py-4 sm:py-8">
         {/* Pass Notification Overlay */}
         {passerNotification && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center pointer-events-none">
-            <div className="bg-red-600 text-white px-12 py-8 rounded-[3rem] shadow-2xl shadow-red-500/50 animate-in zoom-in duration-300 flex flex-col items-center gap-2 border-[8px] border-white">
-              <span className="text-6xl font-black italic uppercase tracking-tighter">OUT!</span>
-              <span className="text-2xl font-bold uppercase tracking-widest opacity-90">{passerNotification}</span>
+          <div className="fixed inset-0 z-[100] flex items-center justify-center pointer-events-none px-4">
+            <div className="bg-red-600 text-white px-6 py-6 sm:px-12 sm:py-8 rounded-3xl sm:rounded-[3rem] shadow-2xl shadow-red-500/50 animate-in zoom-in duration-300 flex flex-col items-center gap-2 border-4 sm:border-[8px] border-white max-w-[min(100%,24rem)] text-center">
+              <span className="text-4xl sm:text-6xl font-black italic uppercase tracking-tighter">OUT!</span>
+              <span className="text-base sm:text-2xl font-bold uppercase tracking-widest opacity-90 break-words max-w-full">{passerNotification}</span>
             </div>
           </div>
         )}
 
         {/* ── Tabs Navigation ── */}
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <Gavel className="h-5 w-5 text-blue-600" />
-              <span className="text-[10px] font-black uppercase tracking-[0.3em] text-blue-600">The Auction House</span>
+        <div className="flex flex-col gap-4 sm:gap-6 min-w-0 w-full">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 min-w-0">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 mb-1">
+                <Gavel className="h-5 w-5 text-blue-600 shrink-0" />
+                <span className="text-[10px] font-black uppercase tracking-[0.2em] sm:tracking-[0.3em] text-blue-600">The Auction House</span>
+              </div>
+              <h1 className="text-2xl sm:text-3xl md:text-4xl font-black italic tracking-tighter uppercase text-slate-900 leading-none break-words">Auction Room</h1>
             </div>
-            <h1 className="text-4xl font-black italic tracking-tighter uppercase text-slate-900 leading-none">Auction Room</h1>
+
+            <div className="flex w-full min-w-0 sm:w-auto overflow-x-auto no-scrollbar sm:overflow-visible touch-pan-x">
+              <div className="flex bg-slate-100 p-1 rounded-2xl border border-slate-200 shadow-sm shrink-0 w-full min-[360px]:w-auto min-[360px]:min-w-0">
+                {(["live", "teams", "history"] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    onClick={() => setAuctionTab(tab)}
+                    className={cn(
+                      "flex-1 min-[360px]:flex-none px-4 sm:px-8 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
+                      auctionTab === tab ? "bg-white text-blue-600 shadow-sm" : "text-slate-400 hover:text-slate-600"
+                    )}
+                  >
+                    {tab === "live" ? "Live" : tab === "teams" ? "Teams" : "History"}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
 
-          <div className="flex bg-slate-100 p-1 rounded-2xl border border-slate-200 shadow-sm">
-            <button
-              onClick={() => setAuctionTab("live")}
-              className={cn(
-                "px-8 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
-                auctionTab === "live" ? "bg-white text-blue-600 shadow-sm" : "text-slate-400 hover:text-slate-600"
-              )}
-            >
-              Live
-            </button>
-            <button
-              onClick={() => setAuctionTab("teams")}
-              className={cn(
-                "px-8 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
-                auctionTab === "teams" ? "bg-white text-blue-600 shadow-sm" : "text-slate-400 hover:text-slate-600"
-              )}
-            >
-              Teams
-            </button>
-            <button
-              onClick={() => setAuctionTab("history")}
-              className={cn(
-                "px-8 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
-                auctionTab === "history" ? "bg-white text-blue-600 shadow-sm" : "text-slate-400 hover:text-slate-600"
-              )}
-            >
-              History
-            </button>
-          </div>
-
-          <div className="flex flex-col md:flex-row items-center gap-6">
+          <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-3 sm:gap-4 md:gap-6 min-w-0 w-full sm:justify-end">
             {profile && profile.role !== "Viewer" && (
-              <div className="flex items-center gap-6 bg-white px-6 py-3 rounded-2xl border border-slate-100 shadow-sm">
-                <div className="flex flex-col">
+              <div className="flex items-center justify-between sm:justify-start gap-4 sm:gap-6 bg-white px-4 sm:px-6 py-3 rounded-2xl border border-slate-100 shadow-sm min-w-0 w-full sm:w-auto max-w-full">
+                <div className="flex flex-col min-w-0">
                   <span className="text-[8px] font-black uppercase tracking-widest text-slate-400">Remaining Purse</span>
-                  <div className="flex items-baseline gap-1">
-                    <span className="text-xl font-black text-slate-900">{remainingPurse.toFixed(2)}</span>
-                    <span className="text-[8px] font-black uppercase text-slate-400 mb-1">Cr</span>
+                  <div className="flex items-baseline gap-1 min-w-0">
+                    <span className="text-lg sm:text-xl font-black text-slate-900 tabular-nums truncate">{remainingPurse.toFixed(2)}</span>
+                    <span className="text-[8px] font-black uppercase text-slate-400 mb-1 shrink-0">Cr</span>
                   </div>
                 </div>
-                <div className="h-8 w-[1px] bg-slate-100" />
-                <div className="flex flex-col">
+                <div className="h-8 w-px bg-slate-100 shrink-0" />
+                <div className="flex flex-col min-w-0">
                   <span className="text-[8px] font-black uppercase tracking-widest text-slate-400">Players</span>
                   <div className="flex items-baseline gap-1">
-                    <span className="text-xl font-black text-slate-900">{mySquad.length}</span>
-                    <span className="text-[8px] font-black uppercase text-slate-400 mb-1">/{maxPlayers}</span>
+                    <span className="text-lg sm:text-xl font-black text-slate-900 tabular-nums">{mySquad.length}</span>
+                    <span className="text-[8px] font-black uppercase text-slate-400 mb-1 shrink-0">/{maxPlayers}</span>
                   </div>
                 </div>
               </div>
             )}
             <div className={cn(
-              "px-6 py-3 rounded-2xl font-black text-sm uppercase tracking-widest flex items-center gap-3",
+              "px-4 sm:px-6 py-3 rounded-2xl font-black text-xs sm:text-sm uppercase tracking-widest flex items-center justify-center gap-2 sm:gap-3 w-full sm:w-auto min-w-0",
               auctionConfig?.status === "setup" && "bg-slate-100 text-slate-500",
               auctionConfig?.status === "frozen" && "bg-amber-50 text-amber-600 border border-amber-200",
               auctionConfig?.status === "live" && "bg-emerald-50 text-emerald-600 border border-emerald-200",
               auctionConfig?.status === "paused" && "bg-orange-50 text-orange-600 border border-orange-200",
               auctionConfig?.status === "completed" && "bg-blue-50 text-blue-600 border border-blue-200",
             )}>
-              {auctionConfig?.status === "live" && <div className="h-2 w-2 bg-emerald-500 rounded-full animate-pulse" />}
+              {auctionConfig?.status === "live" && <div className="h-2 w-2 bg-emerald-500 rounded-full animate-pulse shrink-0" />}
               {auctionConfig?.status?.toUpperCase() || "SETUP"}
             </div>
           </div>
@@ -1056,32 +982,33 @@ export default function AuctionPage() {
         )}
 
         {/* ── Pool Progress ── */}
-        <div className="grid grid-cols-5 gap-3">
+        <div className="grid grid-cols-2 min-[480px]:grid-cols-3 md:grid-cols-5 gap-2 sm:gap-3 min-w-0 w-full">
           {POOL_ORDER.map(pool => (
             <div key={pool} className={cn(
-              "bg-white rounded-2xl p-4 border transition-all cursor-pointer hover:shadow-md",
+              "bg-white rounded-2xl p-3 sm:p-4 border transition-all min-w-0 overflow-hidden",
+              isAdmin && isLive && "cursor-pointer hover:shadow-md",
               currentPool === pool && isLive ? "border-blue-300 ring-2 ring-blue-100 shadow-lg" : "border-slate-100",
               pool === "Unsold" && (poolCounts[pool]?.remaining ?? 0) > 0 && "border-amber-200 bg-amber-50/50"
             )}
             onClick={() => isAdmin && isLive && switchPool(pool)}
             >
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">{pool}</span>
-                {currentPool === pool && isLive && <Zap size={12} className="text-blue-600" />}
+              <div className="flex items-center justify-between gap-1 mb-2 min-w-0">
+                <span className="text-[8px] sm:text-[9px] font-black uppercase tracking-tight sm:tracking-widest text-slate-400 truncate">{pool}</span>
+                {currentPool === pool && isLive && <Zap size={12} className="text-blue-600 shrink-0" />}
               </div>
-              <div className="flex items-baseline gap-1">
-                <span className="text-2xl font-black text-slate-900">{poolCounts[pool]?.remaining ?? "—"}</span>
-                <span className="text-xs font-bold text-slate-300">/ {poolCounts[pool]?.total ?? "—"}</span>
+              <div className="flex items-baseline gap-0.5 sm:gap-1 flex-wrap min-w-0">
+                <span className="text-lg sm:text-2xl font-black text-slate-900 tabular-nums leading-none truncate min-w-0">{poolCounts[pool]?.remaining ?? "—"}</span>
+                <span className="text-[10px] sm:text-xs font-bold text-slate-300 shrink-0">/ {poolCounts[pool]?.total ?? "—"}</span>
               </div>
-              <span className="text-[8px] font-black uppercase tracking-widest text-slate-300 mt-1 block">Remaining</span>
+              <span className="text-[7px] sm:text-[8px] font-black uppercase tracking-tight sm:tracking-widest text-slate-300 mt-1 block truncate">Remaining</span>
             </div>
           ))}
         </div>
 
         {/* ── Admin Controls ── */}
         {isAdmin && (
-          <div className="bg-slate-900 rounded-[2rem] p-6 flex flex-wrap items-center gap-4">
-            <span className="text-[9px] font-black uppercase tracking-widest text-white/30 mr-auto">Auctioneer Console</span>
+            <div className="bg-slate-900 rounded-2xl sm:rounded-[2rem] p-4 sm:p-6 flex flex-wrap items-center gap-2 sm:gap-4 min-w-0 w-full">
+            <span className="text-[9px] font-black uppercase tracking-widest text-white/30 w-full sm:w-auto sm:mr-auto">Auctioneer Console</span>
             
             {auctionConfig?.status === "live" && (
               <Button 
@@ -1195,7 +1122,7 @@ export default function AuctionPage() {
 
         {/* ── Not Live State ── */}
         {!isLive && auctionConfig?.status !== "completed" && (
-          <div className="bg-white rounded-[3rem] border border-slate-100 shadow-sm p-16 text-center flex flex-col items-center gap-6">
+          <div className="bg-white rounded-[2rem] sm:rounded-[3rem] border border-slate-100 shadow-sm p-8 sm:p-16 text-center flex flex-col items-center gap-6">
             <div className="h-24 w-24 bg-slate-50 rounded-full flex items-center justify-center text-slate-200">
               <Gavel size={48} />
             </div>
@@ -1214,7 +1141,7 @@ export default function AuctionPage() {
 
         {/* ── Completed State ── */}
         {auctionConfig?.status === "completed" && (
-          <div className="bg-white rounded-[3rem] border border-slate-100 shadow-sm p-16 text-center flex flex-col items-center gap-6">
+          <div className="bg-white rounded-[2rem] sm:rounded-[3rem] border border-slate-100 shadow-sm p-8 sm:p-16 text-center flex flex-col items-center gap-6">
             <div className="h-24 w-24 bg-blue-50 rounded-full flex items-center justify-center text-blue-600">
               <Trophy size={48} />
             </div>
@@ -1228,59 +1155,59 @@ export default function AuctionPage() {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
             {/* Player Card */}
-            <div className="lg:col-span-2 bg-white rounded-[2.5rem] border border-slate-100 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.05)] overflow-hidden relative">
+            <div className="lg:col-span-2 bg-white rounded-2xl sm:rounded-[2.5rem] border border-slate-100 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.05)] overflow-hidden relative min-w-0">
               {/* Timer Badge (Safe Overlay) */}
-              <div className="absolute top-6 right-8 flex items-center gap-2 bg-slate-900 text-white px-4 py-2 rounded-2xl shadow-lg z-10">
-                <Timer size={14} className="text-blue-400 animate-pulse" />
-                <span className="text-sm font-black italic tracking-wider tabular-nums">{formatTime(elapsedSeconds)}</span>
+              <div className="absolute top-3 right-3 sm:top-6 sm:right-8 flex items-center gap-1.5 sm:gap-2 bg-slate-900 text-white px-2.5 py-1.5 sm:px-4 sm:py-2 rounded-xl sm:rounded-2xl shadow-lg z-10 max-w-[calc(100%-1.5rem)]">
+                <Timer size={14} className="text-blue-400 animate-pulse shrink-0" />
+                <span className="text-xs sm:text-sm font-black italic tracking-wider tabular-nums">{formatTime(elapsedSeconds)}</span>
               </div>
-              <div className="p-8 flex flex-col md:flex-row items-center gap-8">
-                <div className="h-32 w-32 rounded-[2rem] bg-slate-50 overflow-hidden ring-4 ring-white shadow-xl flex items-center justify-center text-slate-300 shrink-0">
+              <div className="p-4 pt-14 sm:pt-8 sm:p-8 flex flex-col md:flex-row items-center gap-6 sm:gap-8 min-w-0">
+                <div className="h-24 w-24 sm:h-32 sm:w-32 rounded-2xl sm:rounded-[2rem] bg-slate-50 overflow-hidden ring-4 ring-white shadow-xl flex items-center justify-center text-slate-300 shrink-0">
                   {currentPlayer.image_url
                     ? <img src={getPlayerImage(currentPlayer.image_url)!} alt="" className="h-full w-full object-cover" />
                     : <Users size={48} />
                   }
                 </div>
-                <div className="flex-1 text-center md:text-left">
-                  <div className="flex items-center gap-2 justify-center md:justify-start mb-2">
-                    <span className="text-[11px] font-black text-blue-600 italic uppercase">{currentPlayer.team}</span>
-                    <span className="text-[9px] font-black text-slate-300 uppercase tracking-widest">•</span>
-                    <span className="text-[9px] font-black text-amber-600 uppercase tracking-widest bg-amber-50 px-2 py-0.5 rounded">{currentPool}</span>
-                    <span className="text-[9px] font-black text-slate-300 uppercase tracking-widest">•</span>
+                <div className="flex-1 min-w-0 text-center md:text-left">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 justify-center md:justify-start mb-2">
+                    <span className="text-[10px] sm:text-[11px] font-black text-blue-600 italic uppercase break-all">{currentPlayer.team}</span>
+                    <span className="text-[9px] font-black text-slate-300 uppercase tracking-widest hidden sm:inline">•</span>
+                    <span className="text-[9px] font-black text-amber-600 uppercase tracking-tight sm:tracking-widest bg-amber-50 px-2 py-0.5 rounded shrink-0">{currentPool}</span>
+                    <span className="text-[9px] font-black text-slate-300 uppercase tracking-widest hidden sm:inline">•</span>
                     <span className={cn(
-                      "text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded flex items-center gap-1",
+                      "text-[9px] font-black uppercase tracking-tight sm:tracking-widest px-2 py-0.5 rounded inline-flex items-center gap-1",
                       selectionMethod === "random" ? "text-blue-500 bg-blue-50" : "text-violet-600 bg-violet-50"
                     )}>
                       {selectionMethod === "random" ? <><Shuffle size={8} /> Random</> : <><SkipForward size={8} /> Selected</>}
                     </span>
                   </div>
-                  <h2 className="text-4xl font-black italic uppercase tracking-tighter text-slate-900 leading-none mb-2">{currentPlayer.player_name}</h2>
-                  <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">{currentPlayer.role} • {currentPlayer.country}</p>
+                  <h2 className="text-2xl sm:text-3xl md:text-4xl font-black italic uppercase tracking-tighter text-slate-900 leading-tight mb-2 break-words">{currentPlayer.player_name}</h2>
+                  <p className="text-xs sm:text-sm font-bold text-slate-400 uppercase tracking-widest line-clamp-2">{currentPlayer.role} • {currentPlayer.country}</p>
                 </div>
               </div>
 
               {/* Bid Display */}
-              <div className="border-t border-slate-50 p-8 bg-slate-50/30">
-                <div className="grid grid-cols-3 gap-6 text-center">
-                  <div>
+              <div className="border-t border-slate-50 p-4 sm:p-8 bg-slate-50/30 min-w-0">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6 text-center sm:text-center divide-y sm:divide-y-0 divide-slate-200/80 sm:divide-x sm:divide-slate-100">
+                  <div className="min-w-0 py-2 sm:py-0 first:pt-0 last:pb-0 sm:px-1">
                     <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 block mb-1">Base Price</span>
-                    <span className="text-2xl font-black text-slate-900">{auctionState.base_price} <span className="text-sm text-slate-400">Cr</span></span>
+                    <span className="text-xl sm:text-2xl font-black text-slate-900 tabular-nums break-all">{auctionState.base_price} <span className="text-xs sm:text-sm text-slate-400">Cr</span></span>
                   </div>
-                  <div className="border-x border-slate-100">
+                  <div className="min-w-0 py-2 sm:py-0 sm:px-1">
                     <span className="text-[9px] font-black uppercase tracking-widest text-emerald-600 block mb-1">Current Bid</span>
-                    <span className="text-4xl font-black text-emerald-600">{auctionState.current_bid} <span className="text-sm">Cr</span></span>
+                    <span className="text-3xl sm:text-4xl font-black text-emerald-600 tabular-nums leading-none break-all block">{auctionState.current_bid} <span className="text-xs sm:text-sm align-baseline">Cr</span></span>
                   </div>
-                  <div>
+                  <div className="min-w-0 py-2 sm:py-0 last:pt-0 sm:px-1">
                     <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 block mb-1">Min Increment</span>
-                    <span className="text-2xl font-black text-slate-900">+{auctionState.min_increment} <span className="text-sm text-slate-400">Cr</span></span>
+                    <span className="text-xl sm:text-2xl font-black text-slate-900 tabular-nums break-all">+{auctionState.min_increment} <span className="text-xs sm:text-sm text-slate-400">Cr</span></span>
                   </div>
                 </div>
 
                 {/* Current Highest Bidder */}
                 {auctionState.current_bidder_name && (
-                  <div className="mt-6 p-4 bg-emerald-50 rounded-2xl border border-emerald-100 text-center">
+                  <div className="mt-4 sm:mt-6 p-3 sm:p-4 bg-emerald-50 rounded-2xl border border-emerald-100 text-center min-w-0">
                     <span className="text-[9px] font-black uppercase tracking-widest text-emerald-600 mb-1 block">Highest Bidder</span>
-                    <span className="text-lg font-black text-emerald-700 italic uppercase">{auctionState.current_bidder_name}</span>
+                    <span className="text-base sm:text-lg font-black text-emerald-700 italic uppercase break-words max-w-full">{auctionState.current_bidder_name}</span>
                   </div>
                 )}
 
@@ -1295,7 +1222,7 @@ export default function AuctionPage() {
                         </span>
                       </div>
                     )}
-                    <div className="flex justify-center gap-3">
+                    <div className="flex flex-col sm:flex-row flex-wrap justify-center gap-3 w-full min-w-0 max-w-md mx-auto sm:max-w-none">
                       <Button
                         onClick={placeBid}
                         disabled={
@@ -1304,22 +1231,23 @@ export default function AuctionPage() {
                           auctionState.current_bidder_id === profile?.id ||
                           (auctionState.passed_user_ids || []).includes(profile?.id)
                         }
-                        className="h-14 px-10 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-black uppercase tracking-widest text-sm shadow-xl shadow-blue-200 active:scale-95 transition-all disabled:opacity-30 flex gap-3 min-w-[200px]"
+                        className="h-14 w-full sm:w-auto sm:min-w-[10rem] px-4 sm:px-10 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-black uppercase tracking-tighter sm:tracking-widest text-xs sm:text-sm shadow-xl shadow-blue-200 active:scale-95 transition-all disabled:opacity-30 flex gap-2 sm:gap-3 justify-center"
                       >
                         {isLockedByPeer ? (
-                          <div className="flex items-center gap-2">
-                            <Loader2 size={16} className="animate-spin text-blue-200" />
-                            <span className="animate-pulse">{lockingPeerName} is bidding...</span>
+                          <div className="flex items-center justify-center gap-2 min-w-0 text-left">
+                            <Loader2 size={16} className="animate-spin text-blue-200 shrink-0" />
+                            <span className="animate-pulse break-words leading-snug text-[11px] sm:text-sm">{lockingPeerName} is bidding…</span>
                           </div>
                         ) : (
                           <>
-                            <ArrowUp size={18} />
-                            Bid {roundCr(
-                              !auctionState.current_bidder_id
-                                ? auctionState.base_price
-                                : auctionState.current_bid + auctionState.min_increment
-                            ).toFixed(2)}{" "}
-                            Cr
+                            <ArrowUp size={18} className="shrink-0" />
+                            <span className="tabular-nums">
+                              Bid {roundCr(
+                                !auctionState.current_bidder_id
+                                  ? auctionState.base_price
+                                  : auctionState.current_bid + auctionState.min_increment
+                              ).toFixed(2)} Cr
+                            </span>
                           </>
                         )}
                       </Button>
@@ -1332,7 +1260,7 @@ export default function AuctionPage() {
                           (auctionState.passed_user_ids || []).includes(profile?.id)
                         }
                         className={cn(
-                          "h-14 px-8 rounded-2xl font-black uppercase tracking-widest text-sm active:scale-95 transition-all disabled:opacity-30 flex gap-2",
+                          "h-14 w-full sm:w-auto px-6 sm:px-8 rounded-2xl font-black uppercase tracking-widest text-sm active:scale-95 transition-all disabled:opacity-30 flex gap-2 justify-center shrink-0",
                           (auctionState.passed_user_ids || []).includes(profile?.id)
                             ? "bg-red-100 text-red-400 border border-red-200"
                             : "bg-red-500 hover:bg-red-600 text-white shadow-xl shadow-red-200"
@@ -1362,14 +1290,14 @@ export default function AuctionPage() {
                 {bidHistory.length > 0 ? (
                   <div className="divide-y divide-slate-50">
                     {bidHistory.map((bid, i) => (
-                      <div key={bid.id} className={cn("px-6 py-4 flex items-center justify-between", i === 0 && "bg-emerald-50/50")}>
-                        <div>
-                          <span className="text-sm font-black text-slate-900 italic uppercase">{bid.bidder_name}</span>
+                      <div key={bid.id} className={cn("px-4 sm:px-6 py-4 flex items-center justify-between gap-3 min-w-0", i === 0 && "bg-emerald-50/50")}>
+                        <div className="min-w-0 flex-1 text-left">
+                          <span className="text-sm font-black text-slate-900 italic uppercase block truncate">{bid.bidder_name}</span>
                           <span className="text-[9px] font-bold text-slate-300 uppercase tracking-widest block">
                             {new Date(bid.created_at).toLocaleTimeString()}
                           </span>
                         </div>
-                        <span className={cn("text-lg font-black", i === 0 ? "text-emerald-600" : "text-slate-400")}>
+                        <span className={cn("text-base sm:text-lg font-black tabular-nums shrink-0 text-right", i === 0 ? "text-emerald-600" : "text-slate-400")}>
                           {bid.amount} Cr
                         </span>
                       </div>
@@ -1517,8 +1445,8 @@ export default function AuctionPage() {
         ) : auctionTab === "teams" ? (
           <div className="space-y-8 animate-in fade-in duration-500">
             {/* Legend - Ported from squads page */}
-            <div className="flex flex-wrap gap-2 items-center bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
-              <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 mr-2">IPL Team Legend:</span>
+            <div className="flex flex-wrap gap-2 items-center bg-white p-3 sm:p-4 rounded-2xl border border-slate-100 shadow-sm min-w-0">
+              <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 mr-1 sm:mr-2 w-full sm:w-auto shrink-0">IPL Team Legend:</span>
               {Object.entries(iplColors).map(([team, colors]: [string, any]) => (
                 <div key={team} className={cn("px-2 py-1 flex items-center gap-1.5 rounded-lg border", colors.bg, colors.border)}>
                   <div className={cn("text-[9px] font-black uppercase tracking-widest", colors.text)}>{team}</div>
@@ -1587,7 +1515,7 @@ export default function AuctionPage() {
               </div>
 
               {/* Detail Pane */}
-              <div className="flex-1 w-full bg-white rounded-[2rem] border border-slate-100 shadow-xl overflow-hidden min-h-[600px] flex flex-col">
+              <div className="flex-1 w-full min-w-0 bg-white rounded-[1.5rem] sm:rounded-[2rem] border border-slate-100 shadow-xl overflow-hidden min-h-[min(28rem,70vh)] sm:min-h-[600px] flex flex-col">
                 {(() => {
                   const activeTeam = allProfiles.find(t => t.id === activeTeamId) || allProfiles[0];
                   if (!activeTeam) return null;
@@ -1610,14 +1538,14 @@ export default function AuctionPage() {
                   return (
                     <>
                       {/* Header Detail */}
-                      <div className="p-8 border-b border-slate-50 bg-slate-50/30 flex flex-col xl:flex-row xl:items-center justify-between gap-6">
-                        <div>
+                      <div className="p-4 sm:p-8 border-b border-slate-50 bg-slate-50/30 flex flex-col xl:flex-row xl:items-center justify-between gap-4 sm:gap-6 min-w-0">
+                        <div className="min-w-0">
                           <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Live Roster For</span>
-                          <h2 className="text-4xl font-black italic uppercase tracking-tighter text-slate-900">{activeTeam.team_name}</h2>
-                          <div className="text-xs font-bold text-slate-500 tracking-widest mt-1 uppercase">{activeTeam.full_name}</div>
+                          <h2 className="text-2xl sm:text-3xl md:text-4xl font-black italic uppercase tracking-tighter text-slate-900 break-words">{activeTeam.team_name}</h2>
+                          <div className="text-xs font-bold text-slate-500 tracking-tight sm:tracking-widest mt-1 uppercase break-words">{activeTeam.full_name}</div>
                         </div>
                         
-                        <div className="flex flex-wrap gap-3 items-center">
+                        <div className="flex flex-wrap gap-2 sm:gap-3 items-stretch sm:items-center w-full xl:w-auto min-w-0">
                             <Button 
                               onClick={() => downloadTeamCSV(activeTeam, teamPlayers)}
                               variant="outline"
@@ -1643,51 +1571,51 @@ export default function AuctionPage() {
 
                       {/* Squad Table - With Fixed Height & Scroll */}
                       <div className="flex-1 p-6 md:p-8 flex flex-col min-h-0 overflow-hidden">
-                        <div className="flex-1 overflow-auto overscroll-x-contain touch-pan-x [-webkit-overflow-scrolling:touch] pr-2 no-scrollbar">
+                        <div className="flex-1 overflow-auto overscroll-x-contain touch-pan-x [-webkit-overflow-scrolling:touch] pr-0 sm:pr-2 no-scrollbar -mx-1 px-1 sm:mx-0 sm:px-0">
                         {teamPlayers.length === 0 ? (
                            <div className="h-48 flex items-center justify-center text-center text-slate-400 font-black uppercase tracking-widest bg-slate-50 rounded-2xl border border-slate-100 border-dashed">
                               No players acquired yet
                            </div>
                         ) : (
-                          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                            <table className="w-full text-left border-collapse whitespace-nowrap">
+                          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden min-w-0">
+                            <table className="w-full min-w-[520px] sm:min-w-0 sm:table-auto text-left border-collapse text-sm sm:text-base">
                               <thead className="bg-slate-100">
                                 <tr>
-                                  <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest">Player Name</th>
-                                  <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest text-center">Team</th>
-                                  <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest text-center">Type</th>
-                                  <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest text-center">Role</th>
-                                  <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest text-right">Bid</th>
+                                  <th className="px-3 sm:px-6 py-3 sm:py-4 text-[9px] sm:text-[10px] font-black uppercase text-slate-500 tracking-tight sm:tracking-widest w-[32%] sm:w-auto">Player</th>
+                                  <th className="px-2 sm:px-6 py-3 sm:py-4 text-[9px] sm:text-[10px] font-black uppercase text-slate-500 tracking-tight sm:tracking-widest text-center w-[16%]">Team</th>
+                                  <th className="px-2 sm:px-6 py-3 sm:py-4 text-[9px] sm:text-[10px] font-black uppercase text-slate-500 tracking-tight sm:tracking-widest text-center w-[16%]">Type</th>
+                                  <th className="px-2 sm:px-6 py-3 sm:py-4 text-[9px] sm:text-[10px] font-black uppercase text-slate-500 tracking-tight sm:tracking-widest text-center w-[16%]">Role</th>
+                                  <th className="px-3 sm:px-6 py-3 sm:py-4 text-[9px] sm:text-[10px] font-black uppercase text-slate-500 tracking-tight sm:tracking-widest text-right w-[20%]">Bid</th>
                                 </tr>
                               </thead>
                               <tbody>
                                 {teamPlayers.map(player => {
                                   return (
                                     <tr key={player.id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50 transition-colors">
-                                       <td className="px-6 py-4">
-                                         <div className="flex items-center gap-4">
-                                           <div className="h-10 w-10 shrink-0 bg-white rounded-lg overflow-hidden border border-slate-200">
+                                       <td className="px-3 sm:px-6 py-3 sm:py-4 max-w-0">
+                                         <div className="flex items-center gap-2 sm:gap-4 min-w-0">
+                                           <div className="h-9 w-9 sm:h-10 sm:w-10 shrink-0 bg-white rounded-lg overflow-hidden border border-slate-200">
                                               {player.image_url ? <img src={getPlayerImage(player.image_url)!} alt="" className="w-full h-full object-cover object-top" /> : <Users size={20} className="m-auto opacity-20 mt-2" />}
                                            </div>
-                                           <span className="font-bold text-slate-900">{player.player_name}</span>
+                                           <span className="font-bold text-slate-900 truncate min-w-0 text-xs sm:text-sm">{player.player_name}</span>
                                          </div>
                                        </td>
-                                       <td className="px-6 py-4 text-center">
-                                         <span className="text-sm font-black text-slate-700 italic">{player.team}</span>
+                                       <td className="px-2 sm:px-6 py-3 sm:py-4 text-center align-top">
+                                         <span className="text-xs sm:text-sm font-black text-slate-700 italic break-words line-clamp-2">{player.team}</span>
                                        </td>
-                                       <td className="px-6 py-4 text-center">
-                                         <div className="flex flex-col items-center">
-                                           <span className="text-sm font-semibold text-slate-700">{player.type}</span>
-                                           <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">{player.country}</span>
+                                       <td className="px-2 sm:px-6 py-3 sm:py-4 text-center align-top">
+                                         <div className="flex flex-col items-center gap-0.5 min-w-0">
+                                           <span className="text-xs sm:text-sm font-semibold text-slate-700 break-words line-clamp-2">{player.type}</span>
+                                           <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-tight sm:tracking-widest text-slate-400">{player.country}</span>
                                          </div>
                                        </td>
-                                       <td className="px-6 py-4 text-center">
-                                         <span className="text-xs font-black uppercase tracking-widest bg-slate-100 px-2 py-1 rounded text-slate-600">
+                                       <td className="px-2 sm:px-6 py-3 sm:py-4 text-center align-top">
+                                         <span className="text-[10px] sm:text-xs font-black uppercase tracking-tight sm:tracking-widest bg-slate-100 px-1.5 sm:px-2 py-1 rounded text-slate-600 inline-block max-w-full break-words">
                                            {player.role}
                                          </span>
                                        </td>
-                                       <td className="px-6 py-4 text-right">
-                                         <span className="text-lg font-black text-slate-900">
+                                       <td className="px-3 sm:px-6 py-3 sm:py-4 text-right align-top">
+                                         <span className="text-sm sm:text-lg font-black text-slate-900 tabular-nums inline-block break-all text-right max-w-full">
                                             {player.sold_price}
                                          </span>
                                        </td>
@@ -1701,36 +1629,36 @@ export default function AuctionPage() {
                         </div>
 
                         {/* Financial Summary - Simplified Budget Logic */}
-                        <div className="mt-6 bg-slate-50 rounded-2xl border border-slate-200 p-5 shrink-0">
-                           <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Financial & Roster Summary</h3>
-                           <div className="grid grid-cols-4 lg:grid-cols-7 gap-3">
-                              <div className="p-2.5 bg-white rounded-xl border border-slate-100 flex flex-col items-center justify-center text-center shadow-sm">
-                                <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest block mb-0.5">Bought</span>
-                                <span className="text-lg font-black text-blue-600">{teamPlayers.length}</span>
+                        <div className="mt-4 sm:mt-6 bg-slate-50 rounded-2xl border border-slate-200 p-3 sm:p-5 shrink-0 min-w-0">
+                           <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3 sm:mb-4">Financial & Roster Summary</h3>
+                           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-2 sm:gap-3 min-w-0">
+                              <div className="p-2 sm:p-2.5 bg-white rounded-xl border border-slate-100 flex flex-col items-center justify-center text-center shadow-sm min-w-0">
+                                <span className="text-[7px] sm:text-[8px] font-black text-slate-400 uppercase tracking-tight sm:tracking-widest block mb-0.5">Bought</span>
+                                <span className="text-base sm:text-lg font-black text-blue-600 tabular-nums">{teamPlayers.length}</span>
                               </div>
-                              <div className="p-2.5 bg-white rounded-xl border border-slate-100 flex flex-col items-center justify-center text-center shadow-sm">
-                                <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest block mb-0.5">Min Left</span>
-                                <span className="text-lg font-black text-amber-500">{minRemaining}</span>
+                              <div className="p-2 sm:p-2.5 bg-white rounded-xl border border-slate-100 flex flex-col items-center justify-center text-center shadow-sm min-w-0">
+                                <span className="text-[7px] sm:text-[8px] font-black text-slate-400 uppercase tracking-tight sm:tracking-widest block mb-0.5">Min Left</span>
+                                <span className="text-base sm:text-lg font-black text-amber-500 tabular-nums">{minRemaining}</span>
                               </div>
-                              <div className="p-2.5 bg-white rounded-xl border border-slate-100 flex flex-col items-center justify-center text-center shadow-sm">
-                                <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest block mb-0.5">Max Left</span>
-                                <span className="text-lg font-black text-slate-700">{maxRemaining}</span>
+                              <div className="p-2 sm:p-2.5 bg-white rounded-xl border border-slate-100 flex flex-col items-center justify-center text-center shadow-sm min-w-0">
+                                <span className="text-[7px] sm:text-[8px] font-black text-slate-400 uppercase tracking-tight sm:tracking-widest block mb-0.5">Max Left</span>
+                                <span className="text-base sm:text-lg font-black text-slate-700 tabular-nums">{maxRemaining}</span>
                               </div>
-                              <div className="p-2.5 bg-white rounded-xl border border-slate-100 flex flex-col items-center justify-center text-center shadow-sm">
-                                <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest block mb-0.5">Initial Purse</span>
-                                <span className="text-lg font-black text-slate-900">{budget}</span>
+                              <div className="p-2 sm:p-2.5 bg-white rounded-xl border border-slate-100 flex flex-col items-center justify-center text-center shadow-sm min-w-0">
+                                <span className="text-[7px] sm:text-[8px] font-black text-slate-400 uppercase tracking-tight sm:tracking-widest block mb-0.5">Initial</span>
+                                <span className="text-base sm:text-lg font-black text-slate-900 tabular-nums">{budget}</span>
                               </div>
-                              <div className="p-2.5 bg-white rounded-xl border border-slate-100 flex flex-col items-center justify-center text-center shadow-sm">
-                                <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest block mb-0.5">Used</span>
-                                <span className="text-lg font-black text-rose-600">{spent.toFixed(2)}</span>
+                              <div className="p-2 sm:p-2.5 bg-white rounded-xl border border-slate-100 flex flex-col items-center justify-center text-center shadow-sm min-w-0">
+                                <span className="text-[7px] sm:text-[8px] font-black text-slate-400 uppercase tracking-tight sm:tracking-widest block mb-0.5">Used</span>
+                                <span className="text-base sm:text-lg font-black text-rose-600 tabular-nums break-all max-w-full">{spent.toFixed(2)}</span>
                               </div>
-                              <div className="p-2.5 bg-white rounded-xl border border-slate-100 flex flex-col items-center justify-center text-center shadow-sm">
-                                <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest block mb-0.5 whitespace-nowrap">Avg/Player</span>
-                                <span className="text-lg font-black text-slate-600">{avgSpent.toFixed(2)}</span>
+                              <div className="p-2 sm:p-2.5 bg-white rounded-xl border border-slate-100 flex flex-col items-center justify-center text-center shadow-sm min-w-0">
+                                <span className="text-[7px] sm:text-[8px] font-black text-slate-400 uppercase tracking-tight sm:tracking-widest block mb-0.5 break-words text-center">Avg / Pl.</span>
+                                <span className="text-base sm:text-lg font-black text-slate-600 tabular-nums break-all max-w-full">{avgSpent.toFixed(2)}</span>
                               </div>
-                              <div className="p-2.5 bg-white rounded-xl border border-slate-100 flex flex-col items-center justify-center text-center shadow-sm bg-emerald-50/50 border-emerald-100 lg:col-span-1 col-span-2">
-                                <span className="text-[8px] font-black text-emerald-600 uppercase tracking-widest block mb-0.5">Purse Remaining</span>
-                                <span className="text-xl font-black text-emerald-600">{remaining.toFixed(2)}</span>
+                              <div className="p-2 sm:p-2.5 bg-white rounded-xl border border-slate-100 flex flex-col items-center justify-center text-center shadow-sm bg-emerald-50/50 border-emerald-100 col-span-2 sm:col-span-1 lg:col-span-1 min-w-0">
+                                <span className="text-[7px] sm:text-[8px] font-black text-emerald-600 uppercase tracking-tight sm:tracking-widest block mb-0.5">Purse Left</span>
+                                <span className="text-lg sm:text-xl font-black text-emerald-600 tabular-nums break-all max-w-full">{remaining.toFixed(2)}</span>
                               </div>
                            </div>
                         </div>
@@ -1742,10 +1670,10 @@ export default function AuctionPage() {
             </div>
           </div>
         ) : (
-          <div className="bg-white rounded-[2rem] border border-slate-100 shadow-xl overflow-hidden animate-in fade-in duration-500 flex flex-col min-h-[600px]">
-            <div className="p-8 border-b border-slate-50 bg-slate-50/50 flex flex-col md:flex-row justify-between items-center gap-6">
-              <div>
-                <h2 className="text-3xl font-black italic uppercase tracking-tighter text-slate-900 leading-none">Sold History</h2>
+          <div className="bg-white rounded-[1.5rem] sm:rounded-[2rem] border border-slate-100 shadow-xl overflow-hidden animate-in fade-in duration-500 flex flex-col min-h-[min(24rem,65vh)] sm:min-h-[600px] min-w-0">
+            <div className="p-4 sm:p-8 border-b border-slate-50 bg-slate-50/50 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 sm:gap-6">
+              <div className="min-w-0">
+                <h2 className="text-2xl sm:text-3xl font-black italic uppercase tracking-tighter text-slate-900 leading-tight sm:leading-none break-words">Sold History</h2>
                 <p className="text-slate-400 font-bold uppercase text-[10px] tracking-widest mt-2 flex items-center gap-2">
                   <History size={12} />
                   Archive of all successful acquisitions
@@ -1768,14 +1696,14 @@ export default function AuctionPage() {
                   <p className="text-slate-400 font-bold uppercase text-[10px] tracking-widest max-w-[200px] leading-relaxed">The auction history will populate as players are sold on the block.</p>
                 </div>
               ) : (
-                <div className="flex-1 overflow-auto overscroll-x-contain touch-pan-x [-webkit-overflow-scrolling:touch] no-scrollbar rounded-2xl border border-slate-200 bg-white shadow-sm">
-                  <table className="w-full border-collapse text-left whitespace-nowrap">
+                <div className="flex-1 overflow-auto overscroll-x-contain touch-pan-x [-webkit-overflow-scrolling:touch] no-scrollbar rounded-2xl border border-slate-200 bg-white shadow-sm -mx-1 px-1 sm:mx-0 sm:px-0 min-w-0">
+                  <table className="w-full min-w-[520px] sm:min-w-0 border-collapse text-left text-sm sm:text-base">
                     <thead className="bg-slate-100 sticky top-0 z-10">
                       <tr>
-                        <th className="px-6 py-5 text-[10px] font-black uppercase text-slate-500 tracking-widest pl-8">Player</th>
-                        <th className="px-6 py-5 text-[10px] font-black uppercase text-slate-500 tracking-widest text-center">IPL Team</th>
-                        <th className="px-6 py-5 text-[10px] font-black uppercase text-slate-500 tracking-widest text-center">Sold To</th>
-                        <th className="px-6 py-5 text-[10px] font-black uppercase text-slate-500 tracking-widest text-right pr-8">Final Bid</th>
+                        <th className="px-3 sm:px-6 py-3 sm:py-5 text-[9px] sm:text-[10px] font-black uppercase text-slate-500 tracking-tight sm:tracking-widest pl-4 sm:pl-8">Player</th>
+                        <th className="px-3 sm:px-6 py-3 sm:py-5 text-[9px] sm:text-[10px] font-black uppercase text-slate-500 tracking-tight sm:tracking-widest text-center">IPL Team</th>
+                        <th className="px-3 sm:px-6 py-3 sm:py-5 text-[9px] sm:text-[10px] font-black uppercase text-slate-500 tracking-tight sm:tracking-widest text-center">Sold To</th>
+                        <th className="px-3 sm:px-6 py-3 sm:py-5 text-[9px] sm:text-[10px] font-black uppercase text-slate-500 tracking-tight sm:tracking-widest text-right pr-4 sm:pr-8">Final Bid</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -1784,47 +1712,50 @@ export default function AuctionPage() {
                         .sort((a,b) => new Date(b.updated_at || 0).getTime() - new Date(a.updated_at || 0).getTime())
                         .map(player => (
                           <tr key={player.id} className="hover:bg-slate-50/80 transition-all group">
-                            <td className="px-6 py-4 pl-8">
-                              <div className="flex items-center gap-4">
-                                <div className="h-12 w-12 shrink-0 bg-white rounded-xl overflow-hidden border border-slate-200 p-0.5 shadow-sm">
+                            <td className="px-3 sm:px-6 py-3 sm:py-4 pl-4 sm:pl-8 max-w-0">
+                              <div className="flex items-center gap-2 sm:gap-4 min-w-0">
+                                <div className="h-10 w-10 sm:h-12 sm:w-12 shrink-0 bg-white rounded-xl overflow-hidden border border-slate-200 p-0.5 shadow-sm">
                                    <img 
                                      src={getPlayerImage(player.image_url) || undefined} 
                                      alt="" 
                                      className="w-full h-full object-cover object-top rounded-[10px]" 
                                    />
                                 </div>
-                                <div>
-                                   <div className="font-black text-slate-900 uppercase tracking-tighter leading-none mb-1 group-hover:text-blue-600 transition-colors">{player.player_name}</div>
-                                   <div className="text-[9px] font-black uppercase tracking-widest text-slate-400 bg-slate-100/50 px-1.5 py-0.5 rounded inline-block">{player.role}</div>
+                                <div className="min-w-0">
+                                   <div className="font-black text-slate-900 uppercase tracking-tighter leading-tight sm:leading-none mb-1 group-hover:text-blue-600 transition-colors line-clamp-2 text-xs sm:text-sm break-words">{player.player_name}</div>
+                                   <div className="text-[8px] sm:text-[9px] font-black uppercase tracking-tight sm:tracking-widest text-slate-400 bg-slate-100/50 px-1.5 py-0.5 rounded inline-block max-w-full break-words">{player.role}</div>
                                 </div>
                               </div>
                             </td>
-                            <td className="px-6 py-4 text-center">
-                               <div className="flex flex-col items-center">
-                                 <span className="text-sm font-black text-slate-700 italic">{player.team}</span>
+                            <td className="px-3 sm:px-6 py-3 sm:py-4 text-center align-top">
+                               <div className="flex flex-col items-center min-w-0">
+                                 <span className="text-xs sm:text-sm font-black text-slate-700 italic break-words line-clamp-2">{player.team}</span>
                                </div>
                             </td>
-                            <td className="px-6 py-4 text-center">
-                               <span className="px-3 py-1.5 bg-slate-900 text-white rounded-xl text-[10px] font-black uppercase tracking-widest italic shadow-sm">
+                            <td className="px-2 sm:px-6 py-3 sm:py-4 text-center align-top">
+                               <span className="px-2 sm:px-3 py-1.5 bg-slate-900 text-white rounded-xl text-[8px] sm:text-[10px] font-black uppercase tracking-tight sm:tracking-widest italic shadow-sm break-words max-w-[8rem] sm:max-w-none inline-block leading-snug">
                                  {player.sold_to}
                                </span>
                             </td>
-                            <td className="px-6 py-4 text-right pr-8 flex items-center justify-end gap-4">
-                               <div className="flex items-baseline justify-end gap-1">
-                                 <span className="text-2xl font-black tracking-tighter text-slate-900">{player.sold_price?.replace(' Cr', '')}</span>
-                                 <span className="text-[10px] font-black italic text-slate-400">CR</span>
-                               </div>
+                            <td className="px-3 sm:px-6 py-3 sm:py-4 pr-4 sm:pr-8 text-right align-top">
+                               <div className="inline-flex flex-col sm:flex-row items-end justify-end gap-1 sm:gap-4 w-full min-w-0">
+                                 <div className="flex items-baseline justify-end gap-1 min-w-0">
+                                   <span className="text-lg sm:text-2xl font-black tracking-tighter text-slate-900 tabular-nums break-all text-right">{player.sold_price?.replace(' Cr', '')}</span>
+                                   <span className="text-[9px] sm:text-[10px] font-black italic text-slate-400 shrink-0">CR</span>
+                                 </div>
 
-                               {isAdmin && (
-                                 <button
-                                   onClick={() => returnToPool(player)}
-                                   disabled={actionLoading}
-                                   className="h-10 w-10 flex items-center justify-center rounded-xl bg-white border border-slate-200 text-slate-400 hover:text-red-600 hover:border-red-100 hover:bg-red-50 transition-all shadow-sm group/undo"
-                                   title="Undo Sale / Return to Pool"
-                                 >
-                                   <RotateCcw className="h-4 w-4 group-hover/undo:rotate-[-45deg] transition-transform" />
-                                 </button>
-                               )}
+                                 {isAdmin && (
+                                   <button
+                                     type="button"
+                                     onClick={() => returnToPool(player)}
+                                     disabled={actionLoading}
+                                     className="h-9 w-9 sm:h-10 sm:w-10 flex items-center justify-center rounded-xl bg-white border border-slate-200 text-slate-400 hover:text-red-600 hover:border-red-100 hover:bg-red-50 transition-all shadow-sm group/undo shrink-0"
+                                     title="Undo Sale / Return to Pool"
+                                   >
+                                     <RotateCcw className="h-3.5 w-3.5 sm:h-4 sm:w-4 group-hover/undo:rotate-[-45deg] transition-transform" />
+                                   </button>
+                                 )}
+                               </div>
                             </td>
                           </tr>
                         ))
