@@ -820,7 +820,7 @@ export default function AuctionPage() {
             <div className="h-10 w-40 bg-slate-200 rounded-2xl animate-pulse" />
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
             {[1, 2, 3].map((i) => (
               <div key={i} className="bg-white rounded-[2rem] border border-slate-100 shadow-sm p-6 space-y-4">
                 <div className="h-4 w-32 bg-slate-200 rounded-md animate-pulse" />
@@ -878,7 +878,7 @@ export default function AuctionPage() {
 
         {/* ── Tabs Navigation ── */}
         <div className="flex flex-col gap-4 sm:gap-6 min-w-0 w-full">
-          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 min-w-0">
+          <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4 min-w-0">
             <div className="min-w-0">
               <div className="flex items-center gap-2 mb-1">
                 <Gavel className="h-5 w-5 text-blue-600 shrink-0" />
@@ -905,7 +905,7 @@ export default function AuctionPage() {
             </div>
           </div>
 
-          <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-3 sm:gap-4 md:gap-6 min-w-0 w-full sm:justify-end">
+          <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-3 sm:gap-4 lg:gap-6 min-w-0 w-full xl:justify-end">
             {profile && profile.role !== "Viewer" && (
               <div className="flex items-center justify-between sm:justify-start gap-4 sm:gap-6 bg-white px-4 sm:px-6 py-3 rounded-2xl border border-slate-100 shadow-sm min-w-0 w-full sm:w-auto max-w-full">
                 <div className="flex flex-col min-w-0">
@@ -950,7 +950,7 @@ export default function AuctionPage() {
         {allProfiles.length > 0 && isLive && (
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
             <span className="text-[9px] font-black uppercase tracking-widest text-slate-300 block mb-3">Franchise Status</span>
-            <div className="flex flex-wrap gap-3">
+            <div className="flex flex-wrap gap-2 sm:gap-3">
               {allProfiles.map(p => {
                 const hasPassed = (auctionState?.passed_user_ids || []).includes(p.id);
                 const isHighest = auctionState?.current_bidder_id === p.id;
@@ -958,7 +958,7 @@ export default function AuctionPage() {
                   <div
                     key={p.id}
                     className={cn(
-                      "flex items-center gap-2.5 px-4 py-2.5 rounded-xl border transition-all text-sm font-bold",
+                      "flex items-center gap-2 px-3 sm:px-4 py-2.5 rounded-xl border transition-all text-xs sm:text-sm font-bold min-w-0 max-w-full",
                       isHighest ? "bg-emerald-50 border-emerald-200 text-emerald-700" :
                       hasPassed ? "bg-red-50 border-red-200 text-red-400 line-through opacity-60" :
                       "bg-slate-50 border-slate-100 text-slate-700"
@@ -971,7 +971,7 @@ export default function AuctionPage() {
                         {p.team_name?.[0] || "?"}
                       </div>
                     )}
-                    <span className="italic">{p.team_name || p.full_name || "New Franchise"}</span>
+                    <span className="italic truncate max-w-[11rem] sm:max-w-[14rem]">{p.team_name || p.full_name || "New Franchise"}</span>
                     {isHighest && <Trophy size={12} className="text-emerald-600" />}
                     {hasPassed && <Hand size={12} className="text-red-400" />}
                   </div>
@@ -1007,14 +1007,14 @@ export default function AuctionPage() {
 
         {/* ── Admin Controls ── */}
         {isAdmin && (
-            <div className="bg-slate-900 rounded-2xl sm:rounded-[2rem] p-4 sm:p-6 flex flex-wrap items-center gap-2 sm:gap-4 min-w-0 w-full">
-            <span className="text-[9px] font-black uppercase tracking-widest text-white/30 w-full sm:w-auto sm:mr-auto">Auctioneer Console</span>
+            <div className="bg-slate-900 rounded-2xl sm:rounded-[2rem] p-4 sm:p-6 flex flex-wrap items-center gap-2 sm:gap-3 min-w-0 w-full">
+            <span className="text-[9px] font-black uppercase tracking-widest text-white/30 w-full xl:w-auto xl:mr-auto">Auctioneer Console</span>
             
             {auctionConfig?.status === "live" && (
               <Button 
                 onClick={pauseAuction} 
                 disabled={actionLoading} 
-                className="bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-4 flex gap-2"
+                className="bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-4 flex gap-2 shrink-0"
               >
                 <Pause size={14} /> Pause
               </Button>
@@ -1024,14 +1024,14 @@ export default function AuctionPage() {
               <Button 
                 onClick={() => startAuction()} 
                 disabled={actionLoading} 
-                className="bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-4 flex gap-2"
+                className="bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-4 flex gap-2 shrink-0"
               >
                 <Play size={14} /> Resume
               </Button>
             )}
 
             {auctionConfig?.status === "setup" && (
-              <Button onClick={freezePools} disabled={actionLoading} className="bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-6 flex gap-2">
+              <Button onClick={freezePools} disabled={actionLoading} className="bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-6 flex gap-2 shrink-0">
                 <Lock size={14} /> Freeze Pools
               </Button>
             )}
@@ -1041,7 +1041,7 @@ export default function AuctionPage() {
                 <select
                   value={startPool}
                   onChange={(e) => setStartPool(e.target.value)}
-                  className="h-10 px-4 rounded-xl bg-white/10 text-white font-bold text-sm border border-white/20 outline-none appearance-none cursor-pointer hover:bg-white/20 transition-all"
+                  className="h-10 px-3 sm:px-4 rounded-xl bg-white/10 text-white font-bold text-xs sm:text-sm border border-white/20 outline-none appearance-none cursor-pointer hover:bg-white/20 transition-all min-w-[10rem] sm:min-w-[12rem] max-w-full"
                 >
                   {POOL_ORDER.filter(p => (poolCounts[p]?.remaining ?? 0) > 0).map(p => (
                     <option key={p} value={p} className="text-slate-900">{p} ({poolCounts[p]?.remaining} left)</option>
@@ -1050,7 +1050,7 @@ export default function AuctionPage() {
                     <option value="" className="text-slate-900">No players left</option>
                   )}
                 </select>
-                <Button onClick={startAuction} disabled={actionLoading} className="bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-6 flex gap-2">
+                <Button onClick={startAuction} disabled={actionLoading} className="bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-5 sm:px-6 flex gap-2 shrink-0">
                   <Play size={14} /> Start Auction
                 </Button>
               </>
@@ -1058,31 +1058,31 @@ export default function AuctionPage() {
 
             {isLive && isActive && (
               <>
-                <div className="h-6 w-[1px] bg-white/10" />
+                <div className="hidden xl:block h-6 w-[1px] bg-white/10" />
                 <select
                   value={auctionConfig?.current_pool || "Marquee"}
                   onChange={(e) => switchPool(e.target.value)}
-                  className="h-10 px-4 rounded-xl bg-white/10 text-white font-bold text-sm border border-white/20 outline-none cursor-pointer hover:bg-white/20 transition-all"
+                  className="h-10 px-3 sm:px-4 rounded-xl bg-white/10 text-white font-bold text-xs sm:text-sm border border-white/20 outline-none cursor-pointer hover:bg-white/20 transition-all min-w-[10rem] sm:min-w-[12rem] max-w-full"
                 >
                   {POOL_ORDER.filter(p => (poolCounts[p]?.remaining ?? 0) > 0).map(p => (
                     <option key={p} value={p} className="text-slate-900">{p} ({poolCounts[p]?.remaining} left)</option>
                   ))}
                 </select>
-                <Button onClick={skipPlayer} disabled={actionLoading} className="bg-white/10 hover:bg-white/20 text-white/70 rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-5 flex gap-2 border border-white/10">
+                <Button onClick={skipPlayer} disabled={actionLoading} className="bg-white/10 hover:bg-white/20 text-white/70 rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-4 sm:px-5 flex gap-2 border border-white/10 shrink-0">
                   <Shuffle size={14} /> Skip
                 </Button>
-                <div className="h-6 w-[1px] bg-white/10" />
-                <Button onClick={resetTimer} disabled={actionLoading} className="bg-white/10 hover:bg-white/20 text-blue-400 rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-5 flex gap-2 border border-white/10">
+                <div className="hidden xl:block h-6 w-[1px] bg-white/10" />
+                <Button onClick={resetTimer} disabled={actionLoading} className="bg-white/10 hover:bg-white/20 text-blue-400 rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-4 sm:px-5 flex gap-2 border border-white/10 shrink-0">
                   <Timer size={14} /> Reset Clock
                 </Button>
-                <div className="h-6 w-[1px] bg-white/10" />
-                <Button onClick={markSold} disabled={actionLoading || !auctionState?.current_bidder_id} className="bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-6 flex gap-2 disabled:opacity-30">
+                <div className="hidden xl:block h-6 w-[1px] bg-white/10" />
+                <Button onClick={markSold} disabled={actionLoading || !auctionState?.current_bidder_id} className="bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-5 sm:px-6 flex gap-2 disabled:opacity-30 shrink-0">
                   <Trophy size={14} /> Sold
                 </Button>
                 <Button 
                   onClick={markUnsold} 
                   disabled={actionLoading || (auctionState?.current_bid > 0)} 
-                  className="bg-red-500 hover:bg-red-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-6 flex gap-2 disabled:opacity-30 disabled:grayscale"
+                  className="bg-red-500 hover:bg-red-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-5 sm:px-6 flex gap-2 disabled:opacity-30 disabled:grayscale shrink-0"
                 >
                   <XCircle size={14} /> Unsold
                 </Button>
@@ -1094,25 +1094,25 @@ export default function AuctionPage() {
                 <select
                   value={auctionConfig?.current_pool || "Marquee"}
                   onChange={(e) => switchPool(e.target.value)}
-                  className="h-10 px-4 rounded-xl bg-white/10 text-white font-bold text-sm border border-white/20 outline-none cursor-pointer hover:bg-white/20 transition-all"
+                  className="h-10 px-3 sm:px-4 rounded-xl bg-white/10 text-white font-bold text-xs sm:text-sm border border-white/20 outline-none cursor-pointer hover:bg-white/20 transition-all min-w-[10rem] sm:min-w-[12rem] max-w-full"
                 >
                   {POOL_ORDER.filter(p => (poolCounts[p]?.remaining ?? 0) > 0).map(p => (
                     <option key={p} value={p} className="text-slate-900">{p} ({poolCounts[p]?.remaining} left)</option>
                   ))}
                 </select>
-                <Button onClick={nextPlayer} disabled={actionLoading} className="bg-blue-500 hover:bg-blue-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-6 flex gap-2">
+                <Button onClick={nextPlayer} disabled={actionLoading} className="bg-blue-500 hover:bg-blue-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-5 sm:px-6 flex gap-2 shrink-0">
                   <Shuffle size={14} /> Random Next
                 </Button>
-                <div className="h-6 w-[1px] bg-white/10" />
+                <div className="hidden xl:block h-6 w-[1px] bg-white/10" />
                 <select
                   value={manualPickId}
                   onChange={(e) => setManualPickId(e.target.value)}
-                  className="h-10 px-3 rounded-xl bg-white/10 text-white font-bold text-xs border border-white/20 outline-none cursor-pointer hover:bg-white/20 transition-all max-w-[180px]"
+                  className="h-10 px-3 rounded-xl bg-white/10 text-white font-bold text-xs border border-white/20 outline-none cursor-pointer hover:bg-white/20 transition-all min-w-[10rem] sm:min-w-[11rem] max-w-full"
                 >
                   <option value="" className="text-slate-900">Pick player...</option>
                   {pendingPlayers.map(p => <option key={p.id} value={p.id} className="text-slate-900">{p.player_name}</option>)}
                 </select>
-                <Button onClick={() => pickSpecificPlayer()} disabled={actionLoading || !manualPickId} className="bg-violet-500 hover:bg-violet-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-5 flex gap-2 disabled:opacity-30">
+                <Button onClick={() => pickSpecificPlayer()} disabled={actionLoading || !manualPickId} className="bg-violet-500 hover:bg-violet-600 text-white rounded-xl font-black uppercase text-[10px] tracking-widest h-10 px-4 sm:px-5 flex gap-2 disabled:opacity-30 shrink-0">
                   <SkipForward size={14} /> Select
                 </Button>
               </>
@@ -1155,7 +1155,7 @@ export default function AuctionPage() {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
             {/* Player Card */}
-            <div className="lg:col-span-2 bg-white rounded-2xl sm:rounded-[2.5rem] border border-slate-100 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.05)] overflow-hidden relative min-w-0">
+            <div className="xl:col-span-2 bg-white rounded-2xl sm:rounded-[2.5rem] border border-slate-100 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.05)] overflow-hidden relative min-w-0">
               {/* Timer Badge (Safe Overlay) */}
               <div className="absolute top-3 right-3 sm:top-6 sm:right-8 flex items-center gap-1.5 sm:gap-2 bg-slate-900 text-white px-2.5 py-1.5 sm:px-4 sm:py-2 rounded-xl sm:rounded-2xl shadow-lg z-10 max-w-[calc(100%-1.5rem)]">
                 <Timer size={14} className="text-blue-400 animate-pulse shrink-0" />
@@ -1454,9 +1454,9 @@ export default function AuctionPage() {
               ))}
             </div>
 
-            <div className="flex flex-col lg:flex-row gap-8 items-start">
+            <div className="flex flex-col xl:flex-row gap-8 items-start">
               {/* Sidebar - Teams List */}
-              <div className="w-full lg:w-80 shrink-0 flex flex-col gap-2">
+              <div className="w-full xl:w-80 shrink-0 flex flex-col gap-2">
                 {allProfiles.map(team => {
                    const teamPlayers = allPlayers.filter(p => p.sold_to_id === team.id || p.sold_to === team.team_name);
                    const isSelected = (activeTeamId === team.id) || (!activeTeamId && allProfiles[0]?.id === team.id);
@@ -1549,7 +1549,7 @@ export default function AuctionPage() {
                             <Button 
                               onClick={() => downloadTeamCSV(activeTeam, teamPlayers)}
                               variant="outline"
-                              className="bg-white border-slate-200 hover:bg-slate-50 text-slate-600 font-black uppercase text-[10px] tracking-widest h-12 px-6 rounded-2xl flex gap-2 mr-4"
+                              className="bg-white border-slate-200 hover:bg-slate-50 text-slate-600 font-black uppercase text-[10px] tracking-widest h-12 px-4 sm:px-6 rounded-2xl flex gap-2 w-full sm:w-auto"
                             >
                               <Download size={14} /> Download Roster CSV
                             </Button>

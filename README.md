@@ -1,344 +1,350 @@
-# IPL Auction Hub: PoC (2026 season)
+# IPL 2026 Auction Hub
 
-This repository is a **proof of concept** for a private IPL-style league: a small group of friends who care about cricket and wanted **one system** for the auction and for scoring, instead of running the league through **one Google Sheet**, chat, and third-party fantasy apps.
-
-**How we worked before.** **Coordination lived in a single Google Sheet**: rosters, auction notes, and tracking all met there. Chat carried the side conversation, and fantasy apps (Dream11, My11Circle, and similar) were still where many of us checked **official** points, which rarely matched **our** house rules line for line. Keeping the sheet, the chat thread, and external apps in sync took **steady effort**: tying messages back to the right rows and reconciling scores against apps by hand.
-
-**Why a PoC now.** The last few years of the **developer ecosystem** made it much more practical to wire this up in one place: managed **PostgreSQL**, hosted **authentication**, **realtime** subscriptions without running your own socket farm, solid **APIs** for cricket data, and **automation** in CI. We did not need a multi-month platform project to get a credible first version. We **quickly** put together this PoC so we could **run bidding and track scores throughout the season** in a single app, with room to harden it for **IPL 2026** and **four franchises**. A wider release or a commercial path is something we can explore **later** if it makes sense.
+Private league web app for an **IPL-style fantasy auction**, **rosters**, **rules**, and **match scoring** in one place—so your group can get off the shared spreadsheet and still keep house rules and the auction room aligned.
 
 ---
 
-## Why we built this
+## Product walkthrough (with screenshots)
 
-We are **cricket enthusiasts** first: we love **living in the game** through the league, and the **excitement** of auction night and match week is what keeps us coming back. This app exists so we could **ease our own pain points** in one place instead of spreading the work across a sheet, chat, and other apps.
+This is the real user story from login to standings, using the screenshots in `public/screenshots/`.
 
-At a high level, we wanted:
+### 1) Login and access control
 
-- A **rule book** the **organizer** controls: set how points and league rules work so what you configure is what everyone plays under (a **what-you-see-is-what-you-get** feel for the rules).
-- **Rosters and pools** built to feel **realistic**: group players into pools, then run a **real-time auction** where franchises **bid for players across those pools** with clear state for everyone in the room.
-- **Real-time analytics** during and after the auction: visibility into your **purse**, and a **breakdown** of the **types of players** you have landed and how they map to **teams** (IPL squads), so strategy is visible, not buried in a cell.
-- **Sign in with Google** so users do not need another password for this league: we **delegate identity to Google** and avoid storing or managing passwords ourselves (details below).
-- After the hammer drops, **points and results** stay in the same app, **admins** can fix mistakes with an audit trail, and **everyone** can see what happened in a match without leaving the product.
+![Login](./public/screenshots/login.png)
 
-We are **trialing** this PoC for **IPL 2026** and will keep iterating as we learn.
+The journey starts on the sign-in page. Users can authenticate with Google OAuth or email/password (Supabase Auth).  
+After login, profile + role resolution determines what they can do:
+- **Admin**: controls auction flow, role changes, and score operations
+- **Participant**: bids and manages team-facing actions
+- **Viewer**: read-only league visibility
+
+### 2) Dashboard (team command center)
+
+![Dashboard](./public/screenshots/dashboard.png)
+
+After login, users land on a franchise dashboard showing:
+- current purse and squad capacity
+- recent signings feed
+- live auction context and quick navigation
+
+This is the “operating console” for each team during the auction phase.
+
+### 3) Auction room (live bidding)
+
+![Live Bidding](./public/screenshots/bidding.png)
+![Realtime Bidding Demo](./public/screenshots/realtime-bidding-demo.gif)
+
+The live auction screen handles:
+- pool-by-pool bidding (Marquee / Pool 1 / Pool 2 / Pool 3 / Unsold)
+- auctioneer controls (pause, next, sold/unsold, pool switch)
+- bid timeline and realtime updates
+
+Realtime sync is backed by Supabase channels (`postgres_changes` + broadcast/presence patterns), while critical validations are enforced in DB logic where configured.
+
+### 4) Team audit inside auction (roster verification while auction is on)
+
+![Auction Teams View](./public/screenshots/team_auction.png)
+
+The Teams tab inside the auction lets organizers and franchises verify:
+- who bought which player
+- remaining purse and squad counts
+- role composition and roster summary
+
+This prevents drift between live bids and final squad state.
+
+### 5) Score Manager once matches begin
+
+![Score Manager](./public/screenshots/score_manager.png)
+
+When matchdays begin, the Score Manager becomes the operations area for points:
+- player-by-player game columns
+- editable / reviewable scoring cells
+- total rollups per player/franchise
+
+### 6) ESPN scraper output + points calculation review
+
+![Points Detail](./public/screenshots/points.png)
+
+This modal-style review layer shows parsed match/player rows and fantasy point totals.  
+Current process:
+- upstream data is pulled using CricAPI/ESPN-related flows (see scripts/workflows)
+- points are computed and written to DB
+- admins review and can manually correct where needed
+
+Important: squad/player intake and score ingestion should not be treated as blindly authoritative from upstream payloads. Manual validation remains part of the current operating process.
+
+### 7) Standings and analytics
+
+![Standings](./public/screenshots/standings.png)
+
+Final output for league users is the standings analytics view:
+- points-per-game and cumulative progression
+- squad split and role contribution analysis
+- fixtures/results context for decision making
 
 ---
 
-## What you can do with it (main features)
+## Automation and deployment flow (GitHub Actions)
 
-### Rules, rosters, and pools
+This project is wired to GitHub Actions for recurring operations and operator-triggered runs.
 
-- Configure league **rules** so the organizer defines how the season behaves; players see a clear picture of **what rules are in effect**.
-- Build **rosters** and **player pools** so the auction mirrors a credible IPL-style setup before anyone raises a paddle.
+### Workflows in this repo
 
-### Real-time auction
+- `.github/workflows/cricapi-scorecard-sync.yml`
+  - Scheduled cron runs (twice daily)
+  - Also supports manual `workflow_dispatch` with inputs (e.g. backfill date, fixture populate toggle)
+- `.github/workflows/espn-scraper.yml`
+  - Scheduled scraper run
+  - Manual trigger with options (`date_ist`, `clear_day`)
+- `.github/workflows/main.yml`
+  - Daily Supabase backup + email delivery
+  - Manual trigger supported
 
-- Run a **live auction** with **real-time bidding** across pools so franchises compete fairly and everyone sees the same state.
-- Track **sold / unsold** status and squad composition without duplicating lists elsewhere.
+### How to run jobs
 
-### Analytics
+You have two options:
 
-- **Real-time** views of your **remaining purse** and how your spend breaks down.
-- See how your picks **break down by player type** and **source team**, so you understand squad balance at a glance.
+1. **Manual trigger (button click)**  
+   Go to **GitHub → Actions → select workflow → Run workflow** and pass inputs when needed.
 
-### Points after the auction
+2. **Automated schedule (cron)**  
+   Workflows run automatically based on cron expressions already defined in each YAML.
 
-- Franchises can **enter and adjust match points** in the app (with sensible UX around drafts and saves).
-- Data from matches can flow in from **automated jobs** so you are not always typing scorecards by hand.
-
-### Match data & automation
-
-- **CricAPI** is the **primary** source for fixtures and scorecard-style data in our pipeline.
-- **ESPNcricinfo** is used as a **fallback** path (including scripted flows where we need HTML that APIs do not expose the same way).
-- **GitHub Actions** run scheduled sync jobs so the database can stay updated without someone SSH-ing into a box at midnight.
-
-### Roles & trust
-
-- **Role-based access**: admins, participating players, and viewers see what they should.
-- **Admins** can **override** movements or points when reality disagrees with automation, because sport is messy and software should be flexible.
-
-### When the match ends
-
-- Completed fixtures and **scoreboard-style views** help everyone see **what was posted** for a game, with a clear trail from raw data to points.
+So yes: clicking buttons can trigger these pipelines instantly, and the same pipelines can run fully automated on cron.
 
 ---
 
-## Tech stack (high level)
+## What it does
 
-| Layer | Choice |
-|--------|--------|
-| App | **Next.js** (App Router), **React**, **TypeScript** |
-| UI | **Tailwind CSS**, **shadcn-style** components, **Lucide** icons |
-| Backend / data | **Supabase** (PostgreSQL, auth, realtime where needed) |
+- **Auth:** Email/password (Supabase Auth) and **Google OAuth**; password reset via email; profiles bootstrap on first sign-in (roles can be guided by env).
+- **Roles:** Admin, Participant, and Viewer—admins manage auction flow and can adjust roles where RLS allows.
+- **Auction:** Pools (e.g. Marquee → Unsold), live bidding over **Supabase Realtime**, bid history, sold/unsold flow, purse and squad limits enforced in the database (RPC) where implemented.
+- **League data:** Player registry, squads, optional rules editor, auction history.
+- **Season:** Fixtures/score ingestion (CricAPI primary, ESPN paths where used), scoreboard and points workflows for your league.
+- **Squad ingestion (current):** Initial squads are curated from ESPNcricinfo-backed payloads via internal API/script flows, then verified manually before finalizing in DB.
+- **Automation:** TypeScript and Python scripts; optional GitHub Actions for scheduled sync (see `.github/workflows` if present).
+
+---
+
+## Tech stack
+
+| Area | Choice |
+|------|--------|
+| App | **Next.js** (App Router), **React 19**, **TypeScript** |
+| UI | **Tailwind CSS**, shared UI primitives, **Lucide** icons |
+| Backend | **Supabase** (PostgreSQL, Auth, Realtime, RLS) |
 | Charts | **Recharts** |
-| Automation | **Python** scripts + **GitHub Actions** |
-| Browser automation (where used) | **Playwright** |
-
-Node **20+** is required (see `package.json` `engines`).
+| Tooling | **Node.js ≥ 20** (`package.json` → `engines`) |
 
 ---
 
-## Why these tools and technologies
-
-**Next.js, React, and TypeScript.** We wanted a **single language** end to end in the app layer, **server and client components** where it helps, and a framework the team already knows. TypeScript catches a large class of bugs before runtime, which matters when auction state and roles touch many files.
-
-**Supabase (PostgreSQL, Auth, Realtime).** A **real database** with **row-level security** fits a league: bids, players, and points are relational, and we can enforce who may insert or update what. **Auth** (including Sign in with Google via Supabase) avoids building login ourselves. **Realtime** sits on the same project so the auction room gets **live updates** without us operating a separate message broker or custom WebSocket service for v1.
-
-**Tailwind and shadcn-style UI.** Fast iteration and **consistent spacing and components** across auction, scoreboard, and admin views, without a heavy bespoke design system for a PoC.
-
-**Recharts.** Simple, React-friendly charts for standings and trends over the season.
-
-**Python and GitHub Actions.** **CricAPI** sync, **ESPN** fallback scraping, and fixture helpers are easier to express as **scripts** that run on a schedule in **CI**, with secrets in the repo, than as long-lived servers. Python is a good fit for HTTP clients, parsing, and glue.
-
-**Playwright.** Where ESPN pages need a **real browser** (dynamic content, or layouts the API path does not cover the same way), Playwright gives reliable automation. We use it **selectively**, not for every request.
-
-Together, the stack favors **shipping a PoC quickly** while keeping a path to something more robust: Postgres remains the source of truth, and the web app stays a thin, typed client on top.
-
----
-
-## Sign-in with Google: what it actually is
-
-**Why not passwords in our database?** Storing usernames and passwords means **hashing**, **reset flows**, **breach surface**, and ongoing **security** work. **Sign in with Google** lets us **skip password storage entirely** for league members: Google authenticates the user, and Supabase gives our app a **session**. You keep using an account you already trust; we do not hold secrets that unlock your identity for this app.
-
-People often say “Gmail login” or “Google APIs.” For this app, **you are not calling the Gmail API** to read email. Login uses **OAuth 2.0** (and the related **OpenID Connect** pieces Google exposes) so a user can prove they control a Google account.
-
-**What happens in practice**
-
-1. The landing page calls **Supabase Auth**: `signInWithOAuth({ provider: "google", ... })` (see `app/page.tsx`).
-2. Supabase redirects the browser to **Google’s consent screen** (hosted by Google).
-3. After the user approves, Google redirects back to your app at **`/auth/callback`** with an authorization code in the URL fragment or query, depending on flow. Supabase’s client completes the exchange and establishes a **session** (JWT-backed).
-4. **`AuthProvider`** listens for `onAuthStateChange`, loads the row from **`profiles`** for that user id, and the UI uses **role** (Admin, Participant, Viewer, etc.).
-
-**Where you configure Google (not usually in `.env` for the Next app)**
-
-- **Google Cloud Console**: create an **OAuth 2.0 Client ID** (type “Web application”). You set **authorized redirect URIs** to Supabase’s callback URL (Supabase shows the exact URL in the dashboard).
-- **Supabase Dashboard**: **Authentication**, then **Providers**, then **Google**. Paste Google’s **Client ID** and **Client secret** there. Supabase stores them server-side; your Next.js bundle only needs the **public** Supabase URL and **anon** key.
-
-So: **OAuth 2.0** is the protocol name; **“Sign in with Google”** is the product experience; **Supabase Auth** is the broker that talks to Google and issues your app session. No Gmail API keys are required for login alone.
-
-**Local dev**: add `http://localhost:3000` and `http://localhost:3000/auth/callback` (or whatever Supabase docs require) to Google OAuth allowed origins / redirect URIs as needed.
-
----
-
-## Realtime bidding: what drives it
-
-The auction room does **not** poll the database on a timer for every update. It uses **Supabase Realtime**: the browser opens a **RealtimeChannel** on top of a **long-lived connection** (in practice, **WebSockets**), which matches the mental model you may already have: **one duplex link that stays open**, so the server can **push** updates without the client asking again and again.
-
-### How this lines up with WebSockets and “broadcast”
-
-- **WebSocket-style connection**: the client and Supabase keep a **single persistent channel** open. Either side can send when something happens. That is why the UI can update **immediately** after a bid lands in the database.
-- **Broadcast** (in Supabase’s API): your app sends a **small message** on the channel; the **Realtime server** delivers it to **every other subscriber** on that channel (fan-out). With **`self: false`**, the sender does not get a copy back, which avoids double-updating the same UI.
-
-### What Supabase Realtime is driven by (three different mechanisms)
-
-Realtime combines **three** behaviors. They are **not** all “the database pushing rows.”
-
-**A. `postgres_changes`: when the database row really changed**
-
-When you subscribe with **`postgres_changes`**, updates come from **actual writes** to **PostgreSQL** (inserts, updates, deletes). Someone saves a bid; the row exists; every subscribed client can learn about it.
-
-**What is WAL (write-ahead log), in simple terms?**  
-Postgres does not only store your tables. It also keeps an **ordered journal on disk** of **committed** changes. People call that journal the **WAL** (**write-ahead log**). Think of it as the database’s **ledger**: a line appears when a change is **final**. Supabase Realtime can **tap into that committed stream** (through its own infrastructure) so that **new lines in the ledger** become **events** your app receives. You do not need to operate WAL yourself; it is enough to know that **database writes** are the **source** of these events, not magic on the client.
-
-So the **driver** for `postgres_changes` is: **normal saves** to the database (Supabase client, RPC, or scripts), then Realtime **notifying** subscribers who care about those tables.
-
-In this app (`app/auction/page.tsx`), that means:
-
-- **`auction_state`**: current lot, status, timer anchor (`started_at`), etc. When this row updates, every subscribed client applies the new state.
-- **`bids`**: **`INSERT`** events when a bid row is committed, so bid history updates for everyone at once.
-- **`players`**: sold / unsold / on-block changes for the player on the block.
-
-**Authoritative state still lives in Postgres.** Realtime does not invent bids; it **delivers** what the database already recorded after commit.
-
-**B. `broadcast`: messages your app sends, not database rows**
-
-**`broadcast`** events are **not** read from Postgres’s journal. They are **messages** your code sends on the channel (for example `channel.send`). The Realtime server **fans them out** to other clients, similar to “**server sends to all the sockets**” on that topic. The **driver** is **your application** plus the Realtime service, not a SQL `INSERT`.
-
-We use this for **fast coordination** that would be clumsy as extra rows:
-
-- **`timer_reset`**: the database may hold `started_at`, and a broadcast can still nudge every clock to align **immediately** on all screens.
-- **`bidding_start`**: short-lived **peer lock** (who is currently bidding) so two people do not double-submit in the same instant; timeouts clear the lock if something fails.
-- **`out`**: quick pass-style notifications with a short on-screen message.
-
-The channel uses **`broadcast: { self: false }`** so the sender does not receive their own broadcast when that would duplicate UI updates they already applied.
-
-**C. `presence`: who is connected right now**
-
-**Presence** tracks **who is connected**. Clients call **`channel.track({ presence: { key: profile.id } })`**. The Realtime service maintains **presence state** per channel and emits **`sync`** (and related) events when members join, leave, or refresh. The **driver** is **connection lifecycle** and **track payloads**, not SQL. The UI uses this to list **online user ids** in the auction room.
-
-### End-to-end picture for the auction
-
-1. **Writes** (bids, state, players) go to **PostgreSQL** through Supabase.
-2. **`postgres_changes`** pushes those committed changes to all subscribers on `auction-room`.
-3. **`broadcast`** adds **short-lived** UI signals (timers, locks, quick messages) **without** storing every nuance as a row.
-4. **`presence`** answers “who is here right now?”
-
-Together, that is what makes bidding feel **live**: the database stays the **source of truth**, and Realtime **propagates** both **data changes** and **coordination messages** in near real time.
-
-**Channel name**: `auction-room` (see `app/auction/page.tsx`).
-
-Other pages reuse the same idea on different channel names (for example `dashboard-updates`, `chat-room`, `rules-sync`) for their own tables or messages.
-
----
-
-## Installation & local development
-
-### Prerequisites
-
-- **Node.js** ≥ 20  
-- **npm** (or pnpm/yarn if you adapt commands)  
-- A **Supabase** project with **Auth** (Google provider configured if you want Google login) and **Realtime** enabled for the tables you subscribe to  
-- Optional: **Python 3** if you run `scripts/*.py` locally  
-- **CricAPI** API key if you use CricAPI sync scripts  
-
-### 1. Clone and install
+## Quick start
 
 ```bash
 git clone <your-repo-url>
 cd Typescript
 npm install
-```
-
-### 2. Environment variables (reference)
-
-Create **`.env`** in the project root. For Python scripts, you can duplicate the same keys into **`scripts/.env`** or load the root `.env` from your shell. **Never commit real secrets** (add `.env` to `.gitignore`).
-
-#### Next.js app (required for `npm run dev` / `build`)
-
-These are read in `lib/supabase.ts`, `lib/supabase/client.ts`, and middleware:
-
-| Variable | Purpose |
-|----------|---------|
-| `NEXT_PUBLIC_SUPABASE_URL` | Your Supabase project URL (**Settings**, **API**). |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Public **anon** key. Safe to expose in the browser; RLS still applies. |
-
-There are **no** `NEXT_PUBLIC_GOOGLE_*` variables in this repo for login: Google OAuth credentials live in the **Supabase Dashboard** (Google provider), not in the frontend env file.
-
-#### Automation / scripts (Python and CI)
-
-Used by `scripts/sync_scorecards_cricapi.py`, `scripts/sync_scorecards_espn.py`, `scripts/populate_fixtures_*.py`, `scripts/scraper_espn_playwright.py`, `scripts/migrate_icons.py`, `scripts/sync_engine.py`, etc.:
-
-| Variable | Purpose |
-|----------|---------|
-| `NEXT_PUBLIC_SUPABASE_URL` | Same project URL as the app. |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Often used as fallback when service role is not set. |
-| `SUPABASE_SERVICE_ROLE_KEY` | **Service role** key: bypasses RLS. Use only in **server-side** scripts or CI secrets, never in client code. |
-| `SUPABASE_ACCESS_TOKEN` | Some scripts accept this as an alternative to the service role key (see `os.getenv` chains in each script). |
-| `CRICAPI_KEY` or `NEXT_PUBLIC_CRICAPI_KEY` | CricAPI subscription key for fixture/scorecard sync. |
-| `CRICAPI_SCORECARD_SLEEP_SECONDS` | Optional throttle between CricAPI calls (default `1.0` in CricAPI script). |
-| `ESPN_HEADLESS` | Optional: Playwright / ESPN scraper headless mode (see `sync_scorecards_espn.py`). |
-
-**GitHub Actions**: store the sensitive keys as **repository secrets** and map them into the workflow env so scripts see the same names.
-
-**Verify locally**: `grep -r "os.getenv\|process.env" scripts/ lib/` and match your `.env` to what each file expects.
-
-### 3. Run the dev server
-
-```bash
+# Create .env in the project root (see Environment variables below)
 npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000).
 
-### 4. Production build (optional)
+**Production build**
 
 ```bash
 npm run build
 npm start
 ```
 
-### 5. Other npm scripts
+---
 
-| Script | Purpose |
-|--------|---------|
+## Environment variables
+
+Create **`.env`** in the project root. Do not commit secrets.
+
+### App (browser + server)
+
+| Variable | Purpose |
+|----------|---------|
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Public anon key (RLS still applies) |
+| `NEXT_PUBLIC_ADMIN_EMAIL` | *(Optional)* Email that receives **Admin** when a profile is first created client-side (defaults exist in code; override for your league) |
+
+**OAuth:** Configure **Google** (and email provider settings) in the **Supabase Dashboard** → Authentication → Providers—not via `NEXT_PUBLIC_GOOGLE_*` in this repo.
+
+### Scripts & CI (server-side only)
+
+| Variable | Purpose |
+|----------|---------|
+| `SUPABASE_SERVICE_ROLE_KEY` | Service role for scripts / APIs that must bypass RLS—**never** expose to the client |
+| `CRICAPI_KEY` / `NEXT_PUBLIC_CRICAPI_KEY` | CricAPI where used |
+| Other script-specific keys | See `scripts/` and `grep` for `process.env` / `os.getenv` |
+
+---
+
+## Useful npm scripts
+
+| Command | Purpose |
+|---------|---------|
+| `npm run dev` | Development server |
+| `npm run build` / `npm start` | Production build & serve |
 | `npm run lint` | ESLint |
-| `npm run sync:fixtures` | TS fixture sync helper (see `scripts/sync-fixtures.ts`) |
-| `npm run sync:auto` | Auto score sync entrypoint (see `scripts/auto-sync-scores.ts`) |
+| `npm run sync:fixtures` | Fixture sync helper (`scripts/sync-fixtures.ts`) |
+| `npm run sync:auto` | Auto score sync entry (`scripts/auto-sync-scores.ts`) |
+| `npm run sync:espn-points-db` | ESPN-related DB sync (`scripts/sync_match_points_espn_from_db.ts`) |
 
-Python automation (scorecards, fixtures) is usually run from **GitHub Actions** or locally with `python` / `uv` depending on your setup. Check `.github/workflows` if present and the `scripts/` README comments.
-
----
-
-## Database & migrations
-
-Schema changes live under **`supabase/migrations/`**. Apply them with your usual Supabase workflow (CLI or dashboard). **Real league or player data is intentionally not checked into this repository**, so private rosters and keys stay out of git history. If you are setting up a fresh environment, coordinate with the project maintainer for **how to seed or sync** data in a way that works for your group.
+Python utilities live under `scripts/`; prefer running them locally or via CI with the same env names documented in each script.
 
 ---
 
-## Screenshots and GIFs (optional)
+## Repository layout (high level)
 
-We plan to add **screenshots** or short **GIFs** under `public/screenshots/` (for example):
-
-- Auction room / bidding
-- Standings, purse, and player breakdowns
-- Fixtures & match detail
-
-*(Assets will be linked here once they are ready.)*
-
----
-
-## Credits & third-party data
-
-This project **does not** claim any affiliation with the IPL, BCCI, or commercial fantasy operators. We’re a private league tool.
-
-**Scores and fixtures at scale** would not have been manageable for us without the services and tools below. They are the backbone of how we **pull**, **verify**, and **refresh** match data instead of typing scorecards by hand every night.
-
-We gratefully acknowledge:
-
-- **[CricAPI](https://www.cricapi.com/)** (Cricket Data API): our **primary** pipeline for fixtures and scorecard-style JSON. Without it, the app would lose its first-class path from **API to database** for Indian Premier League and related data.
-- **[ESPNcricinfo](https://www.espncricinfo.com/)**: public match pages and scorecards for **fallback** scraping, cross-checks, and human-readable verification when an API path is not enough. Cricket content and trademarks belong to their respective owners.
-- **[Playwright](https://playwright.dev/)**: browser automation that lets our scripts interact with pages the way a user would, which matters wherever we need **dynamic HTML** or layouts that differ from a clean JSON response.
-- **[GitHub Actions](https://github.com/features/actions)**: scheduled **CI** runs so sync jobs can fire on a timer without a dedicated server or someone remembering to run a script at midnight. Secrets stay in the repo settings; workflows keep the database **moving forward** with the season.
-
-We also reference **[Cricket Data](https://cricketdata.org/)** for documentation and schedule context around formats and leagues (for example [Indian Premier League schedule (Cricket Data)](https://cricketdata.org/cricket-data-formats/schedule/indian-premier-league-2025-d5a498c8-7596-4b93-8ab0-e0efc3345312)).
-
-Always respect **terms of service**, **rate limits**, and **robots** guidance for any site or API you call. This PoC is for a small group; production use would need legal review.
+```
+app/                  Next.js routes (auction, dashboard, scoreboard, …)
+components/           React components (auth, layout, chat, …)
+lib/                  Supabase clients, helpers
+supabase/migrations/  PostgreSQL migrations (apply via Supabase CLI or dashboard)
+database/             Manual SQL ops — see database/README.md
+scripts/              TS/Python automation
+```
 
 ---
 
-## Roadmap / future enhancements
+## Database
 
-1. **Configurable point system**: rules for fantasy points (batting, bowling, fielding, bonuses, multipliers) should be **data-driven** (database or config files) so when Dream11, My11Circle, or *your* house rules change, you adjust rules without a full redeploy.
-2. **Player pools from an API**: load and refresh **auction pools** through a **proper API** where possible, instead of leaning on **scraping** sites like ESPN for roster construction. ESPN can remain useful for **verification** or fallback, but first-class pool data from an API would be cleaner and more stable.
-3. **Richer game configuration**: more **flexibility** for how the league is set up (formats, caps, tie-breakers, visibility rules), so organizers can tune the product without code changes for every house rule.
-4. **Many auctions, many groups**: support **multiple concurrent auctions** or a **multi-tenant** model so different people can run their own leagues **at the same time** with isolated data and admins, not a single shared namespace.
-5. Richer **audit UI** for overrides and sync runs.
-6. **Mobile-friendly** polish for auction night.
-7. **Scale and hosting**: the notes in **Scaling and future vision** below cover **performance**, **multi-tenancy**, and moving from **free tiers** to **managed cloud** when the product outgrows hobby limits.
-8. Whatever our four franchises ask for after IPL 2026.
+- **Migrations:** `supabase/migrations/` — apply with your Supabase workflow.
+- **Ad-hoc SQL** (auction reset, admin trigger helpers): **[database/README.md](./database/README.md)**.
+
+League-specific seed data is not assumed to be in git; coordinate with your maintainer for how to populate a fresh project.
+
+### Create database from scratch (recommended flow)
+
+Use this when setting up a brand-new Supabase project for this app.
+
+1. Create a new Supabase project and copy:
+   - `NEXT_PUBLIC_SUPABASE_URL`
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+   - `SUPABASE_SERVICE_ROLE_KEY` (for scripts/server only)
+2. Add env vars in local `.env` and in your deployment platform.
+3. Log in with Supabase CLI and link project:
+
+```bash
+supabase login
+supabase link --project-ref <your-project-ref>
+```
+
+4. Apply migrations in order:
+
+```bash
+supabase db push
+```
+
+Notes:
+- Migration filenames are prefixed with `stepNN` to make order explicit (for example `..._step01_...` → `..._step25_...`).
+- If you apply manually in SQL editor, run them in filename order.
+
+5. Configure Auth providers in Supabase Dashboard:
+   - Email/password
+   - Google OAuth (if needed)
+6. Create at least one admin user:
+   - Set `NEXT_PUBLIC_ADMIN_EMAIL` before first login for auto-admin bootstrap, or
+   - Update role in `profiles` after first sign-in.
+7. Optional reset helpers:
+   - Use SQL files in `database/sql/` (see `database/README.md`) to reset auction runtime state or reapply admin trigger logic.
+
+### Foolproof DB setup (exact files + exact order)
+
+If someone is setting this up from zero, use this sequence exactly.
+
+#### Option A (recommended): Supabase CLI applies all migrations
+
+This is the safest approach because it applies every file in `supabase/migrations/` in order.
+
+```bash
+supabase login
+supabase link --project-ref <your-project-ref>
+supabase db push
+```
+
+That command applies all files, including:
+- `20260312151439_step01_init_from_prod.sql`
+- ...
+- `20260422223000_step25_harden_bidding_and_sale_rpcs.sql`
+
+#### Option B: Manual SQL execution (if CLI is unavailable)
+
+Run migration files in lexicographic filename order (which now matches step order):
+
+```bash
+ls -1 supabase/migrations/*.sql | sort
+```
+
+Then execute each file sequentially against your target DB.
+
+#### Minimum tables you should see after setup
+
+After migrations succeed, verify these core tables exist:
+- `profiles`
+- `players`
+- `bids`
+- `auction_state`
+- `auction_config`
+- `fixtures` / `fixtures_cricapi` (depending on migration path used)
+- match-points related tables (used by Score Manager / standings flows)
+
+Quick verification query:
+
+```sql
+select table_name
+from information_schema.tables
+where table_schema = 'public'
+order by table_name;
+```
+
+If these are missing, migrations were not fully applied.
+
+### Squad source and manual step (current state)
+
+- Squad/player intake currently uses ESPNcricinfo-related API payload flows in `scripts/` and app APIs as a source input, then a manual validation pass before lock-in.
+- Do not treat upstream payloads as blindly authoritative; validate player mappings and roles before publishing to auction pools.
+- Planned improvement: CSV import for squads (future).  
+  For now, squad correction is a manual step via scripts/SQL/admin UI.
 
 ---
 
-## Scaling and future vision
+## Auction & realtime (short version)
 
-This is already a strong foundation. The exciting part is that the same core ideas can support a bigger audience without changing what makes the product fun: clear rules, live auctions, and trusted scoring.
+The auction room subscribes to a **Supabase Realtime** channel. **Postgres changes** (e.g. `bids`, `auction_state`, `players`) drive shared state after commits; **broadcast** messages handle quick UI coordination (e.g. timer hints, bidding locks); **presence** can reflect who is connected. **Authoritative state lives in PostgreSQL**; critical actions should go through **RLS-safe** tables and **RPC** functions where you have deployed them.
 
-**Where it runs today.** This PoC is deployed on **generous free (or low-cost) tiers** that make it affordable to ship and iterate. In practice that usually means **Supabase** (PostgreSQL, Auth, Realtime), a Next.js host such as **[Vercel](https://vercel.com/)** (or a similar platform), and **[GitHub](https://github.com/)** for source control and **Actions**. We are **grateful** to these providers for the free tiers and the DX that made rapid iteration possible.
-
-**How we scale it.** As usage grows, we can move the same architecture to **paid cloud plans** for reliability, performance, and compliance: stronger database capacity, regional hosting, autoscaling app instances, background workers for sync, and deeper observability.
-
-Here are the most natural scale-up directions:
-
-- **Multi-tenancy**: separate leagues or seasons with isolated data, billing, and admin roles, instead of one shared namespace (overlaps with roadmap item 4).
-- **Performance and cost**: caching for read-heavy scoreboard pages, tighter **RLS** policies, and background workers for sync so spikes on auction night do not starve other work.
-- **Product**: native or **PWA** polish for phones on auction night, richer **notifications**, and deeper **analytics** exports.
-- **Operations**: formal **SLAs**, **backups**, and **observability** if strangers or paying organizers rely on the system.
-- **Trust and compliance**: clearer **privacy** story for Google sign-in, data retention, and regional hosting if the audience spreads out.
+For a deeper narrative (WAL, channel names, OAuth details), see **git history** of this README or inline comments in `app/auction/page.tsx`.
 
 ---
 
-## Contributing & support
+## Third-party data & disclaimer
 
-This grew out of a **friends-and-cricket** league. Issues and PRs are welcome if the repo is shared; for a private league fork, coordinate with the maintainer.
+Not affiliated with the IPL, BCCI, or commercial fantasy operators. Respect API and site **terms**, **rate limits**, and **robots** guidance. Thanks to data and tooling providers you configure (e.g. **CricAPI**, **ESPNcricinfo** for fallback/verification, **Playwright** where used, **GitHub Actions** for schedules).
+
+---
+
+## Contributing
+
+Issues and PRs welcome if the repo is shared. For private league forks, coordinate with the maintainer.
 
 ---
 
 ## License
 
-If no `LICENSE` file is present, assume **all rights reserved** until the authors add one.
+If no `LICENSE` file is present in the repo, treat the project as **all rights reserved** until the authors add one.
 
 ---
 
-*Built to move auction night and season scoring off a single shared sheet, with love for cricket. IPL 2026 PoC.*
+## App demo (end-to-end feel)
 
-This is a **humble attempt** at **mastering the art of problem solving**: turning a messy, human process into something clearer, calmer, and more fun for everyone at the table.
+This short demo captures the live nature of the platform and how the product feels in action during auction flow.
+
+![IPL 2026 Auction Hub Demo](./public/screenshots/realtime-bidding-demo.gif)
+
+---
+
+*Built for friends who want auction night and season scoring in one honest place—IPL 2026 and beyond.*

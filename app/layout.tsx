@@ -21,6 +21,11 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "IPL 2026 Auction Hub",
   description: "Sign in to participate",
+  icons: {
+    icon: "/images/favicon-cricket.svg",
+    shortcut: "/images/favicon-cricket.svg",
+    apple: "/images/favicon-cricket.svg",
+  },
 };
 
 export const viewport: Viewport = {
