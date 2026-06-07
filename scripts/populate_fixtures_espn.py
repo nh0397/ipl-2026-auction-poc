@@ -12,7 +12,8 @@ SB_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or SUPABASE_KEY
 HEADERS = {
     "apikey": SB_SERVICE_KEY,
     "Authorization": f"Bearer {SB_SERVICE_KEY}",
-    "Content-Type": "application/json"
+    "Content-Type": "application/json",
+    "Prefer": "resolution=merge-duplicates"
 }
 
 with open("scripts/scrapper/matches.json", "r") as f:

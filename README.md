@@ -32,7 +32,6 @@ This is the “operating console” for each team during the auction phase.
 ### 3) Auction room (live bidding)
 
 ![Live Bidding](./public/screenshots/bidding.png)
-![Realtime Bidding Demo](./public/screenshots/realtime-bidding-demo.gif)
 
 The live auction screen handles:
 - pool-by-pool bidding (Marquee / Pool 1 / Pool 2 / Pool 3 / Unsold)
